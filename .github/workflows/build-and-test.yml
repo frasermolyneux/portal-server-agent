@@ -34,7 +34,6 @@ jobs:
     steps:
       - uses: frasermolyneux/actions/dotnet-ci@dotnet-ci/v1.4
         with:
-          dotnet-project: "XtremeIdiots.Portal.Server.Agent.App"
           dotnet-version: 9.0.x
           src-folder: "src"
 
