@@ -28,14 +28,23 @@ if (!string.IsNullOrWhiteSpace(appConfigEndpoint))
         ManagedIdentityClientId = managedIdentityClientId
     });
 
+    var environmentLabel = builder.Configuration["AzureAppConfiguration:Environment"];
+
     builder.Configuration.AddAzureAppConfiguration(options =>
     {
         options.Connect(new Uri(appConfigEndpoint), credential)
-            .Select("RepositoryApi:*", builder.Configuration["AzureAppConfiguration:Environment"])
+            .Select("RepositoryApi:*", environmentLabel)
             .ConfigureRefresh(refresh =>
             {
-                refresh.SetRefreshInterval(TimeSpan.FromMinutes(5));
+                refresh.Register("Sentinel", environmentLabel, refreshAll: true)
+                    .SetRefreshInterval(TimeSpan.FromMinutes(5));
             });
+
+        options.ConfigureKeyVault(kv =>
+        {
+            kv.SetCredential(credential);
+            kv.SetSecretRefreshInterval(TimeSpan.FromHours(1));
+        });
     });
 }
 
