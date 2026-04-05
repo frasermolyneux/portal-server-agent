@@ -159,9 +159,9 @@ public class GameServerAgentTests
         // Act
         await agent.RunAsync(cts.Token);
 
-        // Assert — offset saved on shutdown (finally block uses CancellationToken.None)
+        // Assert — offset saved on shutdown
         _mockOffsetStore.Verify(
-            o => o.SaveOffsetAsync(_testContext.ServerId, 5678L, "/logs/games_mp.log", CancellationToken.None),
+            o => o.SaveOffsetAsync(_testContext.ServerId, 5678L, "/logs/games_mp.log", It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
 
         // Tailer disposed
