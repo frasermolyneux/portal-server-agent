@@ -21,7 +21,7 @@ resource "azurerm_container_app" "app" {
 
     container {
       name   = "server-agent"
-      image  = "${local.acr.login_server}/portal-server-agent:latest"
+      image  = "mcr.microsoft.com/dotnet/runtime:9.0"
       cpu    = 0.25
       memory = "0.5Gi"
 
