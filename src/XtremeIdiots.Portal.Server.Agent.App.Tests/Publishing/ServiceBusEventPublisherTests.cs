@@ -102,7 +102,7 @@ public class ServiceBusEventPublisherTests
         Assert.Equal("guid456", root.GetProperty("playerGuid").GetString());
         Assert.Equal("Chatter", root.GetProperty("username").GetString());
         Assert.Equal("Hello world", root.GetProperty("message").GetString());
-        Assert.Equal("Team", root.GetProperty("type").GetString());
+        Assert.Equal((int)XtremeIdiots.Portal.Server.Events.Abstractions.V1.Events.ChatMessageType.Team, root.GetProperty("type").GetInt32());
         Assert.Equal(ServerId, root.GetProperty("serverId").GetGuid());
         Assert.Equal(GameType, root.GetProperty("gameType").GetString());
         Assert.Equal(SequenceId, root.GetProperty("sequenceId").GetInt64());
@@ -131,7 +131,7 @@ public class ServiceBusEventPublisherTests
         Assert.NotNull(captured);
         var json = captured!.Body.ToString();
         using var doc = JsonDocument.Parse(json);
-        Assert.Equal("All", doc.RootElement.GetProperty("type").GetString());
+        Assert.Equal((int)XtremeIdiots.Portal.Server.Events.Abstractions.V1.Events.ChatMessageType.All, doc.RootElement.GetProperty("type").GetInt32());
     }
 
     [Fact]

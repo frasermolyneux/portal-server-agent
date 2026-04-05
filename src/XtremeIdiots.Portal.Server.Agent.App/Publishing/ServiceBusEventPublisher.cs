@@ -5,7 +5,10 @@ using Azure.Messaging.ServiceBus;
 
 using Microsoft.Extensions.Logging;
 
-using XtremeIdiots.Portal.Server.Agent.App.Parsing;
+using XtremeIdiots.Portal.Server.Events.Abstractions.V1;
+
+using Parsing = XtremeIdiots.Portal.Server.Agent.App.Parsing;
+using SbEvents = XtremeIdiots.Portal.Server.Events.Abstractions.V1.Events;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Publishing;
 
@@ -32,7 +35,7 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
     }
 
     /// <inheritdoc />
-    public async Task PublishAsync(GameEvent gameEvent, Guid serverId, string gameType, long sequenceId, CancellationToken ct = default)
+    public async Task PublishAsync(Parsing.GameEvent gameEvent, Guid serverId, string gameType, long sequenceId, CancellationToken ct = default)
     {
         var (queueName, body) = MapEvent(gameEvent, serverId, gameType, sequenceId);
 
@@ -48,33 +51,33 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
     /// <inheritdoc />
     public async Task PublishServerStatusAsync(
         Guid serverId, string gameType, long sequenceId,
-        string mapName, string gameName, IReadOnlyDictionary<int, PlayerInfo> players,
+        string mapName, string gameName, IReadOnlyDictionary<int, Parsing.PlayerInfo> players,
         CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
 
-        var payload = new
+        var payload = new SbEvents.ServerStatusEvent
         {
-            eventGeneratedUtc = now,
-            eventPublishedUtc = now,
-            serverId,
-            gameType,
-            sequenceId,
-            mapName,
-            gameName,
-            playerCount = players.Count,
-            players = players.Values.Select(p => new
+            EventGeneratedUtc = now,
+            EventPublishedUtc = now,
+            ServerId = serverId,
+            GameType = gameType,
+            SequenceId = sequenceId,
+            MapName = mapName,
+            GameName = gameName,
+            PlayerCount = players.Count,
+            Players = players.Values.Select(p => new SbEvents.ConnectedPlayer
             {
-                playerGuid = p.Guid,
-                username = p.Name,
-                ipAddress = string.Empty, // IP resolved from RCON — placeholder
-                slotId = p.SlotId,
-                connectedAtUtc = p.ConnectedAt
+                PlayerGuid = p.Guid,
+                Username = p.Name,
+                IpAddress = string.Empty, // IP resolved from RCON — placeholder
+                SlotId = p.SlotId,
+                ConnectedAtUtc = p.ConnectedAt
             }).ToArray()
         };
 
         var body = JsonSerializer.Serialize(payload, JsonOptions);
-        await SendAsync(QueueNames.ServerStatus, body, serverId, sequenceId, nameof(ServerStatusEvent), ct);
+        await SendAsync(Queues.ServerStatus, body, serverId, sequenceId, nameof(SbEvents.ServerStatusEvent), ct);
     }
 
     /// <inheritdoc />
@@ -84,17 +87,17 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
     {
         var now = DateTime.UtcNow;
 
-        var payload = new
+        var payload = new SbEvents.ServerConnectedEvent
         {
-            eventGeneratedUtc = now,
-            eventPublishedUtc = now,
-            serverId,
-            gameType,
-            sequenceId
+            EventGeneratedUtc = now,
+            EventPublishedUtc = now,
+            ServerId = serverId,
+            GameType = gameType,
+            SequenceId = sequenceId
         };
 
         var body = JsonSerializer.Serialize(payload, JsonOptions);
-        await SendAsync(QueueNames.ServerConnected, body, serverId, sequenceId, nameof(ServerConnectedEvent), ct);
+        await SendAsync(Queues.ServerConnected, body, serverId, sequenceId, nameof(SbEvents.ServerConnectedEvent), ct);
     }
 
     /// <inheritdoc />
@@ -108,63 +111,59 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
         _senders.Clear();
     }
 
-    // Placeholder type names for logging (avoids referencing Abstractions project)
-    private static class ServerStatusEvent { }
-    private static class ServerConnectedEvent { }
-
-    private (string? QueueName, string? Body) MapEvent(GameEvent gameEvent, Guid serverId, string gameType, long sequenceId)
+    private (string? QueueName, string? Body) MapEvent(Parsing.GameEvent gameEvent, Guid serverId, string gameType, long sequenceId)
     {
         var now = DateTime.UtcNow;
 
         return gameEvent switch
         {
-            PlayerConnectedEvent e => (QueueNames.PlayerConnected, JsonSerializer.Serialize(new
+            Parsing.PlayerConnectedEvent e => (Queues.PlayerConnected, JsonSerializer.Serialize(new SbEvents.PlayerConnectedEvent
             {
-                eventGeneratedUtc = e.Timestamp,
-                eventPublishedUtc = now,
-                serverId,
-                gameType,
-                sequenceId,
-                playerGuid = e.PlayerGuid,
-                username = e.Username,
-                ipAddress = string.Empty, // IP resolved from RCON — placeholder
-                slotId = e.SlotId
+                EventGeneratedUtc = e.Timestamp,
+                EventPublishedUtc = now,
+                ServerId = serverId,
+                GameType = gameType,
+                SequenceId = sequenceId,
+                PlayerGuid = e.PlayerGuid,
+                Username = e.Username,
+                IpAddress = string.Empty, // IP resolved from RCON — placeholder
+                SlotId = e.SlotId
             }, JsonOptions)),
 
-            PlayerDisconnectedEvent e => (QueueNames.PlayerDisconnected, JsonSerializer.Serialize(new
+            Parsing.PlayerDisconnectedEvent e => (Queues.PlayerDisconnected, JsonSerializer.Serialize(new SbEvents.PlayerDisconnectedEvent
             {
-                eventGeneratedUtc = e.Timestamp,
-                eventPublishedUtc = now,
-                serverId,
-                gameType,
-                sequenceId,
-                playerGuid = e.PlayerGuid,
-                username = e.Username,
-                slotId = e.SlotId
+                EventGeneratedUtc = e.Timestamp,
+                EventPublishedUtc = now,
+                ServerId = serverId,
+                GameType = gameType,
+                SequenceId = sequenceId,
+                PlayerGuid = e.PlayerGuid,
+                Username = e.Username,
+                SlotId = e.SlotId
             }, JsonOptions)),
 
-            ChatMessageEvent e => (QueueNames.ChatMessage, JsonSerializer.Serialize(new
+            Parsing.ChatMessageEvent e => (Queues.ChatMessage, JsonSerializer.Serialize(new SbEvents.ChatMessageEvent
             {
-                eventGeneratedUtc = e.Timestamp,
-                eventPublishedUtc = now,
-                serverId,
-                gameType,
-                sequenceId,
-                playerGuid = e.PlayerGuid,
-                username = e.Username,
-                message = e.Message,
-                type = e.IsTeamChat ? "Team" : "All"
+                EventGeneratedUtc = e.Timestamp,
+                EventPublishedUtc = now,
+                ServerId = serverId,
+                GameType = gameType,
+                SequenceId = sequenceId,
+                PlayerGuid = e.PlayerGuid,
+                Username = e.Username,
+                Message = e.Message,
+                Type = e.IsTeamChat ? SbEvents.ChatMessageType.Team : SbEvents.ChatMessageType.All
             }, JsonOptions)),
 
-            MapChangeEvent e => (QueueNames.MapChange, JsonSerializer.Serialize(new
+            Parsing.MapChangeEvent e => (Queues.MapChange, JsonSerializer.Serialize(new SbEvents.MapChangeEvent
             {
-                eventGeneratedUtc = e.Timestamp,
-                eventPublishedUtc = now,
-                serverId,
-                gameType,
-                sequenceId,
-                mapName = e.MapName,
-                gameName = e.GameType
+                EventGeneratedUtc = e.Timestamp,
+                EventPublishedUtc = now,
+                ServerId = serverId,
+                GameType = gameType,
+                SequenceId = sequenceId,
+                MapName = e.MapName,
+                GameName = e.GameType
             }, JsonOptions)),
 
             _ => (null, null)
