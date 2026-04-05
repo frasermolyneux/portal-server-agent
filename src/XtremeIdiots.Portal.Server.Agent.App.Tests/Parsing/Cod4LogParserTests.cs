@@ -78,30 +78,28 @@ public sealed class Cod4LogParserTests
     }
 
     [Fact]
-    public void ParseLine_SayLikeCommand_ReturnsMapVoteEvent()
+    public void ParseLine_SayLikeCommand_ReturnsChatMessageEvent()
     {
-        // Set current map first
         _parser.ParseLine(@"  0:00 InitGame: \mapname\mp_crash\g_gametype\tdm");
 
         var result = _parser.ParseLine("  3:42 say;e42b78c9b7b00bffe42b78c9b7b00bff;2;PlayerName;!like");
 
-        var vote = Assert.IsType<MapVoteEvent>(result);
-        Assert.Equal("e42b78c9b7b00bffe42b78c9b7b00bff", vote.PlayerGuid);
-        Assert.Equal("PlayerName", vote.Username);
-        Assert.Equal("mp_crash", vote.MapName);
-        Assert.True(vote.Like);
+        var chat = Assert.IsType<ChatMessageEvent>(result);
+        Assert.Equal("e42b78c9b7b00bffe42b78c9b7b00bff", chat.PlayerGuid);
+        Assert.Equal("PlayerName", chat.Username);
+        Assert.Equal("!like", chat.Message);
+        Assert.False(chat.IsTeamChat);
     }
 
     [Fact]
-    public void ParseLine_SayDislikeCommand_ReturnsMapVoteEvent()
+    public void ParseLine_SayDislikeCommand_ReturnsChatMessageEvent()
     {
         _parser.ParseLine(@"  0:00 InitGame: \mapname\mp_crash\g_gametype\tdm");
 
         var result = _parser.ParseLine("  3:42 say;e42b78c9b7b00bffe42b78c9b7b00bff;2;PlayerName;!dislike");
 
-        var vote = Assert.IsType<MapVoteEvent>(result);
-        Assert.Equal("mp_crash", vote.MapName);
-        Assert.False(vote.Like);
+        var chat = Assert.IsType<ChatMessageEvent>(result);
+        Assert.Equal("!dislike", chat.Message);
     }
 
     [Fact]
@@ -216,7 +214,7 @@ public sealed class Cod4LogParserTests
     [Fact]
     public void ParseLine_LikeWithNoMap_ReturnsChatMessage()
     {
-        // No InitGame has been parsed, so CurrentMap is null — !like should be treated as chat
+        // !like is always treated as a chat message — command detection is in the processor
         var result = _parser.ParseLine("  3:42 say;e42b78c9b7b00bffe42b78c9b7b00bff;2;PlayerName;!like");
 
         var chat = Assert.IsType<ChatMessageEvent>(result);
@@ -224,12 +222,14 @@ public sealed class Cod4LogParserTests
     }
 
     [Fact]
-    public void ParseLine_SayteamLikeCommand_ReturnsMapVoteEvent()
+    public void ParseLine_SayteamLikeCommand_ReturnsChatMessage()
     {
         _parser.ParseLine(@"  0:00 InitGame: \mapname\mp_crash\g_gametype\tdm");
 
         var result = _parser.ParseLine("  3:42 sayteam;e42b78c9b7b00bffe42b78c9b7b00bff;2;PlayerName;!like");
 
-        Assert.IsType<MapVoteEvent>(result);
+        var chat = Assert.IsType<ChatMessageEvent>(result);
+        Assert.Equal("!like", chat.Message);
+        Assert.True(chat.IsTeamChat);
     }
 }

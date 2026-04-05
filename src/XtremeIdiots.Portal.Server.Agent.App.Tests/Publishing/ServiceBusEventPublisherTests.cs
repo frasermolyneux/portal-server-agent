@@ -135,38 +135,6 @@ public class ServiceBusEventPublisherTests
     }
 
     [Fact]
-    public async Task PublishAsync_MapVote_IncludesCorrectFields()
-    {
-        ServiceBusMessage? captured = null;
-        _senderMock
-            .Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
-            .Callback<ServiceBusMessage, CancellationToken>((msg, _) => captured = msg)
-            .Returns(Task.CompletedTask);
-
-        var gameEvent = new MapVoteEvent
-        {
-            Timestamp = DateTime.UtcNow,
-            PlayerGuid = "voter1",
-            Username = "VotePlayer",
-            MapName = "mp_crash",
-            Like = true
-        };
-
-        await _publisher.PublishAsync(gameEvent, ServerId, GameType, SequenceId);
-
-        _clientMock.Verify(c => c.CreateSender("map-vote"), Times.Once);
-
-        Assert.NotNull(captured);
-        var json = captured!.Body.ToString();
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        Assert.Equal("voter1", root.GetProperty("playerGuid").GetString());
-        Assert.Equal("mp_crash", root.GetProperty("mapName").GetString());
-        Assert.True(root.GetProperty("like").GetBoolean());
-    }
-
-    [Fact]
     public async Task PublishAsync_MapChange_SerializesGameName()
     {
         ServiceBusMessage? captured = null;

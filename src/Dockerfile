@@ -14,5 +14,6 @@ RUN dotnet publish "XtremeIdiots.Portal.Server.Agent.App.csproj" -c Release -o /
 
 FROM base AS final
 WORKDIR /app
+EXPOSE 8080
 COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "XtremeIdiots.Portal.Server.Agent.App.dll"]

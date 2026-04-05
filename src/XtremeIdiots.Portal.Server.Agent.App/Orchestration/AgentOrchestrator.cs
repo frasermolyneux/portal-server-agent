@@ -44,37 +44,51 @@ public class AgentOrchestrator : BackgroundService
     }
 
     /// <summary>
-    /// The number of currently running agents. Exposed for testing.
+    /// Indicates whether the orchestrator's <see cref="ExecuteAsync"/> loop is currently running.
     /// </summary>
-    internal int ActiveAgentCount => _agents.Count;
+    private volatile bool _isRunning;
+    public bool IsRunning => _isRunning;
+
+    /// <summary>
+    /// The number of currently running agents.
+    /// </summary>
+    public int ActiveAgentCount => _agents.Count;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("AgentOrchestrator starting");
+        _isRunning = true;
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await RefreshAgentsAsync(stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error refreshing agents");
-            }
+                try
+                {
+                    await RefreshAgentsAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error refreshing agents");
+                }
 
-            try
-            {
-                await Task.Delay(RefreshInterval, stoppingToken);
+                try
+                {
+                    await Task.Delay(RefreshInterval, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
+        }
+        finally
+        {
+            _isRunning = false;
         }
 
         _logger.LogInformation("AgentOrchestrator stopping");

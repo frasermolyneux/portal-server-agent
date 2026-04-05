@@ -64,6 +64,34 @@ resource "azurerm_container_app" "app" {
         name  = "AgentStorage__BlobEndpoint"
         value = azurerm_storage_account.agent_storage.primary_blob_endpoint
       }
+
+      env {
+        name  = "ASPNETCORE_HTTP_PORTS"
+        value = "8080"
+      }
+
+      liveness_probe {
+        transport = "HTTP"
+        path      = "/healthz"
+        port      = 8080
+      }
+
+      startup_probe {
+        transport = "HTTP"
+        path      = "/healthz"
+        port      = 8080
+      }
+    }
+  }
+
+  ingress {
+    target_port      = 8080
+    external_enabled = false
+    transport        = "http"
+
+    traffic_weight {
+      percentage      = 100
+      latest_revision = true
     }
   }
 

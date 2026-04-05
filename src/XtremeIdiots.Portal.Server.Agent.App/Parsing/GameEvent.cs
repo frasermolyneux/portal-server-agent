@@ -95,29 +95,3 @@ public sealed record MapChangeEvent : GameEvent
     /// </summary>
     public required string GameType { get; init; }
 }
-
-/// <summary>
-/// A player voted on the current map via !like or !dislike chat command.
-/// </summary>
-public sealed record MapVoteEvent : GameEvent
-{
-    /// <summary>
-    /// Game-specific unique identifier for the voting player.
-    /// </summary>
-    public required string PlayerGuid { get; init; }
-
-    /// <summary>
-    /// Player's display name.
-    /// </summary>
-    public required string Username { get; init; }
-
-    /// <summary>
-    /// The map that was voted on (current map at time of vote).
-    /// </summary>
-    public required string MapName { get; init; }
-
-    /// <summary>
-    /// True for !like, false for !dislike.
-    /// </summary>
-    public required bool Like { get; init; }
-}

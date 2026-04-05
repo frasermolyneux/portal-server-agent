@@ -156,18 +156,6 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 type = e.IsTeamChat ? "Team" : "All"
             }, JsonOptions)),
 
-            MapVoteEvent e => (QueueNames.MapVote, JsonSerializer.Serialize(new
-            {
-                eventGeneratedUtc = e.Timestamp,
-                eventPublishedUtc = now,
-                serverId,
-                gameType,
-                sequenceId,
-                playerGuid = e.PlayerGuid,
-                mapName = e.MapName,
-                like = e.Like
-            }, JsonOptions)),
-
             MapChangeEvent e => (QueueNames.MapChange, JsonSerializer.Serialize(new
             {
                 eventGeneratedUtc = e.Timestamp,

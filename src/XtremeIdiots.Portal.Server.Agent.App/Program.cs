@@ -2,16 +2,21 @@ using Azure.Identity;
 using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
 
+using Microsoft.ApplicationInsights.Extensibility;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Configuration.AzureAppConfiguration;
+using Microsoft.Extensions.DependencyInjection;
 
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
+using XtremeIdiots.Portal.Server.Agent.App.Observability;
 using XtremeIdiots.Portal.Server.Agent.App.Orchestration;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
 // Azure App Configuration
 var appConfigEndpoint = builder.Configuration["AzureAppConfiguration:Endpoint"];
@@ -33,6 +38,10 @@ if (!string.IsNullOrWhiteSpace(appConfigEndpoint))
             });
     });
 }
+
+// Application Insights
+builder.Services.AddSingleton<ITelemetryInitializer, TelemetryInitializer>();
+builder.Services.AddApplicationInsightsTelemetry();
 
 // Repository API client
 builder.Services.AddRepositoryApiClient(options => options
@@ -76,8 +85,16 @@ builder.Services.AddSingleton<ILogParserFactory, LogParserFactory>();
 builder.Services.AddSingleton<IEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddSingleton<IOffsetStore, BlobOffsetStore>();
 
-// Agent orchestrator
-builder.Services.AddHostedService<AgentOrchestrator>();
+// Agent orchestrator (singleton + hosted service so health checks can access it)
+builder.Services.AddSingleton<AgentOrchestrator>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentOrchestrator>());
 
-var host = builder.Build();
-host.Run();
+// Health checks
+builder.Services.AddHealthChecks()
+    .AddCheck<AgentHealthCheck>("agent-status");
+
+var app = builder.Build();
+
+app.MapHealthChecks("/healthz");
+
+app.Run();

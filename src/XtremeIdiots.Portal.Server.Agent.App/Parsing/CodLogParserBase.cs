@@ -42,14 +42,6 @@ public abstract class CodLogParserBase : ILogParser
         @"\\([^\\]+)\\([^\\]+)",
         RegexOptions.Compiled);
 
-    private static readonly Regex LikeCommandRegex = new(
-        @"^!like\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    private static readonly Regex DislikeCommandRegex = new(
-        @"^!dislike\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
     // --- State ---
 
     private readonly Dictionary<int, PlayerInfo> _slotMap = new();
@@ -257,8 +249,8 @@ public abstract class CodLogParserBase : ILogParser
     }
 
     /// <summary>
-    /// Handle say/sayteam events. Checks for !like/!dislike commands to produce
-    /// <see cref="MapVoteEvent"/> instead of <see cref="ChatMessageEvent"/>.
+    /// Handle say/sayteam events. Always emits a <see cref="ChatMessageEvent"/>.
+    /// Command detection (e.g. !like/!dislike) is handled downstream by the event processor.
     /// </summary>
     private GameEvent? HandleSay(Match match, DateTime timestamp)
     {
@@ -275,31 +267,6 @@ public abstract class CodLogParserBase : ILogParser
         // Strip the control character (char 21 / NAK) from start of message if present
         if (text.Length > 0 && text[0] == '\x15')
             text = text[1..];
-
-        // Check for map vote commands
-        if (LikeCommandRegex.IsMatch(text) && _currentMap is not null)
-        {
-            return new MapVoteEvent
-            {
-                Timestamp = timestamp,
-                PlayerGuid = guid,
-                Username = name,
-                MapName = _currentMap,
-                Like = true
-            };
-        }
-
-        if (DislikeCommandRegex.IsMatch(text) && _currentMap is not null)
-        {
-            return new MapVoteEvent
-            {
-                Timestamp = timestamp,
-                PlayerGuid = guid,
-                Username = name,
-                MapName = _currentMap,
-                Like = false
-            };
-        }
 
         return new ChatMessageEvent
         {
