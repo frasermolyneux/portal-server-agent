@@ -1,0 +1,27 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "45 2 * * 1"
+
+permissions: {}
+
+jobs:
+  quality:
+    name: Code Quality
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+      security-events: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: frasermolyneux/actions/code-quality@code-quality/v1.0
+        with:
+          dotnet-version: 9.0.x
+          src-folder: "src"
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

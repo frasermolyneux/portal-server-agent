@@ -1,0 +1,259 @@
+name: Deploy Prd
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * 3"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  detect-changes:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      src: ${{ steps.changes.outputs.src }}
+      terraform: ${{ steps.changes.outputs.terraform }}
+    steps:
+      - id: changes
+        uses: frasermolyneux/actions/detect-changes@main
+        with:
+          filters: |
+            src:src/**
+            terraform:terraform/**
+
+  terraform-state-check-dev:
+    if: github.event_name != 'schedule'
+    permissions:
+      contents: read
+      id-token: write
+    environment: Development
+    runs-on: ubuntu-latest
+    outputs:
+      has_resources: ${{ steps.state-check.outputs.has_resources }}
+      state_tainted: ${{ steps.state-check.outputs.state_tainted }}
+    steps:
+      - id: state-check
+        uses: frasermolyneux/actions/terraform-state-check@terraform-state-check/v1.1
+        with:
+          terraform-folder: "terraform"
+          terraform-var-file: "tfvars/dev.tfvars"
+          terraform-backend-file: "backends/dev.backend.hcl"
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+  build-and-test:
+    permissions:
+      contents: read
+      id-token: write
+    needs:
+      - detect-changes
+      - terraform-state-check-dev
+    if: "!failure() && !cancelled() && (needs.detect-changes.outputs.src == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: frasermolyneux/actions/dotnet-ci@dotnet-ci/v1.4
+        with:
+          dotnet-project: "XtremeIdiots.Portal.Server.Agent.App"
+          dotnet-version: 9.0.x
+          src-folder: "src"
+
+  terraform-plan-and-apply-dev:
+    if: github.event_name != 'schedule'
+    permissions:
+      contents: read
+      id-token: write
+    environment: Development
+    needs:
+      - detect-changes
+      - terraform-state-check-dev
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-dev
+    steps:
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
+        if: needs.detect-changes.outputs.terraform == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true'
+        with:
+          terraform-folder: "terraform"
+          terraform-var-file: "tfvars/dev.tfvars"
+          terraform-backend-file: "backends/dev.backend.hcl"
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: frasermolyneux/actions/terraform-output@terraform-output/v1.0
+        if: needs.detect-changes.outputs.terraform != 'true' && needs.terraform-state-check-dev.outputs.state_tainted != 'true'
+        with:
+          terraform-folder: "terraform"
+          terraform-var-file: "tfvars/dev.tfvars"
+          terraform-backend-file: "backends/dev.backend.hcl"
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - id: terraform-output-dev
+        shell: bash
+        run: |
+          cd terraform
+          echo "container_app_name=$(terraform output -raw container_app_name)" >> $GITHUB_OUTPUT
+          echo "resource_group_name=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+        env:
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_USE_AZUREAD: true
+          ARM_USE_OIDC: true
+
+    outputs:
+      container_app_name: ${{ steps.terraform-output-dev.outputs.container_app_name }}
+      resource_group_name: ${{ steps.terraform-output-dev.outputs.resource_group_name }}
+      acr_login_server: ${{ steps.terraform-output-dev.outputs.acr_login_server }}
+
+  container-deploy-dev:
+    if: github.event_name != 'schedule'
+    permissions:
+      contents: read
+      id-token: write
+    environment: Development
+    needs:
+      - detect-changes
+      - build-and-test
+      - terraform-plan-and-apply-dev
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-dev
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR Login
+        run: az acr login --name ${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}
+
+      - name: Docker Build and Push
+        run: |
+          IMAGE="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
+          IMAGE_LATEST="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:latest"
+          docker build -t "$IMAGE" -t "$IMAGE_LATEST" -f src/Dockerfile src/
+          docker push "$IMAGE"
+          docker push "$IMAGE_LATEST"
+
+      - name: Update Container App
+        run: |
+          az containerapp update \
+            --name ${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }} \
+            --resource-group ${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }} \
+            --image "${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
+
+  terraform-plan-and-apply-prd:
+    permissions:
+      contents: read
+      id-token: write
+    environment: Production
+    needs:
+      - detect-changes
+      - build-and-test
+      - terraform-plan-and-apply-dev
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-prd
+    if: |
+      !failure() && !cancelled() &&
+      (needs.terraform-plan-and-apply-dev.result == 'success' || github.event_name == 'schedule')
+    steps:
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
+        if: needs.detect-changes.outputs.terraform == 'true'
+        with:
+          terraform-folder: "terraform"
+          terraform-var-file: "tfvars/prd.tfvars"
+          terraform-backend-file: "backends/prd.backend.hcl"
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: frasermolyneux/actions/terraform-output@terraform-output/v1.0
+        if: needs.detect-changes.outputs.terraform != 'true'
+        with:
+          terraform-folder: "terraform"
+          terraform-var-file: "tfvars/prd.tfvars"
+          terraform-backend-file: "backends/prd.backend.hcl"
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - id: terraform-output-prd
+        shell: bash
+        run: |
+          cd terraform
+          echo "container_app_name=$(terraform output -raw container_app_name)" >> $GITHUB_OUTPUT
+          echo "resource_group_name=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+        env:
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_USE_AZUREAD: true
+          ARM_USE_OIDC: true
+
+    outputs:
+      container_app_name: ${{ steps.terraform-output-prd.outputs.container_app_name }}
+      resource_group_name: ${{ steps.terraform-output-prd.outputs.resource_group_name }}
+      acr_login_server: ${{ steps.terraform-output-prd.outputs.acr_login_server }}
+
+  container-deploy-prd:
+    permissions:
+      contents: read
+      id-token: write
+    environment: Production
+    needs:
+      - detect-changes
+      - build-and-test
+      - container-deploy-dev
+      - terraform-plan-and-apply-prd
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-prd
+    if: |
+      !failure() && !cancelled() &&
+      (needs.container-deploy-dev.result == 'success' || github.event_name == 'schedule')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR Login
+        run: az acr login --name ${{ needs.terraform-plan-and-apply-prd.outputs.acr_login_server }}
+
+      - name: Docker Build and Push
+        run: |
+          IMAGE="${{ needs.terraform-plan-and-apply-prd.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
+          IMAGE_LATEST="${{ needs.terraform-plan-and-apply-prd.outputs.acr_login_server }}/portal-server-agent:latest"
+          docker build -t "$IMAGE" -t "$IMAGE_LATEST" -f src/Dockerfile src/
+          docker push "$IMAGE"
+          docker push "$IMAGE_LATEST"
+
+      - name: Update Container App
+        run: |
+          az containerapp update \
+            --name ${{ needs.terraform-plan-and-apply-prd.outputs.container_app_name }} \
+            --resource-group ${{ needs.terraform-plan-and-apply-prd.outputs.resource_group_name }} \
+            --image "${{ needs.terraform-plan-and-apply-prd.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
