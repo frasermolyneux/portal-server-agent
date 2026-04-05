@@ -27,13 +27,6 @@ public sealed class AgentHealthCheck : IHealthCheck
 
         var activeCount = _orchestrator.ActiveAgentCount;
 
-        if (activeCount == 0)
-        {
-            return Task.FromResult(HealthCheckResult.Degraded(
-                "Agent orchestrator is running but no agents are active. " +
-                "This may be expected if no servers are configured."));
-        }
-
         return Task.FromResult(HealthCheckResult.Healthy(
             $"Agent orchestrator is running with {activeCount} active agent(s)."));
     }

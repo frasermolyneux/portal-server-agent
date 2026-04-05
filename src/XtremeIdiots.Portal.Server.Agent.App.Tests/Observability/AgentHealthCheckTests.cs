@@ -45,7 +45,7 @@ public class AgentHealthCheckTests
     }
 
     [Fact]
-    public async Task CheckHealthAsync_WhenOrchestratorRunningWithNoAgents_ReturnsDegraded()
+    public async Task CheckHealthAsync_WhenOrchestratorRunningWithNoAgents_ReturnsHealthy()
     {
         // Arrange — start the orchestrator to set IsRunning = true, with no servers configured
         var mockConfigProvider = new Mock<IServerConfigProvider>();
@@ -78,8 +78,8 @@ public class AgentHealthCheckTests
             });
 
         // Assert
-        Assert.Equal(HealthStatus.Degraded, result.Status);
-        Assert.Contains("no agents are active", result.Description);
+        Assert.Equal(HealthStatus.Healthy, result.Status);
+        Assert.Contains("0 active agent(s)", result.Description);
 
         // Cleanup
         cts.Cancel();
