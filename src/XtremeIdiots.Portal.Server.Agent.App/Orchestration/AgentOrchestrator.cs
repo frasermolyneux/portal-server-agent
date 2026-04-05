@@ -18,6 +18,7 @@ public class AgentOrchestrator : BackgroundService
     private readonly ILogParserFactory _parserFactory;
     private readonly IEventPublisher _publisher;
     private readonly IOffsetStore _offsetStore;
+    private readonly IServerLock _serverLock;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AgentOrchestrator> _logger;
 
@@ -31,6 +32,7 @@ public class AgentOrchestrator : BackgroundService
         ILogParserFactory parserFactory,
         IEventPublisher publisher,
         IOffsetStore offsetStore,
+        IServerLock serverLock,
         ILoggerFactory loggerFactory,
         ILogger<AgentOrchestrator> logger)
     {
@@ -39,6 +41,7 @@ public class AgentOrchestrator : BackgroundService
         _parserFactory = parserFactory ?? throw new ArgumentNullException(nameof(parserFactory));
         _publisher = publisher ?? throw new ArgumentNullException(nameof(publisher));
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
+        _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -189,7 +192,7 @@ public class AgentOrchestrator : BackgroundService
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 
-            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, agentLogger);
+            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, agentLogger);
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
             _agents.TryAdd(server.ServerId, (task, cts));

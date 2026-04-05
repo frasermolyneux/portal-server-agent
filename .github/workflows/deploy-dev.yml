@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: frasermolyneux/actions/dotnet-ci@dotnet-ci/v1.4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 10.0.x
           src-folder: "src"
 
   terraform-plan-and-apply-dev:

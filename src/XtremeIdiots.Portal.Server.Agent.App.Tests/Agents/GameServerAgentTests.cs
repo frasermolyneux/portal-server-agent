@@ -31,11 +31,21 @@ public class GameServerAgentTests
     private readonly Mock<ILogParser> _mockParser = new();
     private readonly Mock<IEventPublisher> _mockPublisher = new();
     private readonly Mock<IOffsetStore> _mockOffsetStore = new();
+    private readonly Mock<IServerLock> _mockServerLock = new();
     private readonly ILogger _logger = NullLogger.Instance;
+
+    public GameServerAgentTests()
+    {
+        // Default: lock acquisition and renewal succeed
+        _mockServerLock.Setup(l => l.TryAcquireAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockServerLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+    }
 
     private GameServerAgent CreateAgent() =>
         new(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _logger);
 
     [Fact]
     public async Task RunAsync_PublishesServerConnectedOnStart()
@@ -277,6 +287,59 @@ public class GameServerAgentTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenLockNotAcquired_ReturnsImmediately()
+    {
+        // Arrange — lock acquisition fails
+        _mockServerLock.Setup(l => l.TryAcquireAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        var agent = CreateAgent();
+
+        // Act
+        await agent.RunAsync(CancellationToken.None);
+
+        // Assert — tailer should never connect, no events published
+        _mockTailer.Verify(
+            t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockPublisher.Verify(
+            p => p.PublishServerConnectedAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenLeaseLost_StopsAgent()
+    {
+        // Arrange
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        // Lease renewal fails on first attempt
+        _mockServerLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var agent = CreateAgent();
+
+        // Act
+        await agent.RunAsync(cts.Token);
+
+        // Assert — agent should have stopped (task completes before timeout)
+        Assert.False(cts.IsCancellationRequested, "Agent should stop from lost lease before cancellation timeout");
+
+        // Verify lease release was attempted
+        _mockServerLock.Verify(
+            l => l.ReleaseAsync(_testContext.ServerId, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task RunAsync_ThrowsWhenLiveLogFileIsNull()
     {
         // Arrange — context with null LiveLogFile
@@ -286,7 +349,7 @@ public class GameServerAgentTests
             .ReturnsAsync((SavedOffset?)null);
 
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _logger);
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _logger);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 

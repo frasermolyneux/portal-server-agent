@@ -21,6 +21,7 @@ public class AgentHealthCheckTests
             new Mock<ILogParserFactory>().Object,
             new Mock<IEventPublisher>().Object,
             new Mock<IOffsetStore>().Object,
+            new Mock<IServerLock>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -57,6 +58,7 @@ public class AgentHealthCheckTests
             new Mock<ILogParserFactory>().Object,
             new Mock<IEventPublisher>().Object,
             new Mock<IOffsetStore>().Object,
+            new Mock<IServerLock>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -130,12 +132,19 @@ public class AgentHealthCheckTests
         mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
+        var mockServerLock = new Mock<IServerLock>();
+        mockServerLock.Setup(l => l.TryAcquireAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        mockServerLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
         var orchestrator = new AgentOrchestrator(
             mockConfigProvider.Object,
             mockTailerFactory.Object,
             mockParserFactory.Object,
             new Mock<IEventPublisher>().Object,
             mockOffsetStore.Object,
+            mockServerLock.Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 

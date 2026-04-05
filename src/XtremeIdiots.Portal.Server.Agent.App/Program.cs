@@ -93,6 +93,7 @@ builder.Services.AddSingleton<ILogTailerFactory, LogTailerFactory>();
 builder.Services.AddSingleton<ILogParserFactory, LogParserFactory>();
 builder.Services.AddSingleton<IEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddSingleton<IOffsetStore, BlobOffsetStore>();
+builder.Services.AddSingleton<IServerLock, BlobServerLock>();
 
 // Agent orchestrator (singleton + hosted service so health checks can access it)
 builder.Services.AddSingleton<AgentOrchestrator>();

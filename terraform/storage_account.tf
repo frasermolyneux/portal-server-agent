@@ -24,3 +24,10 @@ resource "azurerm_storage_container" "tailer_offsets" {
   storage_account_id    = azurerm_storage_account.agent_storage.id
   container_access_type = "private"
 }
+
+resource "azurerm_storage_container" "server_locks" {
+  name = "server-locks"
+
+  storage_account_id    = azurerm_storage_account.agent_storage.id
+  container_access_type = "private"
+}

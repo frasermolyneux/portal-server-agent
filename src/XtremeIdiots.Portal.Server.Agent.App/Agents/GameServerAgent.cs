@@ -15,14 +15,17 @@ public sealed class GameServerAgent
     private readonly ILogParser _parser;
     private readonly IEventPublisher _publisher;
     private readonly IOffsetStore _offsetStore;
+    private readonly IServerLock _serverLock;
     private readonly ILogger _logger;
 
     private long _sequenceId;
     private DateTime _lastOffsetSave = DateTime.MinValue;
     private DateTime _lastStatusPublish = DateTime.MinValue;
+    private DateTime _lastLeaseRenew = DateTime.MinValue;
 
     internal static readonly TimeSpan OffsetSaveInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan StatusPublishInterval = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan LeaseRenewInterval = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
     public GameServerAgent(
@@ -31,6 +34,7 @@ public sealed class GameServerAgent
         ILogParser parser,
         IEventPublisher publisher,
         IOffsetStore offsetStore,
+        IServerLock serverLock,
         ILogger logger)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -38,6 +42,7 @@ public sealed class GameServerAgent
         _parser = parser ?? throw new ArgumentNullException(nameof(parser));
         _publisher = publisher ?? throw new ArgumentNullException(nameof(publisher));
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
+        _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -45,6 +50,14 @@ public sealed class GameServerAgent
     {
         _logger.LogInformation("[{GameType}:{Title}] Agent starting for server {ServerId}",
             _context.GameType, _context.Title, _context.ServerId);
+
+        // Acquire distributed lock before connecting
+        if (!await _serverLock.TryAcquireAsync(_context.ServerId, ct))
+        {
+            _logger.LogWarning("[{GameType}:{Title}] Could not acquire lock for server {ServerId} — another instance holds it",
+                _context.GameType, _context.Title, _context.ServerId);
+            return;
+        }
 
         try
         {
@@ -88,6 +101,17 @@ public sealed class GameServerAgent
                         }
                     }
 
+                    // Periodic lease renewal (every 15s)
+                    if (DateTime.UtcNow - _lastLeaseRenew > LeaseRenewInterval)
+                    {
+                        if (!await _serverLock.RenewAsync(_context.ServerId, ct))
+                        {
+                            _logger.LogWarning("[{Title}] Lost lease — stopping agent", _context.Title);
+                            break;
+                        }
+                        _lastLeaseRenew = DateTime.UtcNow;
+                    }
+
                     // Periodic offset save (every 30s)
                     if (DateTime.UtcNow - _lastOffsetSave > OffsetSaveInterval)
                     {
@@ -122,6 +146,9 @@ public sealed class GameServerAgent
             using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await SaveOffsetAsync(shutdownCts.Token);
             await _tailer.DisposeAsync();
+
+            // Release the distributed lock
+            await _serverLock.ReleaseAsync(_context.ServerId, CancellationToken.None);
 
             _logger.LogInformation("[{Title}] Agent stopped for server {ServerId}", _context.Title, _context.ServerId);
         }

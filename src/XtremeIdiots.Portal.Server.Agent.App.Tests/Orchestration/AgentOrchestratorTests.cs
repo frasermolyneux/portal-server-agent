@@ -18,12 +18,21 @@ public class AgentOrchestratorTests
     private readonly Mock<ILogParserFactory> _mockParserFactory = new();
     private readonly Mock<IEventPublisher> _mockPublisher = new();
     private readonly Mock<IOffsetStore> _mockOffsetStore = new();
+    private readonly Mock<IServerLock> _mockServerLock = new();
     private readonly ILoggerFactory _loggerFactory = NullLoggerFactory.Instance;
     private readonly ILogger<AgentOrchestrator> _logger = NullLogger<AgentOrchestrator>.Instance;
 
+    public AgentOrchestratorTests()
+    {
+        _mockServerLock.Setup(l => l.TryAcquireAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockServerLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+    }
+
     private AgentOrchestrator CreateOrchestrator() =>
         new(_mockConfigProvider.Object, _mockTailerFactory.Object, _mockParserFactory.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _loggerFactory, _logger);
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _loggerFactory, _logger);
 
     [Fact]
     public async Task RefreshAgents_WithNoServers_StartsNoAgents()
