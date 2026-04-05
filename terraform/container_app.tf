@@ -59,6 +59,11 @@ resource "azurerm_container_app" "app" {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         value = data.azurerm_application_insights.app_insights.connection_string
       }
+
+      env {
+        name  = "AgentStorage__BlobEndpoint"
+        value = azurerm_storage_account.agent_storage.primary_blob_endpoint
+      }
     }
   }
 
