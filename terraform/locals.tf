@@ -24,6 +24,6 @@ locals {
 
   acr = data.terraform_remote_state.platform_registry.outputs.acr
 
-  container_app_environment_name = "cae-portal-server-agent-${var.environment}-${var.location}-${random_id.environment_id.hex}"
-  container_app_name             = "ca-portal-server-agent-${var.environment}-${var.location}-${random_id.environment_id.hex}"
+  container_app_environment_name = "cae-srvagent-${var.environment}-${random_id.environment_id.hex}"
+  container_app_name             = "ca-srvagent-${var.environment}-${random_id.environment_id.hex}"
 }
