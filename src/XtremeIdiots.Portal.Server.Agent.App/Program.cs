@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Configuration.AzureAppConfiguration;
 using Microsoft.Extensions.DependencyInjection;
 
+using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
@@ -34,6 +35,7 @@ if (!string.IsNullOrWhiteSpace(appConfigEndpoint))
     {
         options.Connect(new Uri(appConfigEndpoint), credential)
             .Select("RepositoryApi:*", environmentLabel)
+            .Select("ServersIntegrationApi:*", environmentLabel)
             .ConfigureRefresh(refresh =>
             {
                 refresh.Register("Sentinel", environmentLabel, refreshAll: true)
@@ -56,6 +58,11 @@ builder.Services.AddApplicationInsightsTelemetry();
 builder.Services.AddRepositoryApiClient(options => options
     .WithBaseUrl(builder.Configuration["RepositoryApi:BaseUrl"]!)
     .WithEntraIdAuthentication(builder.Configuration["RepositoryApi:ApplicationAudience"]!));
+
+// Servers Integration API client (for RCON sync)
+builder.Services.AddServersApiClient(options => options
+    .WithBaseUrl(builder.Configuration["ServersIntegrationApi:BaseUrl"]!)
+    .WithEntraIdAuthentication(builder.Configuration["ServersIntegrationApi:ApplicationAudience"]!));
 
 // Server config provider
 builder.Services.AddSingleton<IServerConfigProvider, RepositoryServerConfigProvider>();
@@ -94,6 +101,7 @@ builder.Services.AddSingleton<ILogParserFactory, LogParserFactory>();
 builder.Services.AddSingleton<IEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddSingleton<IOffsetStore, BlobOffsetStore>();
 builder.Services.AddSingleton<IServerLock, BlobServerLock>();
+builder.Services.AddSingleton<IServerSyncService, ServerSyncService>();
 
 // Agent orchestrator (singleton + hosted service so health checks can access it)
 builder.Services.AddSingleton<AgentOrchestrator>();

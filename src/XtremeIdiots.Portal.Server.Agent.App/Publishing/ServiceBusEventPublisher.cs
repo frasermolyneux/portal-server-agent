@@ -53,6 +53,7 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
     public async Task PublishServerStatusAsync(
         Guid serverId, string gameType, long sequenceId,
         string mapName, string gameName, IReadOnlyDictionary<int, Parsing.PlayerInfo> players,
+        string? serverTitle, string? serverMod, int? maxPlayers,
         CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
@@ -67,13 +68,19 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
             MapName = mapName,
             GameName = gameName,
             PlayerCount = players.Count,
+            ServerTitle = serverTitle,
+            ServerMod = serverMod,
+            MaxPlayers = maxPlayers,
             Players = players.Values.Select(p => new SbEvents.ConnectedPlayer
             {
                 PlayerGuid = p.Guid,
                 Username = p.Name,
-                IpAddress = string.Empty, // IP resolved from RCON — placeholder
+                IpAddress = p.IpAddress ?? string.Empty,
                 SlotId = p.SlotId,
-                ConnectedAtUtc = p.ConnectedAt
+                ConnectedAtUtc = p.ConnectedAt,
+                Score = p.Score,
+                Ping = p.Ping,
+                Rate = p.Rate
             }).ToArray()
         };
 

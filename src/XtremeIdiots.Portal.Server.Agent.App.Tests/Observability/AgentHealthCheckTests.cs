@@ -22,6 +22,7 @@ public class AgentHealthCheckTests
             new Mock<IEventPublisher>().Object,
             new Mock<IOffsetStore>().Object,
             new Mock<IServerLock>().Object,
+            new Mock<IServerSyncService>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -59,6 +60,7 @@ public class AgentHealthCheckTests
             new Mock<IEventPublisher>().Object,
             new Mock<IOffsetStore>().Object,
             new Mock<IServerLock>().Object,
+            new Mock<IServerSyncService>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -145,6 +147,7 @@ public class AgentHealthCheckTests
             new Mock<IEventPublisher>().Object,
             mockOffsetStore.Object,
             mockServerLock.Object,
+            new Mock<IServerSyncService>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 

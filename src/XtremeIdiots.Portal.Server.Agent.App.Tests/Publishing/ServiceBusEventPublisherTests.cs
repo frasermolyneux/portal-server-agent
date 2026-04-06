@@ -265,7 +265,8 @@ public class ServiceBusEventPublisherTests
         };
 
         await _publisher.PublishServerStatusAsync(
-            ServerId, GameType, SequenceId, "mp_crash", "tdm", players);
+            ServerId, GameType, SequenceId, "mp_crash", "tdm", players,
+            "My Test Server", "mods/mymod", 24);
 
         _clientMock.Verify(c => c.CreateSender("server-status"), Times.Once);
 

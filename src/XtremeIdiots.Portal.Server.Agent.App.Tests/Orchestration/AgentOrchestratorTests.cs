@@ -19,6 +19,7 @@ public class AgentOrchestratorTests
     private readonly Mock<IEventPublisher> _mockPublisher = new();
     private readonly Mock<IOffsetStore> _mockOffsetStore = new();
     private readonly Mock<IServerLock> _mockServerLock = new();
+    private readonly Mock<IServerSyncService> _mockSyncService = new();
     private readonly ILoggerFactory _loggerFactory = NullLoggerFactory.Instance;
     private readonly ILogger<AgentOrchestrator> _logger = NullLogger<AgentOrchestrator>.Instance;
 
@@ -32,7 +33,8 @@ public class AgentOrchestratorTests
 
     private AgentOrchestrator CreateOrchestrator() =>
         new(_mockConfigProvider.Object, _mockTailerFactory.Object, _mockParserFactory.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _loggerFactory, _logger);
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object,
+            _mockSyncService.Object, _loggerFactory, _logger);
 
     [Fact]
     public async Task RefreshAgents_WithNoServers_StartsNoAgents()

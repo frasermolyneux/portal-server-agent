@@ -28,6 +28,36 @@ public interface ILogParser
     /// Reset all parser state (slot map, current map). Call on reconnect.
     /// </summary>
     void Reset();
+
+    /// <summary>
+    /// Get the server title (from InitGame sv_hostname or RCON/Query sync).
+    /// </summary>
+    string? ServerTitle { get; }
+
+    /// <summary>
+    /// Get the server mod (from InitGame fs_game or RCON/Query sync).
+    /// </summary>
+    string? ServerMod { get; }
+
+    /// <summary>
+    /// Get the maximum player count (from InitGame sv_maxclients or RCON/Query sync).
+    /// </summary>
+    int? MaxPlayers { get; }
+
+    /// <summary>
+    /// Update server metadata from RCON/Query sync.
+    /// </summary>
+    void SetServerInfo(string? title, string? mod, int? maxPlayers);
+
+    /// <summary>
+    /// Add or update a player in the slot map. Used by RCON sync.
+    /// </summary>
+    void SetPlayer(int slotId, PlayerInfo playerInfo);
+
+    /// <summary>
+    /// Remove a player from the slot map. Used by RCON sync.
+    /// </summary>
+    void RemovePlayer(int slotId);
 }
 
 /// <summary>
@@ -51,7 +81,27 @@ public sealed record PlayerInfo
     public required int SlotId { get; init; }
 
     /// <summary>
+    /// Player's IP address (if available, e.g. from RCON sync).
+    /// </summary>
+    public string? IpAddress { get; init; }
+
+    /// <summary>
     /// UTC timestamp when the player connected.
     /// </summary>
     public required DateTime ConnectedAt { get; init; }
+
+    /// <summary>
+    /// Player's current score (updated by Query sync).
+    /// </summary>
+    public int Score { get; set; }
+
+    /// <summary>
+    /// Player's current ping in milliseconds (updated by RCON sync).
+    /// </summary>
+    public int Ping { get; set; }
+
+    /// <summary>
+    /// Player's network rate setting (updated by RCON sync).
+    /// </summary>
+    public int Rate { get; set; }
 }

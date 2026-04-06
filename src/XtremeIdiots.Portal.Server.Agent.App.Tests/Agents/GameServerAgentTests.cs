@@ -32,6 +32,7 @@ public class GameServerAgentTests
     private readonly Mock<IEventPublisher> _mockPublisher = new();
     private readonly Mock<IOffsetStore> _mockOffsetStore = new();
     private readonly Mock<IServerLock> _mockServerLock = new();
+    private readonly Mock<IServerSyncService> _mockSyncService = new();
     private readonly ILogger _logger = NullLogger.Instance;
 
     public GameServerAgentTests()
@@ -45,7 +46,7 @@ public class GameServerAgentTests
 
     private GameServerAgent CreateAgent() =>
         new(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _logger);
 
     [Fact]
     public async Task RunAsync_PublishesServerConnectedOnStart()
@@ -349,11 +350,36 @@ public class GameServerAgentTests
             .ReturnsAsync((SavedOffset?)null);
 
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _logger);
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _logger);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 
         // Act & Assert
         await Assert.ThrowsAsync<InvalidOperationException>(() => agent.RunAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task RunAsync_CallsRconSyncOnStartup()
+    {
+        // Arrange
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        var agent = CreateAgent();
+
+        // Act
+        await agent.RunAsync(cts.Token);
+
+        // Assert — sync should be called at least once on startup
+        _mockSyncService.Verify(
+            s => s.SyncAsync(_testContext.ServerId, _mockParser.Object, It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
     }
 }

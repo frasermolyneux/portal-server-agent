@@ -18,6 +18,7 @@ public interface IEventPublisher : IAsyncDisposable
     /// </summary>
     Task PublishServerStatusAsync(Guid serverId, string gameType, long sequenceId,
         string mapName, string gameName, IReadOnlyDictionary<int, PlayerInfo> players,
+        string? serverTitle, string? serverMod, int? maxPlayers,
         CancellationToken ct = default);
 
     /// <summary>

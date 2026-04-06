@@ -47,9 +47,21 @@ public abstract class CodLogParserBase : ILogParser
     private readonly Dictionary<int, PlayerInfo> _slotMap = new();
     private string? _currentMap;
     private string? _currentGameType;
+    private string? _serverTitle;
+    private string? _serverMod;
+    private int? _maxPlayers;
 
     /// <inheritdoc />
     public string? CurrentMap => _currentMap;
+
+    /// <inheritdoc />
+    public string? ServerTitle => _serverTitle;
+
+    /// <inheritdoc />
+    public string? ServerMod => _serverMod;
+
+    /// <inheritdoc />
+    public int? MaxPlayers => _maxPlayers;
 
     /// <inheritdoc />
     public IReadOnlyDictionary<int, PlayerInfo> ConnectedPlayers => _slotMap;
@@ -91,6 +103,29 @@ public abstract class CodLogParserBase : ILogParser
         _slotMap.Clear();
         _currentMap = null;
         _currentGameType = null;
+        _serverTitle = null;
+        _serverMod = null;
+        _maxPlayers = null;
+    }
+
+    /// <inheritdoc />
+    public void SetServerInfo(string? title, string? mod, int? maxPlayers)
+    {
+        _serverTitle = title;
+        _serverMod = mod;
+        _maxPlayers = maxPlayers;
+    }
+
+    /// <inheritdoc />
+    public void SetPlayer(int slotId, PlayerInfo playerInfo)
+    {
+        _slotMap[slotId] = playerInfo;
+    }
+
+    /// <inheritdoc />
+    public void RemovePlayer(int slotId)
+    {
+        _slotMap.Remove(slotId);
     }
 
     /// <summary>
@@ -128,6 +163,13 @@ public abstract class CodLogParserBase : ILogParser
                 mapName = value;
             else if (string.Equals(key, "g_gametype", StringComparison.OrdinalIgnoreCase))
                 gameType = value;
+            else if (string.Equals(key, "sv_hostname", StringComparison.OrdinalIgnoreCase))
+                _serverTitle = value;
+            else if (string.Equals(key, "fs_game", StringComparison.OrdinalIgnoreCase))
+                _serverMod = value;
+            else if (string.Equals(key, "sv_maxclients", StringComparison.OrdinalIgnoreCase) &&
+                     int.TryParse(value, out var maxClients))
+                _maxPlayers = maxClients;
         }
 
         // Clear the slot map — all players will re-join after a map change
