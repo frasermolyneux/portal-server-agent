@@ -5,6 +5,7 @@ using Azure.Messaging.ServiceBus;
 
 using Microsoft.Extensions.Logging;
 
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Events.Abstractions.V1;
 
 using Parsing = XtremeIdiots.Portal.Server.Agent.App.Parsing;
@@ -106,6 +107,31 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
 
         var body = JsonSerializer.Serialize(payload, JsonOptions);
         await SendAsync(Queues.ServerConnected, body, serverId, sequenceId, nameof(SbEvents.ServerConnectedEvent), ct);
+    }
+
+    /// <inheritdoc />
+    public async Task PublishBanDetectedAsync(
+        Guid serverId, string gameType, long sequenceId,
+        IReadOnlyList<DetectedBanEntry> newBans, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+
+        var evt = new SbEvents.BanDetectedEvent
+        {
+            EventGeneratedUtc = now,
+            EventPublishedUtc = now,
+            ServerId = serverId,
+            GameType = gameType,
+            SequenceId = sequenceId,
+            NewBans = newBans.Select(b => new SbEvents.DetectedBan
+            {
+                PlayerGuid = b.PlayerGuid,
+                PlayerName = b.PlayerName
+            }).ToList()
+        };
+
+        var body = JsonSerializer.Serialize(evt, JsonOptions);
+        await SendAsync(Queues.BanFileChanged, body, serverId, sequenceId, nameof(SbEvents.BanDetectedEvent), ct);
     }
 
     /// <inheritdoc />

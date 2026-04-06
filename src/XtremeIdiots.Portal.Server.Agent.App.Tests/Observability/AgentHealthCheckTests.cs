@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Observability;
 using XtremeIdiots.Portal.Server.Agent.App.Orchestration;
@@ -23,6 +24,7 @@ public class AgentHealthCheckTests
             new Mock<IOffsetStore>().Object,
             new Mock<IServerLock>().Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -61,6 +63,7 @@ public class AgentHealthCheckTests
             new Mock<IOffsetStore>().Object,
             new Mock<IServerLock>().Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -148,6 +151,7 @@ public class AgentHealthCheckTests
             mockOffsetStore.Object,
             mockServerLock.Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 

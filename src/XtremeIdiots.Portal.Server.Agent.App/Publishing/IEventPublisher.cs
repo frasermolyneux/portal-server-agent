@@ -1,3 +1,4 @@
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Publishing;
@@ -26,4 +27,10 @@ public interface IEventPublisher : IAsyncDisposable
     /// </summary>
     Task PublishServerConnectedAsync(Guid serverId, string gameType, long sequenceId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Publish a ban detected event with new untagged bans found in the ban file.
+    /// </summary>
+    Task PublishBanDetectedAsync(Guid serverId, string gameType, long sequenceId,
+        IReadOnlyList<DetectedBanEntry> newBans, CancellationToken ct = default);
 }

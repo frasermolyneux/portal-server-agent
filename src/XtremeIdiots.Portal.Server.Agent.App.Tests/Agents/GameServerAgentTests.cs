@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
@@ -33,6 +34,7 @@ public class GameServerAgentTests
     private readonly Mock<IOffsetStore> _mockOffsetStore = new();
     private readonly Mock<IServerLock> _mockServerLock = new();
     private readonly Mock<IServerSyncService> _mockSyncService = new();
+    private readonly Mock<IBanFileWatcher> _mockBanFileWatcher = new();
     private readonly ILogger _logger = NullLogger.Instance;
 
     public GameServerAgentTests()
@@ -42,11 +44,15 @@ public class GameServerAgentTests
             .ReturnsAsync(true);
         _mockServerLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
+
+        // Default: ban file watcher returns empty
+        _mockBanFileWatcher.Setup(b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BanFileCheckResult.Empty);
     }
 
     private GameServerAgent CreateAgent() =>
         new(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBanFileWatcher.Object, _logger);
 
     [Fact]
     public async Task RunAsync_PublishesServerConnectedOnStart()
@@ -350,7 +356,7 @@ public class GameServerAgentTests
             .ReturnsAsync((SavedOffset?)null);
 
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _logger);
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBanFileWatcher.Object, _logger);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 

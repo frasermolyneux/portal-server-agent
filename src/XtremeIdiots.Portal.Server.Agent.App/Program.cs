@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Observability;
 using XtremeIdiots.Portal.Server.Agent.App.Orchestration;
@@ -102,6 +103,7 @@ builder.Services.AddSingleton<IEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddSingleton<IOffsetStore, BlobOffsetStore>();
 builder.Services.AddSingleton<IServerLock, BlobServerLock>();
 builder.Services.AddSingleton<IServerSyncService, ServerSyncService>();
+builder.Services.AddSingleton<IBanFileWatcher, BanFileWatcher>();
 
 // Agent orchestrator (singleton + hosted service so health checks can access it)
 builder.Services.AddSingleton<AgentOrchestrator>();

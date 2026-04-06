@@ -1,3 +1,4 @@
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
@@ -17,6 +18,7 @@ public sealed class GameServerAgent
     private readonly IOffsetStore _offsetStore;
     private readonly IServerLock _serverLock;
     private readonly IServerSyncService _syncService;
+    private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILogger _logger;
 
     private long _sequenceId;
@@ -24,11 +26,13 @@ public sealed class GameServerAgent
     private DateTime _lastStatusPublish = DateTime.MinValue;
     private DateTime _lastLeaseRenew = DateTime.MinValue;
     private DateTime _lastRconSync = DateTime.MinValue;
+    private DateTime _lastBanFileCheck = DateTime.MinValue;
 
     internal static readonly TimeSpan OffsetSaveInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan StatusPublishInterval = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan LeaseRenewInterval = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan RconSyncInterval = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan BanFileCheckInterval = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
     public GameServerAgent(
@@ -39,6 +43,7 @@ public sealed class GameServerAgent
         IOffsetStore offsetStore,
         IServerLock serverLock,
         IServerSyncService syncService,
+        IBanFileWatcher banFileWatcher,
         ILogger logger)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -48,6 +53,7 @@ public sealed class GameServerAgent
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
         _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
+        _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -139,6 +145,12 @@ public sealed class GameServerAgent
                         await _syncService.SyncAsync(_context.ServerId, _parser, ct);
                         _lastRconSync = DateTime.UtcNow;
                     }
+
+                    // Periodic ban file check (every 60 seconds)
+                    if (DateTime.UtcNow - _lastBanFileCheck > BanFileCheckInterval)
+                    {
+                        await CheckBanFileAsync(ct);
+                    }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -192,6 +204,37 @@ public sealed class GameServerAgent
                 _parser.ServerTitle, _parser.ServerMod, _parser.MaxPlayers,
                 ct);
             _lastStatusPublish = DateTime.UtcNow;
+        }
+    }
+
+    private async Task CheckBanFileAsync(CancellationToken ct)
+    {
+        try
+        {
+            var result = await _banFileWatcher.CheckAsync(_context, ct);
+            _lastBanFileCheck = DateTime.UtcNow;
+
+            if (result.NewBans.Count > 0)
+            {
+                // Publish first, then acknowledge (update monitor) — prevents ban loss if publish fails
+                await _publisher.PublishBanDetectedAsync(
+                    _context.ServerId, _context.GameType, NextSequenceId(),
+                    result.NewBans, ct);
+
+                await _banFileWatcher.AcknowledgeAsync(result.MonitorUpdates, ct);
+
+                _logger.LogInformation("[{Title}] Published {Count} new ban(s) from ban file",
+                    _context.Title, result.NewBans.Count);
+            }
+            else if (result.MonitorUpdates.Count > 0)
+            {
+                // No new bans but monitor still needs LastSync update
+                await _banFileWatcher.AcknowledgeAsync(result.MonitorUpdates, ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{Title}] Ban file check failed", _context.Title);
         }
     }
 }

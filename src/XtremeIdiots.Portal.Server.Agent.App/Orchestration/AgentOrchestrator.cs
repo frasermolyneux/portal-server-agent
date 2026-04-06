@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
@@ -20,6 +21,7 @@ public class AgentOrchestrator : BackgroundService
     private readonly IOffsetStore _offsetStore;
     private readonly IServerLock _serverLock;
     private readonly IServerSyncService _syncService;
+    private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AgentOrchestrator> _logger;
 
@@ -35,6 +37,7 @@ public class AgentOrchestrator : BackgroundService
         IOffsetStore offsetStore,
         IServerLock serverLock,
         IServerSyncService syncService,
+        IBanFileWatcher banFileWatcher,
         ILoggerFactory loggerFactory,
         ILogger<AgentOrchestrator> logger)
     {
@@ -45,6 +48,7 @@ public class AgentOrchestrator : BackgroundService
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
         _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
+        _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -195,7 +199,7 @@ public class AgentOrchestrator : BackgroundService
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 
-            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, agentLogger);
+            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _banFileWatcher, agentLogger);
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
             _agents.TryAdd(server.ServerId, (task, cts));
