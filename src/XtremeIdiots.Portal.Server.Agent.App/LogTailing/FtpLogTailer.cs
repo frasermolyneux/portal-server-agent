@@ -15,6 +15,12 @@ public sealed class FtpLogTailer : ILogTailer
 {
     private static readonly int[] BackoffSeconds = [1, 2, 4, 8, 16, 30, 60];
 
+    /// <summary>
+    /// Maximum bytes to download per poll to prevent OOM when catching up after
+    /// reconnection or log rotation. Multiple polls will naturally drain the backlog.
+    /// </summary>
+    internal const int MaxBytesPerPoll = 1024 * 1024; // 1 MB
+
     private readonly ILogger<FtpLogTailer> _logger;
     private AsyncFtpClient? _client;
     private FtpTailerConfig? _config;
@@ -98,13 +104,14 @@ public sealed class FtpLogTailer : ILogTailer
                 return Array.Empty<string>();
             }
 
-            var bytesToRead = currentSize - _lastFileSize;
+            var bytesAvailable = currentSize - _lastFileSize;
+            var bytesToRead = Math.Min(bytesAvailable, MaxBytesPerPoll);
 
-            _logger.LogDebug("Reading {ByteCount} new bytes from {FilePath} at offset {Offset}",
-                bytesToRead, _config.FilePath, _lastFileSize);
+            _logger.LogDebug("Reading {ByteCount} new bytes from {FilePath} at offset {Offset} ({BytesAvailable} bytes available)",
+                bytesToRead, _config.FilePath, _lastFileSize, bytesAvailable);
 
             var data = await DownloadBytesFromOffsetAsync(_config.FilePath, _lastFileSize, bytesToRead, ct);
-            _lastFileSize = currentSize;
+            _lastFileSize += data.Length;
             _reconnectAttempts = 0;
 
             var lines = SplitIntoLines(data, ref _partialLine);
