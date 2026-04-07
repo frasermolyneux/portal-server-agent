@@ -432,4 +432,78 @@ public class GameServerAgentTests
             s => s.SyncAsync(_testContext.ServerId, _mockParser.Object, It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
     }
+
+    [Fact]
+    public async Task RunAsync_WhenPollReturnsEmpty_DoesNotPublishEvents()
+    {
+        // Arrange — simulates the fix where PollAsync returns empty on transient FTP failure
+        // (GetFileSize returns -1, guard skips the poll instead of triggering false log rotation)
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        // Simulate several polls returning empty (as would happen with the -1 file size guard)
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var agent = CreateAgent();
+
+        // Act
+        await agent.RunAsync(cts.Token);
+
+        // Assert — no game events should be published when polls return empty
+        _mockPublisher.Verify(
+            p => p.PublishAsync(It.IsAny<GameEvent>(), It.IsAny<Guid>(), It.IsAny<string>(),
+                It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenPollFailsIntermittently_ContinuesProcessingSubsequentPolls()
+    {
+        // Arrange — simulates transient FTP failures (empty polls) followed by recovery with real data.
+        // This validates the agent keeps running through transient failures.
+        var testEvent = new PlayerConnectedEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "abc123",
+            Username = "TestPlayer",
+            SlotId = 0
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var pollCount = 0;
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                pollCount++;
+                // First 3 polls return empty (simulating transient FTP failures where GetFileSize returned -1),
+                // then poll 4 returns real data
+                return pollCount == 4
+                    ? new[] { "J;abc123;0;TestPlayer" }
+                    : Array.Empty<string>();
+            });
+
+        _mockParser.Setup(p => p.ParseLine("J;abc123;0;TestPlayer")).Returns(testEvent);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        var agent = CreateAgent();
+
+        // Act
+        await agent.RunAsync(cts.Token);
+
+        // Assert — the event from poll 4 should still be published
+        _mockPublisher.Verify(
+            p => p.PublishAsync(testEvent, _testContext.ServerId, _testContext.GameType,
+                It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
 }

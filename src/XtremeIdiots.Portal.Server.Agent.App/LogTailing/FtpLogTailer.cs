@@ -58,6 +58,13 @@ public sealed class FtpLogTailer : ILogTailer
 
         var currentFileSize = await _client!.GetFileSize(config.FilePath, -1, ct);
 
+        if (currentFileSize < 0)
+        {
+            throw new InvalidOperationException(
+                $"Unable to determine file size for {config.FilePath} during connect. " +
+                "The file may not exist or the FTP server did not return a valid size.");
+        }
+
         if (startOffset.HasValue && startOffset.Value <= currentFileSize)
         {
             _lastFileSize = startOffset.Value;
@@ -90,6 +97,12 @@ public sealed class FtpLogTailer : ILogTailer
             }
 
             var currentSize = await _client!.GetFileSize(_config.FilePath, -1, ct);
+
+            if (currentSize < 0)
+            {
+                _logger.LogWarning("Unable to determine file size for {FilePath}, skipping poll", _config.FilePath);
+                return Array.Empty<string>();
+            }
 
             if (currentSize < _lastFileSize)
             {

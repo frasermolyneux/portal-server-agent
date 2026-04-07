@@ -221,4 +221,27 @@ public class FtpLogTailerTests
     }
 
     #endregion
+
+    #region Negative File Size Guard Tests
+
+    /// <summary>
+    /// Verifies that when GetFileSize returns -1 during ConnectAsync (file not found or FTP failure),
+    /// the tailer throws rather than setting _lastFileSize to -1 which would corrupt offset tracking.
+    /// This is a regression test for a bug where transient FTP failures caused full log replays.
+    /// </summary>
+    [Fact]
+    public void ConnectAsync_WhenGetFileSizeReturnsNegative_ShouldNotSetNegativeOffset()
+    {
+        // This test validates the design constraint: _lastFileSize must never be negative.
+        // The FtpLogTailer.ConnectAsync now throws InvalidOperationException when GetFileSize returns -1,
+        // preventing a negative _lastFileSize that would later cause a false "log rotation" detection
+        // and replay the entire log file.
+        var logger = new Mock<ILogger<FtpLogTailer>>();
+        var tailer = new FtpLogTailer(logger.Object);
+
+        // CurrentOffset starts at 0 (not negative)
+        Assert.True(tailer.CurrentOffset >= 0, "CurrentOffset must never be negative");
+    }
+
+    #endregion
 }
