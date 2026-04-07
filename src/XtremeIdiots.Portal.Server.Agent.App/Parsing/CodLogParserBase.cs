@@ -117,6 +117,13 @@ public abstract class CodLogParserBase : ILogParser
     }
 
     /// <inheritdoc />
+    public void SetCurrentMap(string? mapName)
+    {
+        if (_currentMap is null && !string.IsNullOrWhiteSpace(mapName))
+            _currentMap = mapName;
+    }
+
+    /// <inheritdoc />
     public void SetPlayer(int slotId, PlayerInfo playerInfo)
     {
         _slotMap[slotId] = playerInfo;
@@ -175,8 +182,10 @@ public abstract class CodLogParserBase : ILogParser
         // Clear the slot map — all players will re-join after a map change
         _slotMap.Clear();
 
-        _currentMap = mapName;
-        _currentGameType = gameType;
+        if (mapName is not null)
+            _currentMap = mapName;
+        if (gameType is not null)
+            _currentGameType = gameType;
 
         if (mapName is not null && gameType is not null)
         {

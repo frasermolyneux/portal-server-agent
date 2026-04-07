@@ -50,6 +50,12 @@ public interface ILogParser
     void SetServerInfo(string? title, string? mod, int? maxPlayers);
 
     /// <summary>
+    /// Update the current map from RCON/Query sync.
+    /// Ensures status publishing can proceed even before a MapChange is parsed from logs.
+    /// </summary>
+    void SetCurrentMap(string? mapName);
+
+    /// <summary>
     /// Add or update a player in the slot map. Used by RCON sync.
     /// </summary>
     void SetPlayer(int slotId, PlayerInfo playerInfo);

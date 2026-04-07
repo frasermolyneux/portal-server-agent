@@ -296,4 +296,70 @@ public class ServerSyncServiceTests
         // SetServerInfo should not be called
         _mockParser.Verify(p => p.SetServerInfo(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int?>()), Times.Never);
     }
+
+    [Fact]
+    public async Task SyncAsync_QuerySetsCurrentMap()
+    {
+        // Arrange — RCON succeeds with empty player list
+        var rconStatus = new ServerRconStatusResponseDto { Players = new List<ServerRconPlayerDto>() };
+        _mockRconApi.Setup(r => r.GetServerStatus(_serverId))
+            .ReturnsAsync(new ApiResult<ServerRconStatusResponseDto>(
+                HttpStatusCode.OK, new ApiResponse<ServerRconStatusResponseDto>(rconStatus)));
+
+        _mockParser.SetupGet(p => p.ConnectedPlayers)
+            .Returns(new Dictionary<int, PlayerInfo>());
+
+        // Query returns server metadata including map
+        var queryStatus = new ServerQueryStatusResponseDto
+        {
+            ServerName = "My Server",
+            Map = "mp_crash",
+            Mod = "mods/mymod",
+            MaxPlayers = 32,
+            Players = new List<ServerQueryPlayerDto>()
+        };
+        _mockQueryApi.Setup(q => q.GetServerStatus(_serverId))
+            .ReturnsAsync(new ApiResult<ServerQueryStatusResponseDto>(
+                HttpStatusCode.OK, new ApiResponse<ServerQueryStatusResponseDto>(queryStatus)));
+
+        var service = CreateService();
+
+        // Act
+        await service.SyncAsync(_serverId, _mockParser.Object);
+
+        // Assert — SetCurrentMap should be called with the Query map
+        _mockParser.Verify(p => p.SetCurrentMap("mp_crash"), Times.Once);
+    }
+
+    [Fact]
+    public async Task SyncAsync_QueryWithNullMap_DoesNotSetCurrentMap()
+    {
+        // Arrange — RCON succeeds
+        var rconStatus = new ServerRconStatusResponseDto { Players = new List<ServerRconPlayerDto>() };
+        _mockRconApi.Setup(r => r.GetServerStatus(_serverId))
+            .ReturnsAsync(new ApiResult<ServerRconStatusResponseDto>(
+                HttpStatusCode.OK, new ApiResponse<ServerRconStatusResponseDto>(rconStatus)));
+
+        _mockParser.SetupGet(p => p.ConnectedPlayers)
+            .Returns(new Dictionary<int, PlayerInfo>());
+
+        // Query returns server metadata with null map
+        var queryStatus = new ServerQueryStatusResponseDto
+        {
+            ServerName = "My Server",
+            Map = null,
+            Players = new List<ServerQueryPlayerDto>()
+        };
+        _mockQueryApi.Setup(q => q.GetServerStatus(_serverId))
+            .ReturnsAsync(new ApiResult<ServerQueryStatusResponseDto>(
+                HttpStatusCode.OK, new ApiResponse<ServerQueryStatusResponseDto>(queryStatus)));
+
+        var service = CreateService();
+
+        // Act
+        await service.SyncAsync(_serverId, _mockParser.Object);
+
+        // Assert — SetCurrentMap should still be called (parser handles null/whitespace filtering)
+        _mockParser.Verify(p => p.SetCurrentMap(null), Times.Once);
+    }
 }

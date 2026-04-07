@@ -103,6 +103,7 @@ public sealed class ServerSyncService : IServerSyncService
 
             var query = queryResult.Result.Data;
             parser.SetServerInfo(query.ServerName, query.Mod, query.MaxPlayers);
+            parser.SetCurrentMap(query.Map);
 
             // Merge Score from Query players (Query has Score, RCON doesn't)
             foreach (var queryPlayer in query.Players)
