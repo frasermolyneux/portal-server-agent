@@ -365,6 +365,50 @@ public class GameServerAgentTests
     }
 
     [Fact]
+    public async Task RunAsync_AcknowledgesBanFileMonitorWhenNoNewBans()
+    {
+        // Arrange — ban file watcher returns monitor updates but no new bans (file unchanged heartbeat)
+        var monitorId = Guid.NewGuid();
+        var heartbeatResult = new BanFileCheckResult
+        {
+            NewBans = [],
+            MonitorUpdates = [new MonitorUpdate { BanFileMonitorId = monitorId, NewFileSize = 1024 }]
+        };
+
+        _mockBanFileWatcher.Setup(b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(heartbeatResult);
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        // Run long enough for ban file check to trigger (BanFileCheckInterval = 60s, but _lastBanFileCheck starts at MinValue)
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var agent = CreateAgent();
+
+        // Act
+        await agent.RunAsync(cts.Token);
+
+        // Assert — AcknowledgeAsync should be called to update LastSync even without new bans
+        _mockBanFileWatcher.Verify(
+            b => b.AcknowledgeAsync(
+                It.Is<IReadOnlyList<MonitorUpdate>>(u => u.Count == 1 && u[0].BanFileMonitorId == monitorId),
+                It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
+
+        // Verify no ban events were published
+        _mockPublisher.Verify(
+            p => p.PublishBanDetectedAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(),
+                It.IsAny<IReadOnlyList<DetectedBanEntry>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task RunAsync_CallsRconSyncOnStartup()
     {
         // Arrange

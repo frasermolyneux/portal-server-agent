@@ -91,10 +91,15 @@ public sealed class BanFileWatcher : IBanFileWatcher
             var fileSize = await ftp.GetFileSize(monitor.FilePath, -1, ct).ConfigureAwait(false);
             var lastKnownSize = monitor.RemoteFileSize ?? 0;
 
-            // File hasn't changed
+            // File hasn't changed — still return an update so LastSync gets refreshed
             if (fileSize == lastKnownSize)
             {
-                return ([], null);
+                var heartbeatUpdate = new MonitorUpdate
+                {
+                    BanFileMonitorId = monitor.BanFileMonitorId,
+                    NewFileSize = fileSize
+                };
+                return ([], heartbeatUpdate);
             }
 
             // File was truncated/rebuilt — reset and process from beginning
