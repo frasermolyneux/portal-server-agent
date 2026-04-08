@@ -62,6 +62,7 @@ public sealed class Cod5LogParser : CodLogParserBase
                 Timestamp = timestamp,
                 PlayerGuid = guid,
                 Username = name,
+                IpAddress = string.Empty,
                 SlotId = cid
             };
         }

@@ -28,6 +28,11 @@ public sealed record PlayerConnectedEvent : GameEvent
     public required string Username { get; init; }
 
     /// <summary>
+    /// Player's IP address if known (e.g. from a prior RCON sync), otherwise empty.
+    /// </summary>
+    public string IpAddress { get; init; } = string.Empty;
+
+    /// <summary>
     /// Client slot number assigned by the game server.
     /// </summary>
     public required int SlotId { get; init; }

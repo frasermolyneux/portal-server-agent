@@ -50,6 +50,8 @@ public sealed class ServerSyncService : IServerSyncService
                     // Update mutable RCON fields on existing player
                     existing.Ping = rconPlayer.Ping;
                     existing.Rate = rconPlayer.Rate;
+                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress))
+                        existing.IpAddress = rconPlayer.IpAddress;
                     updated++;
                 }
                 else

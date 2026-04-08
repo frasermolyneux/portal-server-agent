@@ -254,11 +254,17 @@ public abstract class CodLogParserBase : ILogParser
         if (!IsValidGuid(guid))
             return null;
 
+        // Preserve RCON-provided IP when the same player reconnects to this slot
+        string? existingIp = null;
+        if (_slotMap.TryGetValue(cid, out var previous) && previous.Guid == guid)
+            existingIp = previous.IpAddress;
+
         var playerInfo = new PlayerInfo
         {
             Guid = guid,
             Name = name,
             SlotId = cid,
+            IpAddress = existingIp,
             ConnectedAt = timestamp
         };
 
@@ -269,6 +275,7 @@ public abstract class CodLogParserBase : ILogParser
             Timestamp = timestamp,
             PlayerGuid = guid,
             Username = name,
+            IpAddress = existingIp ?? string.Empty,
             SlotId = cid
         };
     }

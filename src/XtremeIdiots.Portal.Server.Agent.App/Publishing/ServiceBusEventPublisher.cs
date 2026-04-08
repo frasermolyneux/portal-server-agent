@@ -160,7 +160,7 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 SequenceId = sequenceId,
                 PlayerGuid = e.PlayerGuid,
                 Username = e.Username,
-                IpAddress = string.Empty, // IP resolved from RCON — placeholder
+                IpAddress = e.IpAddress,
                 SlotId = e.SlotId
             }, JsonOptions)),
 

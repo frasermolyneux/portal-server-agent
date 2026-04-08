@@ -89,7 +89,7 @@ public sealed record PlayerInfo
     /// <summary>
     /// Player's IP address (if available, e.g. from RCON sync).
     /// </summary>
-    public string? IpAddress { get; init; }
+    public string? IpAddress { get; set; }
 
     /// <summary>
     /// UTC timestamp when the player connected.
