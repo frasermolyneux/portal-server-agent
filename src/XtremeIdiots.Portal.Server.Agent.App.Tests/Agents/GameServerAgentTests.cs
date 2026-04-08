@@ -48,6 +48,10 @@ public class GameServerAgentTests
         // Default: ban file watcher returns empty
         _mockBanFileWatcher.Setup(b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(BanFileCheckResult.Empty);
+
+        // Default: RCON sync returns no IP-resolved events
+        _mockSyncService.Setup(s => s.SyncAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<XtremeIdiots.Portal.Server.Agent.App.Parsing.PlayerIpResolvedEvent>)Array.Empty<XtremeIdiots.Portal.Server.Agent.App.Parsing.PlayerIpResolvedEvent>());
     }
 
     private GameServerAgent CreateAgent() =>

@@ -21,8 +21,10 @@ public sealed class ServerSyncService : IServerSyncService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task SyncAsync(Guid serverId, ILogParser parser, CancellationToken ct = default)
+    public async Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, CancellationToken ct = default)
     {
+        var ipResolvedEvents = new List<PlayerIpResolvedEvent>();
+
         try
         {
             using var scope = _scopeFactory.CreateScope();
@@ -33,9 +35,10 @@ public sealed class ServerSyncService : IServerSyncService
             if (!result.IsSuccess || result.Result?.Data?.Players is null)
             {
                 _logger.LogWarning("RCON sync failed for server {ServerId}: API returned non-success or no data", serverId);
-                return;
+                return ipResolvedEvents;
             }
 
+            var now = DateTime.UtcNow;
             var rconPlayers = result.Result.Data.Players;
             var existingPlayers = parser.ConnectedPlayers;
             var added = 0;
@@ -50,8 +53,21 @@ public sealed class ServerSyncService : IServerSyncService
                     // Update mutable RCON fields on existing player
                     existing.Ping = rconPlayer.Ping;
                     existing.Rate = rconPlayer.Rate;
-                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress))
+
+                    // Emit event when RCON provides an IP that differs from what we had
+                    // (includes null→value first discovery and value→value IP changes)
+                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress) &&
+                        existing.IpAddress != rconPlayer.IpAddress)
+                    {
                         existing.IpAddress = rconPlayer.IpAddress;
+                        ipResolvedEvents.Add(new PlayerIpResolvedEvent
+                        {
+                            Timestamp = now,
+                            PlayerGuid = existing.Guid,
+                            IpAddress = rconPlayer.IpAddress
+                        });
+                    }
+
                     updated++;
                 }
                 else
@@ -62,11 +78,23 @@ public sealed class ServerSyncService : IServerSyncService
                         Name = rconPlayer.Name ?? string.Empty,
                         SlotId = slotId,
                         IpAddress = rconPlayer.IpAddress,
-                        ConnectedAt = DateTime.UtcNow,
+                        ConnectedAt = now,
                         Ping = rconPlayer.Ping,
                         Rate = rconPlayer.Rate
                     });
                     added++;
+
+                    // New player discovered via RCON with IP — emit resolved event
+                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress) &&
+                        !string.IsNullOrWhiteSpace(rconPlayer.Guid))
+                    {
+                        ipResolvedEvents.Add(new PlayerIpResolvedEvent
+                        {
+                            Timestamp = now,
+                            PlayerGuid = rconPlayer.Guid,
+                            IpAddress = rconPlayer.IpAddress
+                        });
+                    }
                 }
             }
 
@@ -78,8 +106,8 @@ public sealed class ServerSyncService : IServerSyncService
                 parser.RemovePlayer(staleSlot);
             }
 
-            _logger.LogInformation("RCON sync for {ServerId}: added {Added}, updated {Updated}, removed {Removed} players",
-                serverId, added, updated, staleSlots.Count);
+            _logger.LogInformation("RCON sync for {ServerId}: added {Added}, updated {Updated}, removed {Removed}, ip-resolved {IpResolved} players",
+                serverId, added, updated, staleSlots.Count, ipResolvedEvents.Count);
 
             // Query protocol for server metadata and player scores
             await SyncQueryAsync(scope, serverId, parser, ct);
@@ -88,6 +116,8 @@ public sealed class ServerSyncService : IServerSyncService
         {
             _logger.LogWarning(ex, "RCON sync failed for server {ServerId}", serverId);
         }
+
+        return ipResolvedEvents;
     }
 
     private async Task SyncQueryAsync(IServiceScope scope, Guid serverId, ILogParser parser, CancellationToken ct)

@@ -100,3 +100,20 @@ public sealed record MapChangeEvent : GameEvent
     /// </summary>
     public required string GameType { get; init; }
 }
+
+/// <summary>
+/// A player's IP address was resolved via RCON sync.
+/// Emitted once per player when RCON first provides their IP (or the IP changes).
+/// </summary>
+public sealed record PlayerIpResolvedEvent : GameEvent
+{
+    /// <summary>
+    /// Game-specific unique identifier for the player.
+    /// </summary>
+    public required string PlayerGuid { get; init; }
+
+    /// <summary>
+    /// The resolved IP address from RCON.
+    /// </summary>
+    public required string IpAddress { get; init; }
+}

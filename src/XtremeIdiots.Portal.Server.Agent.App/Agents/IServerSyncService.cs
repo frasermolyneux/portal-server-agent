@@ -9,7 +9,8 @@ public interface IServerSyncService
 {
     /// <summary>
     /// Query the server via RCON and merge the player list into the parser's slot map.
+    /// Returns any PlayerIpResolved events for players whose IP was first discovered.
     /// Best-effort — failures are logged but never throw.
     /// </summary>
-    Task SyncAsync(Guid serverId, ILogParser parser, CancellationToken ct = default);
+    Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, CancellationToken ct = default);
 }

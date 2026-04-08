@@ -97,7 +97,8 @@ public sealed class GameServerAgent
             await _publisher.PublishServerConnectedAsync(_context.ServerId, _context.GameType, NextSequenceId(), ct);
 
             // 4. Initial RCON sync — populate slot map with current players
-            await _syncService.SyncAsync(_context.ServerId, _parser, ct);
+            var initialIpEvents = await _syncService.SyncAsync(_context.ServerId, _parser, ct);
+            await PublishIpResolvedEventsAsync(initialIpEvents, ct);
             _lastRconSync = DateTime.UtcNow;
 
             // 5. Main loop
@@ -142,7 +143,8 @@ public sealed class GameServerAgent
                     // Periodic RCON sync (every 5 minutes)
                     if (DateTime.UtcNow - _lastRconSync > RconSyncInterval)
                     {
-                        await _syncService.SyncAsync(_context.ServerId, _parser, ct);
+                        var ipEvents = await _syncService.SyncAsync(_context.ServerId, _parser, ct);
+                        await PublishIpResolvedEventsAsync(ipEvents, ct);
                         _lastRconSync = DateTime.UtcNow;
                     }
 
@@ -235,6 +237,25 @@ public sealed class GameServerAgent
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[{Title}] Ban file check failed", _context.Title);
+        }
+    }
+
+    private async Task PublishIpResolvedEventsAsync(IReadOnlyList<Parsing.PlayerIpResolvedEvent>? events, CancellationToken ct)
+    {
+        if (events is null or { Count: 0 })
+            return;
+
+        foreach (var evt in events)
+        {
+            try
+            {
+                await _publisher.PublishAsync(evt, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[{Title}] Failed to publish PlayerIpResolved for {PlayerGuid}",
+                    _context.Title, evt.PlayerGuid);
+            }
         }
     }
 }

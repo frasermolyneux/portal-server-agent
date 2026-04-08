@@ -200,6 +200,17 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 GameName = e.GameType
             }, JsonOptions)),
 
+            Parsing.PlayerIpResolvedEvent e => (Queues.PlayerIpResolved, JsonSerializer.Serialize(new SbEvents.PlayerIpResolvedEvent
+            {
+                EventGeneratedUtc = e.Timestamp,
+                EventPublishedUtc = now,
+                ServerId = serverId,
+                GameType = gameType,
+                SequenceId = sequenceId,
+                PlayerGuid = e.PlayerGuid,
+                IpAddress = e.IpAddress
+            }, JsonOptions)),
+
             _ => (null, null)
         };
     }
