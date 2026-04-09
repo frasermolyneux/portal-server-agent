@@ -20,4 +20,7 @@ public sealed record ServerContext
     public required string Hostname { get; init; }
     public required int QueryPort { get; init; }
     public required string? RconPassword { get; init; }
+
+    // Feature toggles
+    public required bool BanFileSyncEnabled { get; init; }
 }

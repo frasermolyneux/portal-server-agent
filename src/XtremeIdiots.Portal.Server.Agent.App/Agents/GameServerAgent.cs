@@ -149,7 +149,7 @@ public sealed class GameServerAgent
                     }
 
                     // Periodic ban file check (every 60 seconds)
-                    if (DateTime.UtcNow - _lastBanFileCheck > BanFileCheckInterval)
+                    if (_context.BanFileSyncEnabled && DateTime.UtcNow - _lastBanFileCheck > BanFileCheckInterval)
                     {
                         await CheckBanFileAsync(ct);
                     }

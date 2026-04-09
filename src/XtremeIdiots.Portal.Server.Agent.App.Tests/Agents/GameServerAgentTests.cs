@@ -25,7 +25,8 @@ public class GameServerAgentTests
         LiveLogFile = "/logs/games_mp.log",
         Hostname = "game.example.com",
         QueryPort = 28960,
-        RconPassword = "secret"
+        RconPassword = "secret",
+        BanFileSyncEnabled = true
     };
 
     private readonly Mock<ILogTailer> _mockTailer = new();

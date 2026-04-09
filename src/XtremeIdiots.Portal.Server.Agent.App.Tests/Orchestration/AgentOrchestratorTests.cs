@@ -95,7 +95,8 @@ public class AgentOrchestratorTests
             LiveLogFile = "/logs/test.log",
             Hostname = "game.example.com",
             QueryPort = 28960,
-            RconPassword = null
+            RconPassword = null,
+            BanFileSyncEnabled = true
         };
 
         _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
@@ -128,7 +129,8 @@ public class AgentOrchestratorTests
             LiveLogFile = null,
             Hostname = "game.example.com",
             QueryPort = 28960,
-            RconPassword = null
+            RconPassword = null,
+            BanFileSyncEnabled = true
         };
 
         _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
@@ -225,7 +227,8 @@ public class AgentOrchestratorTests
         LiveLogFile = "/logs/games_mp.log",
         Hostname = "game.example.com",
         QueryPort = 28960,
-        RconPassword = "secret"
+        RconPassword = "secret",
+        BanFileSyncEnabled = true
     };
 
     private void SetupFactoryMocks()
