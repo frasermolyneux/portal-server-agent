@@ -96,6 +96,8 @@ public class AgentOrchestratorTests
             Hostname = "game.example.com",
             QueryPort = 28960,
             RconPassword = null,
+            FtpEnabled = true,
+            RconEnabled = true,
             BanFileSyncEnabled = true
         };
 
@@ -130,6 +132,42 @@ public class AgentOrchestratorTests
             Hostname = "game.example.com",
             QueryPort = 28960,
             RconPassword = null,
+            FtpEnabled = true,
+            RconEnabled = true,
+            BanFileSyncEnabled = true
+        };
+
+        _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { server });
+
+        var orchestrator = CreateOrchestrator();
+
+        // Act
+        await orchestrator.RefreshAgentsAsync(CancellationToken.None);
+
+        // Assert
+        Assert.Equal(0, orchestrator.ActiveAgentCount);
+    }
+
+    [Fact]
+    public async Task RefreshAgents_AgentEnabledButFtpDisabled_SkipsServer()
+    {
+        // Arrange
+        var server = new ServerContext
+        {
+            ServerId = Guid.NewGuid(),
+            GameType = "CallOfDuty4",
+            Title = "FTP Disabled",
+            FtpHostname = "ftp.example.com",
+            FtpPort = 21,
+            FtpUsername = "user",
+            FtpPassword = "pass",
+            LiveLogFile = "/logs/games_mp.log",
+            Hostname = "game.example.com",
+            QueryPort = 28960,
+            RconPassword = "secret",
+            FtpEnabled = false,
+            RconEnabled = true,
             BanFileSyncEnabled = true
         };
 
@@ -228,6 +266,8 @@ public class AgentOrchestratorTests
         Hostname = "game.example.com",
         QueryPort = 28960,
         RconPassword = "secret",
+        FtpEnabled = true,
+        RconEnabled = true,
         BanFileSyncEnabled = true
     };
 

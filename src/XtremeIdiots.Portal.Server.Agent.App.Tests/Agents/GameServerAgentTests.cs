@@ -26,6 +26,8 @@ public class GameServerAgentTests
         Hostname = "game.example.com",
         QueryPort = 28960,
         RconPassword = "secret",
+        FtpEnabled = true,
+        RconEnabled = true,
         BanFileSyncEnabled = true
     };
 

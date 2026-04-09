@@ -79,6 +79,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     Hostname = dto.Hostname,
                     QueryPort = dto.QueryPort,
                     RconPassword = rconPassword,
+                    FtpEnabled = dto.FtpEnabled,
+                    RconEnabled = dto.RconEnabled,
                     BanFileSyncEnabled = dto.BanFileSyncEnabled
                 });
             }

@@ -22,5 +22,7 @@ public sealed record ServerContext
     public required string? RconPassword { get; init; }
 
     // Feature toggles
+    public required bool FtpEnabled { get; init; }
+    public required bool RconEnabled { get; init; }
     public required bool BanFileSyncEnabled { get; init; }
 }

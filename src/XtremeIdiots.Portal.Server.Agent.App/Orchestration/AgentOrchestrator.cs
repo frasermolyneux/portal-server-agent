@@ -180,6 +180,13 @@ public class AgentOrchestrator : BackgroundService
             if (_agents.ContainsKey(server.ServerId))
                 continue;
 
+            if (!server.FtpEnabled || !server.RconEnabled)
+            {
+                _logger.LogWarning("Server {Title} ({ServerId}) has FTP or RCON disabled, skipping",
+                    server.Title, server.ServerId);
+                continue;
+            }
+
             if (string.IsNullOrEmpty(server.FtpHostname) || string.IsNullOrEmpty(server.FtpUsername))
             {
                 _logger.LogWarning("Server {Title} ({ServerId}) has no FTP config, skipping",

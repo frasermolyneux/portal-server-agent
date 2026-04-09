@@ -397,7 +397,9 @@ public class RepositoryServerConfigProviderTests
         string? liveLogFile = null,
         string hostname = "localhost", int queryPort = 28960,
         string? rconPassword = null,
-        bool banFileSyncEnabled = true)
+        bool banFileSyncEnabled = true,
+        bool ftpEnabled = true,
+        bool rconEnabled = true)
     {
         // GameServerDto properties have internal setters, so we use reflection
         var dto = new GameServerDto();
@@ -416,6 +418,8 @@ public class RepositoryServerConfigProviderTests
         SetProperty(type, dto, nameof(GameServerDto.RconPassword), rconPassword);
         SetProperty(type, dto, nameof(GameServerDto.AgentEnabled), true);
         SetProperty(type, dto, nameof(GameServerDto.BanFileSyncEnabled), banFileSyncEnabled);
+        SetProperty(type, dto, nameof(GameServerDto.FtpEnabled), ftpEnabled);
+        SetProperty(type, dto, nameof(GameServerDto.RconEnabled), rconEnabled);
 
         return dto;
     }
