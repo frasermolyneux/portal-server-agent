@@ -28,7 +28,8 @@ public class GameServerAgentTests
         RconPassword = "secret",
         FtpEnabled = true,
         RconEnabled = true,
-        BanFileSyncEnabled = true
+        BanFileSyncEnabled = true,
+        ConfigHash = "test-hash"
     };
 
     private readonly Mock<ILogTailer> _mockTailer = new();

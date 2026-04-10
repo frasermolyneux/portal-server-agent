@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
@@ -75,6 +77,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     continue;
                 }
 
+                var configHash = ComputeConfigHash(configs);
+
                 servers.Add(new ServerContext
                 {
                     ServerId = dto.GameServerId,
@@ -90,7 +94,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     RconPassword = rconPassword,
                     FtpEnabled = dto.FtpEnabled,
                     RconEnabled = dto.RconEnabled,
-                    BanFileSyncEnabled = dto.BanFileSyncEnabled
+                    BanFileSyncEnabled = dto.BanFileSyncEnabled,
+                    ConfigHash = configHash
                 });
             }
 
@@ -196,5 +201,26 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Computes a deterministic SHA256 hash of all configuration namespaces.
+    /// Keys are sorted to ensure consistent ordering regardless of API response order.
+    /// </summary>
+    internal static string ComputeConfigHash(Dictionary<string, Dictionary<string, JsonElement>> configs)
+    {
+        var parts = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (ns, properties) in configs)
+        {
+            foreach (var (key, value) in properties)
+            {
+                parts[$"{ns}.{key}"] = value.ToString();
+            }
+        }
+
+        var combined = string.Join("|", parts.Select(kv => $"{kv.Key}={kv.Value}"));
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(combined));
+        return Convert.ToHexString(bytes);
     }
 }

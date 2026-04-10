@@ -98,7 +98,8 @@ public class AgentOrchestratorTests
             RconPassword = null,
             FtpEnabled = true,
             RconEnabled = true,
-            BanFileSyncEnabled = true
+            BanFileSyncEnabled = true,
+            ConfigHash = "hash-no-ftp"
         };
 
         _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
@@ -134,7 +135,8 @@ public class AgentOrchestratorTests
             RconPassword = null,
             FtpEnabled = true,
             RconEnabled = true,
-            BanFileSyncEnabled = true
+            BanFileSyncEnabled = true,
+            ConfigHash = "hash-no-log"
         };
 
         _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
@@ -168,7 +170,8 @@ public class AgentOrchestratorTests
             RconPassword = "secret",
             FtpEnabled = false,
             RconEnabled = true,
-            BanFileSyncEnabled = true
+            BanFileSyncEnabled = true,
+            ConfigHash = "hash-ftp-disabled"
         };
 
         _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
@@ -233,6 +236,58 @@ public class AgentOrchestratorTests
     }
 
     [Fact]
+    public async Task RefreshAgents_RestartsAgentWhenConfigHashChanges()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+        var serverV1 = CreateTestServerContext("Server 1", serverId) with { ConfigHash = "hash-v1" };
+        var serverV2 = CreateTestServerContext("Server 1", serverId) with { ConfigHash = "hash-v2" };
+
+        _mockConfigProvider.SetupSequence(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { serverV1 })
+            .ReturnsAsync(new[] { serverV2 });
+
+        SetupFactoryMocks();
+
+        var orchestrator = CreateOrchestrator();
+
+        // Act — first refresh starts the agent
+        await orchestrator.RefreshAgentsAsync(CancellationToken.None);
+        Assert.Equal(1, orchestrator.ActiveAgentCount);
+
+        // Allow the agent task to start
+        await Task.Delay(50);
+
+        // Second refresh detects config change and restarts
+        await orchestrator.RefreshAgentsAsync(CancellationToken.None);
+
+        // Assert — still one agent running (old stopped, new started)
+        Assert.Equal(1, orchestrator.ActiveAgentCount);
+    }
+
+    [Fact]
+    public async Task RefreshAgents_DoesNotRestartAgentWhenConfigHashUnchanged()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+        var server = CreateTestServerContext("Server 1", serverId);
+
+        _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { server });
+
+        SetupFactoryMocks();
+
+        var orchestrator = CreateOrchestrator();
+
+        // Act — refresh twice with same config hash
+        await orchestrator.RefreshAgentsAsync(CancellationToken.None);
+        await orchestrator.RefreshAgentsAsync(CancellationToken.None);
+
+        // Assert — tailer factory should only be called once (no restart)
+        _mockTailerFactory.Verify(f => f.Create(), Times.Once);
+    }
+
+    [Fact]
     public async Task StopAsync_CancelsAllAgents()
     {
         // Arrange
@@ -253,9 +308,11 @@ public class AgentOrchestratorTests
         Assert.Equal(0, orchestrator.ActiveAgentCount);
     }
 
-    private static ServerContext CreateTestServerContext(string title) => new()
+    private static ServerContext CreateTestServerContext(string title) => CreateTestServerContext(title, Guid.NewGuid());
+
+    private static ServerContext CreateTestServerContext(string title, Guid serverId) => new()
     {
-        ServerId = Guid.NewGuid(),
+        ServerId = serverId,
         GameType = "CallOfDuty4",
         Title = title,
         FtpHostname = "ftp.example.com",
@@ -268,7 +325,8 @@ public class AgentOrchestratorTests
         RconPassword = "secret",
         FtpEnabled = true,
         RconEnabled = true,
-        BanFileSyncEnabled = true
+        BanFileSyncEnabled = true,
+        ConfigHash = $"hash-{title}"
     };
 
     private void SetupFactoryMocks()

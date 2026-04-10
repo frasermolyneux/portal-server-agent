@@ -112,7 +112,8 @@ public class AgentHealthCheckTests
                 RconPassword = "secret",
                 FtpEnabled = true,
                 RconEnabled = true,
-                BanFileSyncEnabled = true
+                BanFileSyncEnabled = true,
+                ConfigHash = "test-hash"
             }
         };
 

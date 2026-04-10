@@ -25,7 +25,9 @@ public class AgentOrchestrator : BackgroundService
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AgentOrchestrator> _logger;
 
-    private readonly ConcurrentDictionary<Guid, (Task Task, CancellationTokenSource Cts)> _agents = new();
+    private readonly ConcurrentDictionary<Guid, AgentEntry> _agents = new();
+
+    private record AgentEntry(Task Task, CancellationTokenSource Cts, string ConfigHash);
 
     internal static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
 
@@ -108,9 +110,9 @@ public class AgentOrchestrator : BackgroundService
     {
         _logger.LogInformation("AgentOrchestrator stopping, cancelling {Count} agents", _agents.Count);
 
-        foreach (var (_, (_, cts)) in _agents)
+        foreach (var (_, entry) in _agents)
         {
-            cts.Cancel();
+            entry.Cts.Cancel();
         }
 
         var allTasks = _agents.Values.Select(a => a.Task).ToArray();
@@ -131,9 +133,9 @@ public class AgentOrchestrator : BackgroundService
             }
         }
 
-        foreach (var (_, (_, cts)) in _agents)
+        foreach (var (_, entry) in _agents)
         {
-            cts.Dispose();
+            entry.Cts.Dispose();
         }
 
         _agents.Clear();
@@ -147,34 +149,53 @@ public class AgentOrchestrator : BackgroundService
         var serverIds = servers.Select(s => s.ServerId).ToHashSet();
 
         // Stop agents for removed/disabled servers
-        foreach (var (serverId, (_, cts)) in _agents)
+        foreach (var (serverId, entry) in _agents)
         {
             if (!serverIds.Contains(serverId))
             {
                 _logger.LogInformation("Stopping agent for removed server {ServerId}", serverId);
-                cts.Cancel();
+                entry.Cts.Cancel();
                 if (_agents.TryRemove(serverId, out _))
                 {
-                    cts.Dispose();
+                    entry.Cts.Dispose();
+                }
+            }
+        }
+
+        // Restart agents whose config has changed
+        foreach (var server in servers)
+        {
+            if (_agents.TryGetValue(server.ServerId, out var existing) && !existing.Task.IsCompleted)
+            {
+                if (existing.ConfigHash != server.ConfigHash)
+                {
+                    _logger.LogInformation(
+                        "Config changed for {Title} ({ServerId}), restarting agent",
+                        server.Title, server.ServerId);
+                    existing.Cts.Cancel();
+                    if (_agents.TryRemove(server.ServerId, out _))
+                    {
+                        existing.Cts.Dispose();
+                    }
                 }
             }
         }
 
         // Remove completed/faulted agent tasks
-        foreach (var (serverId, (task, cts)) in _agents)
+        foreach (var (serverId, entry) in _agents)
         {
-            if (task.IsCompleted)
+            if (entry.Task.IsCompleted)
             {
                 _logger.LogWarning("Agent task for server {ServerId} completed unexpectedly (status: {Status})",
-                    serverId, task.Status);
+                    serverId, entry.Task.Status);
                 if (_agents.TryRemove(serverId, out _))
                 {
-                    cts.Dispose();
+                    entry.Cts.Dispose();
                 }
             }
         }
 
-        // Start agents for new servers
+        // Start agents for new servers (or servers whose agent was just stopped)
         foreach (var server in servers)
         {
             if (_agents.ContainsKey(server.ServerId))
@@ -209,7 +230,7 @@ public class AgentOrchestrator : BackgroundService
             var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _banFileWatcher, agentLogger);
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
-            _agents.TryAdd(server.ServerId, (task, cts));
+            _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash));
 
             _logger.LogInformation("Started agent for {Title} ({GameType}, {ServerId})",
                 server.Title, server.GameType, server.ServerId);
