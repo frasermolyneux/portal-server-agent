@@ -194,9 +194,9 @@ public class AgentOrchestrator : BackgroundService
                 continue;
             }
 
-            if (string.IsNullOrEmpty(server.LiveLogFile))
+            if (string.IsNullOrEmpty(server.LogFilePath))
             {
-                _logger.LogWarning("Server {Title} ({ServerId}) has no LiveLogFile configured, skipping",
+                _logger.LogWarning("Server {Title} ({ServerId}) has no LogFilePath configured, skipping",
                     server.Title, server.ServerId);
                 continue;
             }

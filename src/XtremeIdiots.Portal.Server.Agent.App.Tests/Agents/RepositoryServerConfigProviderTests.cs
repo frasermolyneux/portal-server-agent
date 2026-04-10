@@ -33,7 +33,7 @@ public class RepositoryServerConfigProviderTests
         _mockClient.Setup(c => c.GameServerConfigurations).Returns(_mockVersionedConfigs.Object);
         _mockVersionedConfigs.Setup(v => v.V1).Returns(_mockConfigApi.Object);
 
-        // Default: config API returns empty for any server
+        // Default: config API returns empty for any server (server will be skipped)
         _mockConfigApi
             .Setup(a => a.GetConfigurations(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult<CollectionModel<ConfigurationDto>>(
@@ -51,13 +51,15 @@ public class RepositoryServerConfigProviderTests
         // Arrange
         var serverId = Guid.NewGuid();
         var dto = CreateGameServerDto(serverId, "Test Server", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: "user", ftpPassword: "pass",
-            liveLogFile: "/logs/games_mp.log",
-            hostname: "game.example.com", queryPort: 28960,
-            rconPassword: "secret");
+            hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+        });
 
         var provider = CreateProvider();
 
@@ -74,7 +76,7 @@ public class RepositoryServerConfigProviderTests
         Assert.Equal(21, server.FtpPort);
         Assert.Equal("user", server.FtpUsername);
         Assert.Equal("pass", server.FtpPassword);
-        Assert.Equal("/logs/games_mp.log", server.LiveLogFile);
+        Assert.Equal("/logs/games_mp.log", server.LogFilePath);
         Assert.Equal("game.example.com", server.Hostname);
         Assert.Equal(28960, server.QueryPort);
         Assert.Equal("secret", server.RconPassword);
@@ -101,44 +103,75 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_SkipsServersWithoutFtp()
+    public async Task GetAgentEnabledServersAsync_SkipsServersWithMissingFtpConfig()
     {
-        // Arrange
-        var completeServer = CreateGameServerDto(Guid.NewGuid(), "Complete Server", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: "user", ftpPassword: "pass",
+        // Arrange — config has rcon + agent but no ftp namespace
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "No FTP Config", GameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
-        var missingFtpHostname = CreateGameServerDto(Guid.NewGuid(), "No FTP Host", GameType.CallOfDuty4,
-            ftpHostname: null, ftpPort: 21,
-            ftpUsername: "user", ftpPassword: "pass",
-            hostname: "game.example.com", queryPort: 28960);
-
-        var missingFtpPort = CreateGameServerDto(Guid.NewGuid(), "No FTP Port", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: null,
-            ftpUsername: "user", ftpPassword: "pass",
-            hostname: "game.example.com", queryPort: 28960);
-
-        var missingFtpUsername = CreateGameServerDto(Guid.NewGuid(), "No FTP User", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: null, ftpPassword: "pass",
-            hostname: "game.example.com", queryPort: 28960);
-
-        var missingFtpPassword = CreateGameServerDto(Guid.NewGuid(), "No FTP Pass", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: "user", ftpPassword: null,
-            hostname: "game.example.com", queryPort: 28960);
-
-        SetupApiSuccess(new[] { completeServer, missingFtpHostname, missingFtpPort, missingFtpUsername, missingFtpPassword });
+        SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        });
 
         var provider = CreateProvider();
 
         // Act
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        // Assert — only the complete server should be returned
-        Assert.Single(result);
-        Assert.Equal("Complete Server", result[0].Title);
+        // Assert — server should be skipped
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_SkipsServersWithMissingRconConfig()
+    {
+        // Arrange — config has ftp + agent but no rcon namespace
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "No RCON Config", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        });
+
+        var provider = CreateProvider();
+
+        // Act
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        // Assert — server should be skipped
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_SkipsServersWithMissingAgentConfig()
+    {
+        // Arrange — config has ftp + rcon but no agent namespace
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "No Agent Config", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" })
+        });
+
+        var provider = CreateProvider();
+
+        // Act
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        // Assert — server should be skipped
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -159,52 +192,12 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_UsesNewConfigValuesOverDto()
+    public async Task GetAgentEnabledServersAsync_WhenConfigApiReturnsEmpty_SkipsServer()
     {
-        // Arrange — DTO has old values, config API has new values
+        // Arrange — config API returns empty (default mock behavior), server should be skipped
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Config Server", GameType.CallOfDuty4,
-            ftpHostname: "old-ftp.example.com", ftpPort: 21,
-            ftpUsername: "old-user", ftpPassword: "old-pass",
-            liveLogFile: "/old/log.log",
-            hostname: "game.example.com", queryPort: 28960,
-            rconPassword: "old-rcon");
-
-        SetupApiSuccess(new[] { dto });
-        SetupConfigApi(serverId, new[]
-        {
-            CreateConfigDto("ftp", new { hostname = "new-ftp.example.com", port = 2121, username = "new-user", password = "new-pass" }),
-            CreateConfigDto("rcon", new { password = "new-rcon" }),
-            CreateConfigDto("agent", new { logFilePath = "/new/log.log" })
-        });
-
-        var provider = CreateProvider();
-
-        // Act
-        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
-
-        // Assert — new config values should be used
-        Assert.Single(result);
-        var server = result[0];
-        Assert.Equal("new-ftp.example.com", server.FtpHostname);
-        Assert.Equal(2121, server.FtpPort);
-        Assert.Equal("new-user", server.FtpUsername);
-        Assert.Equal("new-pass", server.FtpPassword);
-        Assert.Equal("new-rcon", server.RconPassword);
-        Assert.Equal("/new/log.log", server.LiveLogFile);
-    }
-
-    [Fact]
-    public async Task GetAgentEnabledServersAsync_FallsBackToDtoWhenConfigApiReturnsEmpty()
-    {
-        // Arrange — config API returns empty (default mock behavior)
-        var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Fallback Server", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: "user", ftpPassword: "pass",
-            liveLogFile: "/logs/game.log",
-            hostname: "game.example.com", queryPort: 28960,
-            rconPassword: "rcon-secret");
+        var dto = CreateGameServerDto(serverId, "Empty Config Server", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
 
@@ -213,25 +206,16 @@ public class RepositoryServerConfigProviderTests
         // Act
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        // Assert — DTO values should be used as fallback
-        Assert.Single(result);
-        var server = result[0];
-        Assert.Equal("ftp.example.com", server.FtpHostname);
-        Assert.Equal(21, server.FtpPort);
-        Assert.Equal("user", server.FtpUsername);
-        Assert.Equal("pass", server.FtpPassword);
-        Assert.Equal("rcon-secret", server.RconPassword);
-        Assert.Equal("/logs/game.log", server.LiveLogFile);
+        // Assert — no configs means required namespaces are missing, server is skipped
+        Assert.Empty(result);
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_FallsBackToDtoWhenConfigApiFails()
+    public async Task GetAgentEnabledServersAsync_WhenConfigApiFails_SkipsServer()
     {
         // Arrange — config API throws for this server
         var serverId = Guid.NewGuid();
         var dto = CreateGameServerDto(serverId, "Error Server", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: "user", ftpPassword: "pass",
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -245,49 +229,16 @@ public class RepositoryServerConfigProviderTests
         // Act
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        // Assert — should still return the server with DTO fallback values
-        Assert.Single(result);
-        Assert.Equal("ftp.example.com", result[0].FtpHostname);
+        // Assert — config API failure means required namespaces are missing, server is skipped
+        Assert.Empty(result);
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_PartialConfigFallsBackPerField()
+    public async Task GetAgentEnabledServersAsync_MalformedJsonSkipsServer()
     {
-        // Arrange — config has hostname but missing username; DTO fills the gap
-        var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Partial Config", GameType.CallOfDuty4,
-            ftpHostname: "old-ftp.example.com", ftpPort: 21,
-            ftpUsername: "dto-user", ftpPassword: "dto-pass",
-            hostname: "game.example.com", queryPort: 28960);
-
-        SetupApiSuccess(new[] { dto });
-        SetupConfigApi(serverId, new[]
-        {
-            CreateConfigDto("ftp", new { hostname = "new-ftp.example.com" })
-        });
-
-        var provider = CreateProvider();
-
-        // Act
-        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
-
-        // Assert — hostname from config, rest from DTO
-        Assert.Single(result);
-        var server = result[0];
-        Assert.Equal("new-ftp.example.com", server.FtpHostname);
-        Assert.Equal(21, server.FtpPort);
-        Assert.Equal("dto-user", server.FtpUsername);
-        Assert.Equal("dto-pass", server.FtpPassword);
-    }
-
-    [Fact]
-    public async Task GetAgentEnabledServersAsync_MalformedJsonFallsBackToDto()
-    {
-        // Arrange — config has malformed JSON
+        // Arrange — ftp config has malformed JSON, so ftp namespace is missing
         var serverId = Guid.NewGuid();
         var dto = CreateGameServerDto(serverId, "Bad JSON Server", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: "user", ftpPassword: "pass",
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -296,16 +247,20 @@ public class RepositoryServerConfigProviderTests
         SetConfigProperty(malformedConfig, nameof(ConfigurationDto.Namespace), "ftp");
         SetConfigProperty(malformedConfig, nameof(ConfigurationDto.Configuration), "not valid json {{{");
 
-        SetupConfigApi(serverId, new[] { malformedConfig });
+        SetupConfigApi(serverId, new[]
+        {
+            malformedConfig,
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        });
 
         var provider = CreateProvider();
 
         // Act
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        // Assert — should fall back to DTO values
-        Assert.Single(result);
-        Assert.Equal("ftp.example.com", result[0].FtpHostname);
+        // Assert — malformed ftp config means server is skipped
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -314,12 +269,16 @@ public class RepositoryServerConfigProviderTests
         // Arrange
         var serverId = Guid.NewGuid();
         var dto = CreateGameServerDto(serverId, "BanSync Server", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: "user", ftpPassword: "pass",
             hostname: "game.example.com", queryPort: 28960,
             banFileSyncEnabled: false);
 
         SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        });
 
         var provider = CreateProvider();
 
@@ -337,14 +296,14 @@ public class RepositoryServerConfigProviderTests
         // Arrange — config has port as a string value
         var serverId = Guid.NewGuid();
         var dto = CreateGameServerDto(serverId, "String Port", GameType.CallOfDuty4,
-            ftpHostname: "ftp.example.com", ftpPort: 21,
-            ftpUsername: "user", ftpPassword: "pass",
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
         SetupConfigApi(serverId, new[]
         {
-            CreateConfigDto("ftp", new { port = "2222" })
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = "2222", username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
         });
 
         var provider = CreateProvider();
@@ -355,6 +314,31 @@ public class RepositoryServerConfigProviderTests
         // Assert — string port should be parsed
         Assert.Single(result);
         Assert.Equal(2222, result[0].FtpPort);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_SkipsServersWithIncompleteFtpConfig()
+    {
+        // Arrange — ftp namespace exists but is missing required keys
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Incomplete FTP", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        });
+
+        var provider = CreateProvider();
+
+        // Act
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        // Assert — incomplete ftp config means server is skipped
+        Assert.Empty(result);
     }
 
     private void SetupApiSuccess(GameServerDto[] dtos)
@@ -392,16 +376,11 @@ public class RepositoryServerConfigProviderTests
 
     private static GameServerDto CreateGameServerDto(
         Guid serverId, string title, GameType gameType,
-        string? ftpHostname = null, int? ftpPort = null,
-        string? ftpUsername = null, string? ftpPassword = null,
-        string? liveLogFile = null,
         string hostname = "localhost", int queryPort = 28960,
-        string? rconPassword = null,
         bool banFileSyncEnabled = true,
         bool ftpEnabled = true,
         bool rconEnabled = true)
     {
-        // GameServerDto properties have internal setters, so we use reflection
         var dto = new GameServerDto();
         var type = typeof(GameServerDto);
 
@@ -410,12 +389,6 @@ public class RepositoryServerConfigProviderTests
         SetProperty(type, dto, nameof(GameServerDto.GameType), gameType);
         SetProperty(type, dto, nameof(GameServerDto.Hostname), hostname);
         SetProperty(type, dto, nameof(GameServerDto.QueryPort), queryPort);
-        SetProperty(type, dto, nameof(GameServerDto.FtpHostname), ftpHostname);
-        SetProperty(type, dto, nameof(GameServerDto.FtpPort), ftpPort);
-        SetProperty(type, dto, nameof(GameServerDto.FtpUsername), ftpUsername);
-        SetProperty(type, dto, nameof(GameServerDto.FtpPassword), ftpPassword);
-        SetProperty(type, dto, nameof(GameServerDto.LiveLogFile), liveLogFile);
-        SetProperty(type, dto, nameof(GameServerDto.RconPassword), rconPassword);
         SetProperty(type, dto, nameof(GameServerDto.AgentEnabled), true);
         SetProperty(type, dto, nameof(GameServerDto.BanFileSyncEnabled), banFileSyncEnabled);
         SetProperty(type, dto, nameof(GameServerDto.FtpEnabled), ftpEnabled);

@@ -92,7 +92,7 @@ public class AgentOrchestratorTests
             FtpPort = 21,
             FtpUsername = "",
             FtpPassword = "",
-            LiveLogFile = "/logs/test.log",
+            LogFilePath = "/logs/test.log",
             Hostname = "game.example.com",
             QueryPort = 28960,
             RconPassword = null,
@@ -116,7 +116,7 @@ public class AgentOrchestratorTests
     }
 
     [Fact]
-    public async Task RefreshAgents_SkipsServersWithoutLiveLogFile()
+    public async Task RefreshAgents_SkipsServersWithoutLogFilePath()
     {
         // Arrange
         var server = new ServerContext
@@ -128,7 +128,7 @@ public class AgentOrchestratorTests
             FtpPort = 21,
             FtpUsername = "user",
             FtpPassword = "pass",
-            LiveLogFile = null,
+            LogFilePath = null,
             Hostname = "game.example.com",
             QueryPort = 28960,
             RconPassword = null,
@@ -162,7 +162,7 @@ public class AgentOrchestratorTests
             FtpPort = 21,
             FtpUsername = "user",
             FtpPassword = "pass",
-            LiveLogFile = "/logs/games_mp.log",
+            LogFilePath = "/logs/games_mp.log",
             Hostname = "game.example.com",
             QueryPort = 28960,
             RconPassword = "secret",
@@ -262,7 +262,7 @@ public class AgentOrchestratorTests
         FtpPort = 21,
         FtpUsername = "user",
         FtpPassword = "pass",
-        LiveLogFile = "/logs/games_mp.log",
+        LogFilePath = "/logs/games_mp.log",
         Hostname = "game.example.com",
         QueryPort = 28960,
         RconPassword = "secret",

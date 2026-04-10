@@ -22,7 +22,7 @@ public class GameServerAgentTests
         FtpPort = 21,
         FtpUsername = "user",
         FtpPassword = "pass",
-        LiveLogFile = "/logs/games_mp.log",
+        LogFilePath = "/logs/games_mp.log",
         Hostname = "game.example.com",
         QueryPort = 28960,
         RconPassword = "secret",
@@ -354,10 +354,10 @@ public class GameServerAgentTests
     }
 
     [Fact]
-    public async Task RunAsync_ThrowsWhenLiveLogFileIsNull()
+    public async Task RunAsync_ThrowsWhenLogFilePathIsNull()
     {
-        // Arrange — context with null LiveLogFile
-        var context = _testContext with { LiveLogFile = null };
+        // Arrange — context with null LogFilePath
+        var context = _testContext with { LogFilePath = null };
 
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);

@@ -106,7 +106,7 @@ public class AgentHealthCheckTests
                 FtpPort = 21,
                 FtpUsername = "user",
                 FtpPassword = "pass",
-                LiveLogFile = "/logs/games_mp.log",
+                LogFilePath = "/logs/games_mp.log",
                 Hostname = "game.example.com",
                 QueryPort = 28960,
                 RconPassword = "secret",

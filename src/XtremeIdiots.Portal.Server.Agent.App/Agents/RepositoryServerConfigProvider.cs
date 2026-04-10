@@ -8,7 +8,7 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
 /// <summary>
 /// Fetches agent-enabled game servers from the Portal Repository API.
-/// Reads configuration from the new per-server config system with fallback to legacy DTO columns.
+/// Reads configuration exclusively from the per-server config namespace API.
 /// </summary>
 public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 {
@@ -48,20 +48,29 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             {
                 var configs = await FetchConfigurationsAsync(dto.GameServerId, dto.Title, ct);
 
-                var ftpHostname = ResolveString(configs, "ftp", "hostname", dto.FtpHostname, dto.Title, "FtpHostname");
-                var ftpUsername = ResolveString(configs, "ftp", "username", dto.FtpUsername, dto.Title, "FtpUsername");
-                var ftpPassword = ResolveString(configs, "ftp", "password", dto.FtpPassword, dto.Title, "FtpPassword");
-                var ftpPort = ResolveInt(configs, "ftp", "port", dto.FtpPort, dto.Title, "FtpPort");
-                var rconPassword = ResolveString(configs, "rcon", "password", dto.RconPassword, dto.Title, "RconPassword");
-                var logFilePath = ResolveString(configs, "agent", "logFilePath", dto.LiveLogFile, dto.Title, "LiveLogFile");
-
-                if (string.IsNullOrWhiteSpace(ftpHostname) ||
-                    string.IsNullOrWhiteSpace(ftpUsername) ||
-                    string.IsNullOrWhiteSpace(ftpPassword) ||
-                    ftpPort is null)
+                if (!TryGetStringValue(configs, "ftp", "hostname", out var ftpHostname) ||
+                    !TryGetStringValue(configs, "ftp", "username", out var ftpUsername) ||
+                    !TryGetStringValue(configs, "ftp", "password", out var ftpPassword) ||
+                    !TryGetIntValue(configs, "ftp", "port", out var ftpPort))
                 {
                     _logger.LogWarning(
-                        "Skipping server {ServerId} ({Title}) — missing FTP configuration",
+                        "Skipping server {ServerId} ({Title}) — missing FTP configuration in config namespace",
+                        dto.GameServerId, dto.Title);
+                    continue;
+                }
+
+                if (!TryGetStringValue(configs, "rcon", "password", out var rconPassword))
+                {
+                    _logger.LogWarning(
+                        "Skipping server {ServerId} ({Title}) — missing RCON configuration in config namespace",
+                        dto.GameServerId, dto.Title);
+                    continue;
+                }
+
+                if (!TryGetStringValue(configs, "agent", "logFilePath", out var logFilePath))
+                {
+                    _logger.LogWarning(
+                        "Skipping server {ServerId} ({Title}) — missing agent configuration in config namespace",
                         dto.GameServerId, dto.Title);
                     continue;
                 }
@@ -72,10 +81,10 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     GameType = dto.GameType.ToString(),
                     Title = dto.Title,
                     FtpHostname = ftpHostname,
-                    FtpPort = ftpPort.Value,
+                    FtpPort = ftpPort,
                     FtpUsername = ftpUsername,
                     FtpPassword = ftpPassword,
-                    LiveLogFile = logFilePath,
+                    LogFilePath = logFilePath,
                     Hostname = dto.Hostname,
                     QueryPort = dto.QueryPort,
                     RconPassword = rconPassword,
@@ -97,7 +106,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
     /// <summary>
     /// Fetches all configuration namespaces for a server, returning a case-insensitive lookup.
-    /// Returns an empty dictionary on failure so fallback values are used.
+    /// Returns an empty dictionary on failure so the server will be skipped.
     /// </summary>
     private async Task<Dictionary<string, Dictionary<string, JsonElement>>> FetchConfigurationsAsync(
         Guid serverId, string title, CancellationToken ct)
@@ -109,7 +118,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
             if (!configResult.IsSuccess || configResult.Result?.Data?.Items is null)
             {
-                _logger.LogDebug("No configurations found for server {ServerId} ({Title}), using fallback values",
+                _logger.LogWarning("No configurations found for server {ServerId} ({Title})",
                     serverId, title);
                 return new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase);
             }
@@ -118,7 +127,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Failed to fetch configurations for server {ServerId} ({Title}), using fallback values",
+            _logger.LogWarning(ex, "Failed to fetch configurations for server {ServerId} ({Title})",
                 serverId, title);
             return new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase);
         }
@@ -147,59 +156,45 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             }
             catch (JsonException)
             {
-                // Malformed JSON — skip this namespace, fallback values will be used
+                // Malformed JSON — skip this namespace
             }
         }
 
         return result;
     }
 
-    private string? ResolveString(
+    private static bool TryGetStringValue(
         Dictionary<string, Dictionary<string, JsonElement>> configs,
-        string ns, string key, string? fallback, string serverTitle, string fieldName)
+        string ns, string key, out string value)
     {
+        value = string.Empty;
         if (configs.TryGetValue(ns, out var nsConfig) &&
             nsConfig.TryGetValue(key, out var element) &&
             element.ValueKind == JsonValueKind.String)
         {
-            var value = element.GetString();
-            if (!string.IsNullOrWhiteSpace(value))
+            var str = element.GetString();
+            if (!string.IsNullOrWhiteSpace(str))
             {
-                _logger.LogDebug("[{Title}] Using config value for {Field} from '{Namespace}.{Key}'",
-                    serverTitle, fieldName, ns, key);
-                return value;
+                value = str;
+                return true;
             }
         }
-
-        _logger.LogDebug("[{Title}] Using fallback value for {Field} (no '{Namespace}.{Key}' config)",
-            serverTitle, fieldName, ns, key);
-        return fallback;
+        return false;
     }
 
-    private int? ResolveInt(
+    private static bool TryGetIntValue(
         Dictionary<string, Dictionary<string, JsonElement>> configs,
-        string ns, string key, int? fallback, string serverTitle, string fieldName)
+        string ns, string key, out int value)
     {
+        value = 0;
         if (configs.TryGetValue(ns, out var nsConfig) &&
             nsConfig.TryGetValue(key, out var element))
         {
-            int? value = element.ValueKind switch
-            {
-                JsonValueKind.Number => element.TryGetInt32(out var i) ? i : null,
-                JsonValueKind.String => int.TryParse(element.GetString(), out var i) ? i : null,
-                _ => null
-            };
-
-            if (value.HasValue)
-            {
-                _logger.LogDebug("[{Title}] Using config value for {Field} from '{Namespace}.{Key}'",
-                    serverTitle, fieldName, ns, key);
-                return value;
-            }
+            if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out value))
+                return true;
+            if (element.ValueKind == JsonValueKind.String && int.TryParse(element.GetString(), out value))
+                return true;
         }
-
-        _logger.LogDebug("[{Title}] Using fallback value for {Field} (no '{Namespace}.{Key}' config)",
-            serverTitle, fieldName, ns, key);
-        return fallback;
+        return false;
     }
 }

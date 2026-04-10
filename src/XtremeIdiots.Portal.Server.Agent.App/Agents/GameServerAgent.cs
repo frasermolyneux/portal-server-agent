@@ -74,7 +74,7 @@ public sealed class GameServerAgent
         {
             // 1. Load saved offset
             var savedOffset = await _offsetStore.GetOffsetAsync(_context.ServerId, ct);
-            long? startOffset = savedOffset is not null && savedOffset.FilePath == _context.LiveLogFile
+            long? startOffset = savedOffset is not null && savedOffset.FilePath == _context.LogFilePath
                 ? savedOffset.Offset
                 : null;
 
@@ -88,7 +88,7 @@ public sealed class GameServerAgent
                 Port = _context.FtpPort,
                 Username = _context.FtpUsername,
                 Password = _context.FtpPassword,
-                FilePath = _context.LiveLogFile ?? throw new InvalidOperationException("LiveLogFile not set")
+                FilePath = _context.LogFilePath ?? throw new InvalidOperationException("LogFilePath not set")
             };
 
             await _tailer.ConnectAsync(ftpConfig, startOffset, ct);

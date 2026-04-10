@@ -9,14 +9,16 @@ public sealed record ServerContext
     public required string GameType { get; init; }
     public required string Title { get; init; }
 
-    // FTP config
+    // FTP config (from "ftp" config namespace)
     public required string FtpHostname { get; init; }
     public required int FtpPort { get; init; }
     public required string FtpUsername { get; init; }
     public required string FtpPassword { get; init; }
-    public required string? LiveLogFile { get; init; }
 
-    // RCON config (for future use)
+    // Agent config (from "agent" config namespace)
+    public required string? LogFilePath { get; init; }
+
+    // RCON config (from "rcon" config namespace)
     public required string Hostname { get; init; }
     public required int QueryPort { get; init; }
     public required string? RconPassword { get; init; }
