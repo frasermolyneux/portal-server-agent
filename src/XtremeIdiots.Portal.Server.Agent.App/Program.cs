@@ -2,11 +2,14 @@ using Azure.Identity;
 using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
 
+using Microsoft.ApplicationInsights.AspNetCore.Extensions;
 using Microsoft.ApplicationInsights.Extensibility;
+using Microsoft.ApplicationInsights.WindowsServer.Channel.Implementation;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Configuration.AzureAppConfiguration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Primitives;
 
 using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
@@ -35,8 +38,11 @@ if (!string.IsNullOrWhiteSpace(appConfigEndpoint))
     builder.Configuration.AddAzureAppConfiguration(options =>
     {
         options.Connect(new Uri(appConfigEndpoint), credential)
+            .Select("XtremeIdiots.Portal.Server.Agent.App:*", environmentLabel)
+            .TrimKeyPrefix("XtremeIdiots.Portal.Server.Agent.App:")
             .Select("RepositoryApi:*", environmentLabel)
             .Select("ServersIntegrationApi:*", environmentLabel)
+            .Select("ApplicationInsights:*", environmentLabel)
             .ConfigureRefresh(refresh =>
             {
                 refresh.Register("Sentinel", environmentLabel, refreshAll: true)
@@ -53,7 +59,33 @@ if (!string.IsNullOrWhiteSpace(appConfigEndpoint))
 
 // Application Insights
 builder.Services.AddSingleton<ITelemetryInitializer, TelemetryInitializer>();
-builder.Services.AddApplicationInsightsTelemetry();
+builder.Services.AddLogging();
+
+//https://learn.microsoft.com/en-us/azure/azure-monitor/app/sampling-classic-api#configure-sampling-settings
+var samplingSettings = new SamplingPercentageEstimatorSettings
+{
+    InitialSamplingPercentage = double.TryParse(builder.Configuration["ApplicationInsights:InitialSamplingPercentage"], out var initPct) ? initPct : 5,
+    MinSamplingPercentage = double.TryParse(builder.Configuration["ApplicationInsights:MinSamplingPercentage"], out var minPct) ? minPct : 5,
+    MaxSamplingPercentage = double.TryParse(builder.Configuration["ApplicationInsights:MaxSamplingPercentage"], out var maxPct) ? maxPct : 60
+};
+
+builder.Services.Configure<TelemetryConfiguration>(telemetryConfiguration =>
+{
+    var telemetryProcessorChainBuilder = telemetryConfiguration.DefaultTelemetrySink.TelemetryProcessorChainBuilder;
+    telemetryProcessorChainBuilder.Use(next => new DependencyFilterTelemetryProcessor(next, builder.Configuration));
+    telemetryProcessorChainBuilder.UseAdaptiveSampling(
+        settings: samplingSettings,
+        callback: null,
+        excludedTypes: "Exception");
+    telemetryProcessorChainBuilder.Build();
+});
+
+builder.Services.AddApplicationInsightsTelemetry(new ApplicationInsightsServiceOptions
+{
+    EnableAdaptiveSampling = false,
+});
+
+builder.Services.AddServiceProfiler();
 
 // Repository API client
 builder.Services.AddRepositoryApiClient(options => options
@@ -114,6 +146,19 @@ builder.Services.AddHealthChecks()
     .AddCheck<AgentHealthCheck>("agent-status");
 
 var app = builder.Build();
+
+app.UseAzureAppConfiguration();
+
+// Update adaptive sampling settings when configuration refreshes
+ChangeToken.OnChange(
+    () => app.Configuration.GetReloadToken(),
+    () =>
+    {
+        if (double.TryParse(app.Configuration["ApplicationInsights:MinSamplingPercentage"], out var min))
+            samplingSettings.MinSamplingPercentage = min;
+        if (double.TryParse(app.Configuration["ApplicationInsights:MaxSamplingPercentage"], out var max))
+            samplingSettings.MaxSamplingPercentage = max;
+    });
 
 app.MapHealthChecks("/healthz");
 
