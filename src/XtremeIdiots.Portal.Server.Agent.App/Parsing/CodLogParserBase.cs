@@ -11,7 +11,7 @@ public abstract class CodLogParserBase : ILogParser
     // --- Compiled regex patterns (shared across all instances) ---
 
     private static readonly Regex TimestampRegex = new(
-        @"^\s*\d+:\d+\s*",
+        @"^\s*\d+(?::\d+)?\s+",
         RegexOptions.Compiled);
 
     private static readonly Regex JoinRegex = new(

@@ -73,6 +73,76 @@ public sealed class Cod5LogParserTests
     }
 
     [Fact]
+    public void ParseLine_SayEvent_EpochTimestamp_ParsesCorrectly()
+    {
+        var result = _parser.ParseLine("1775927970 say;239040859;10;[>XI<]legi_istra;hi all");
+
+        var chat = Assert.IsType<ChatMessageEvent>(result);
+        Assert.Equal("239040859", chat.PlayerGuid);
+        Assert.Equal("[>XI<]legi_istra", chat.Username);
+        Assert.Equal("hi all", chat.Message);
+        Assert.False(chat.IsTeamChat);
+    }
+
+    [Fact]
+    public void ParseLine_SayEvent_EpochTimestamp_MultipleMessages()
+    {
+        var result1 = _parser.ParseLine("1775927974 say;631496496;9;WillieG;hi");
+        var result2 = _parser.ParseLine("1775927989 say;239040859;10;[>XI<]legi_istra;not work for me :(");
+        var result3 = _parser.ParseLine("1775928016 say;396900053;8;[>XI<]wingnut-MOD;CL_MAXPACKETS 100 ?");
+
+        var chat1 = Assert.IsType<ChatMessageEvent>(result1);
+        Assert.Equal("631496496", chat1.PlayerGuid);
+        Assert.Equal("hi", chat1.Message);
+
+        var chat2 = Assert.IsType<ChatMessageEvent>(result2);
+        Assert.Equal("not work for me :(", chat2.Message);
+
+        var chat3 = Assert.IsType<ChatMessageEvent>(result3);
+        Assert.Equal("CL_MAXPACKETS 100 ?", chat3.Message);
+    }
+
+    [Fact]
+    public void ParseLine_KillEvent_EpochTimestamp_DoesNotThrow()
+    {
+        // Kill/Damage lines with epoch timestamps should be silently consumed
+        var result = _parser.ParseLine("1775927923 K;396900053;8;axis;[>XI<]wingnut-MOD;1463873444;6;allies;-Taino-;svt40_flash_mp;32;MOD_RIFLE_BULLET;right_leg_upper");
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ParseLine_JoinEvent_EpochTimestamp_ParsesCorrectly()
+    {
+        var result = _parser.ParseLine("1775928018 J;239040859;10;[>XI<]legi_istra");
+
+        var connected = Assert.IsType<PlayerConnectedEvent>(result);
+        Assert.Equal("239040859", connected.PlayerGuid);
+        Assert.Equal("[>XI<]legi_istra", connected.Username);
+        Assert.Equal(10, connected.SlotId);
+    }
+
+    [Fact]
+    public void ParseLine_JoinTeamEvent_EpochTimestamp_ParsesCorrectly()
+    {
+        var result = _parser.ParseLine("1775927956 JT;239040859;10;allies;[>XI<]legi_istra;");
+
+        var connected = Assert.IsType<PlayerConnectedEvent>(result);
+        Assert.Equal("239040859", connected.PlayerGuid);
+        Assert.Equal("[>XI<]legi_istra", connected.Username);
+    }
+
+    [Fact]
+    public void ParseLine_InitGame_EpochTimestamp_ParsesCorrectly()
+    {
+        var result = _parser.ParseLine(@"1775928018 InitGame: \_Admin\Ruggerxi\_Location\USA\mapname\mp_waw_caen\g_gametype\ftag\sv_hostname\^1>XI< ^3OW FreezeTag\sv_maxclients\30\fs_game\mods/xi_owft");
+
+        var mapChange = Assert.IsType<MapChangeEvent>(result);
+        Assert.Equal("mp_waw_caen", mapChange.MapName);
+        Assert.Equal("ftag", mapChange.GameType);
+    }
+
+    [Fact]
     public void ParseLine_InitGame_ClearsSlotMap()
     {
         _parser.ParseLine("  1:00 J;283895439;0;Player1");
