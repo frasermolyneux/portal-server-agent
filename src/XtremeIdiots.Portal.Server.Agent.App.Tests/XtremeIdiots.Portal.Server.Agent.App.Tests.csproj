@@ -9,14 +9,14 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="8.0.1" />
-    <PackageReference Include="Microsoft.ApplicationInsights" Version="2.23.0" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="9.0.7" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.3.0" />
+    <PackageReference Include="Microsoft.ApplicationInsights" Version="3.1.0" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.6" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
     <PackageReference Include="Moq" Version="4.20.72" />
-    <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1" Version="2.1.121" />
-    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.Testing" Version="2.1.182" />
-    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.V1" Version="2.1.182" />
-    <PackageReference Include="XtremeIdiots.Portal.Server.Events.Abstractions.V1" Version="1.1.19" />
+    <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1" Version="2.1.147" />
+    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.Testing" Version="2.1.201" />
+    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.V1" Version="2.1.201" />
+    <PackageReference Include="XtremeIdiots.Portal.Server.Events.Abstractions.V1" Version="1.1.25" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>
