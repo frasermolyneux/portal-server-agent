@@ -26,7 +26,7 @@
     <PackageReference Include="Microsoft.Azure.AppConfiguration.AspNetCore" Version="8.5.0" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="9.0.7" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
-    <PackageReference Include="MX.Observability.ApplicationInsights" Version="1.0.1" />
+    <PackageReference Include="MX.Observability.ApplicationInsights" Version="1.0.2" />
     <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1" Version="2.1.121" />
     <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.V1" Version="2.1.182" />
     <PackageReference Include="XtremeIdiots.Portal.Server.Events.Abstractions.V1" Version="1.1.19" />
