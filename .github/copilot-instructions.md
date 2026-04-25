@@ -1,5 +1,7 @@
 # Copilot Instructions
 
+> Shared conventions: see [`.github-copilot/.github/instructions/terraform.instructions.md`](../../.github-copilot/.github/instructions/terraform.instructions.md) for the standard Terraform layout, providers, remote-state pattern, validation commands, and CI/CD workflows.
+
 ## Project Overview
 
 This repository contains the XtremeIdiots Portal server agent — a .NET 9 Worker Service deployed as a Docker container on Azure Container Apps. It connects to game servers via FTP to tail logs, parses events, and publishes them to Azure Service Bus queues.
