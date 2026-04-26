@@ -74,6 +74,18 @@ variable "platform_registry_state" {
   })
 }
 
+variable "portal_sync_state" {
+  description = "Backend config for portal-sync remote state (used to read the central ban-files storage account so the agent can push regenerated ban files to game servers)"
+  type = object({
+    resource_group_name  = string
+    storage_account_name = string
+    container_name       = string
+    key                  = string
+    subscription_id      = string
+    tenant_id            = string
+  })
+}
+
 variable "tags" {
   default = {}
 }

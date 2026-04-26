@@ -1,3 +1,7 @@
+using Microsoft.Extensions.Logging;
+
+using Moq;
+
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.BanFiles;
@@ -190,5 +194,68 @@ public class BanFileWatcherTests
 
         Assert.Empty(result.NewBans);
         Assert.Empty(result.MonitorUpdates);
+    }
+
+    [Fact]
+    public void ShouldPush_FirstTimeForMonitor_ReturnsTrue()
+    {
+        var watcher = CreateWatcher();
+        var monitorId = Guid.NewGuid();
+
+        Assert.True(watcher.ShouldPush(monitorId, "etag-1"));
+    }
+
+    [Fact]
+    public void ShouldPush_AfterMarkPushed_SameEtag_ReturnsFalse()
+    {
+        var watcher = CreateWatcher();
+        var monitorId = Guid.NewGuid();
+        watcher.MarkPushed(monitorId, "etag-1");
+
+        Assert.False(watcher.ShouldPush(monitorId, "etag-1"));
+    }
+
+    [Fact]
+    public void ShouldPush_AfterMarkPushed_DifferentEtag_ReturnsTrue()
+    {
+        var watcher = CreateWatcher();
+        var monitorId = Guid.NewGuid();
+        watcher.MarkPushed(monitorId, "etag-1");
+
+        Assert.True(watcher.ShouldPush(monitorId, "etag-2"));
+    }
+
+    [Fact]
+    public void ShouldPush_PerMonitorTracking_IsIndependent()
+    {
+        var watcher = CreateWatcher();
+        var monitorA = Guid.NewGuid();
+        var monitorB = Guid.NewGuid();
+        watcher.MarkPushed(monitorA, "etag-1");
+
+        // Same etag on a different monitor should still trigger a push (each monitor is independent)
+        Assert.True(watcher.ShouldPush(monitorB, "etag-1"));
+        // And the original monitor should still consider that etag pushed
+        Assert.False(watcher.ShouldPush(monitorA, "etag-1"));
+    }
+
+    [Fact]
+    public void CentralBanFile_Dispose_DisposesUnderlyingStream()
+    {
+        var stream = new MemoryStream([0x01, 0x02]);
+        var central = new CentralBanFile { ETag = "x", Length = 2, Content = stream };
+
+        central.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => stream.Length);
+    }
+
+    private static BanFileWatcher CreateWatcher()
+    {
+        var repoClient = new Mock<XtremeIdiots.Portal.Repository.Api.Client.V1.IRepositoryApiClient>();
+        var source = new Mock<IBanFileSource>();
+        var auditLogger = new Mock<MX.Observability.ApplicationInsights.Auditing.IAuditLogger>();
+        var logger = new Mock<ILogger<BanFileWatcher>>();
+        return new BanFileWatcher(repoClient.Object, source.Object, auditLogger.Object, logger.Object);
     }
 }

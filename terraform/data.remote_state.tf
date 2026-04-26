@@ -67,3 +67,17 @@ data "terraform_remote_state" "platform_registry" {
     tenant_id            = var.platform_registry_state.tenant_id
   }
 }
+
+data "terraform_remote_state" "portal_sync" {
+  backend = "azurerm"
+
+  config = {
+    resource_group_name  = var.portal_sync_state.resource_group_name
+    storage_account_name = var.portal_sync_state.storage_account_name
+    container_name       = var.portal_sync_state.container_name
+    key                  = var.portal_sync_state.key
+    use_oidc             = true
+    subscription_id      = var.portal_sync_state.subscription_id
+    tenant_id            = var.portal_sync_state.tenant_id
+  }
+}

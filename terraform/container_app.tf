@@ -66,6 +66,16 @@ resource "azurerm_container_app" "app" {
       }
 
       env {
+        name  = "BanFileStorage__BlobEndpoint"
+        value = local.ban_files_storage.blob_endpoint
+      }
+
+      env {
+        name  = "BanFileStorage__ContainerName"
+        value = local.ban_files_storage.container_name
+      }
+
+      env {
         name  = "ASPNETCORE_HTTP_PORTS"
         value = "8080"
       }

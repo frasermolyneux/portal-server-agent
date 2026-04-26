@@ -24,6 +24,8 @@ locals {
 
   acr = data.terraform_remote_state.platform_registry.outputs.acr
 
+  ban_files_storage = data.terraform_remote_state.portal_sync.outputs.ban_files_storage
+
   container_app_environment_name = "cae-srvagent-${var.environment}-${random_id.environment_id.hex}"
   container_app_name             = "ca-srvagent-${var.environment}-${random_id.environment_id.hex}"
 }
