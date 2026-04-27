@@ -45,14 +45,18 @@ if (!string.IsNullOrWhiteSpace(appConfigEndpoint))
             {
                 refresh.Register("Sentinel", environmentLabel, refreshAll: true)
                     .SetRefreshInterval(TimeSpan.FromMinutes(5));
-            });
-
-        options.ConfigureKeyVault(kv =>
+            });        options.ConfigureKeyVault(kv =>
         {
             kv.SetCredential(credential);
             kv.SetSecretRefreshInterval(TimeSpan.FromHours(1));
         });
     });
+
+    // The refresh middleware (app.UseAzureAppConfiguration() below) needs the App
+    // Configuration services registered in DI as well. The configuration provider
+    // and the middleware are separate concerns and require both registrations to
+    // be present, otherwise app.UseAzureAppConfiguration() throws on startup.
+    builder.Services.AddAzureAppConfiguration();
 }
 
 // Application Insights
