@@ -158,6 +158,60 @@ jobs:
             --resource-group ${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }} \
             --image "${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
 
+      # Container Apps `update` returns when the new revision is *created*, not when it
+      # is *healthy*. Without this gate, a startup crash (e.g. unhandled exception in
+      # Program.cs) leaves the new revision Failed while the previous revision
+      # silently continues serving traffic — the deploy workflow reports success and
+      # we run on stale code until someone notices on a status dashboard.
+      #
+      # Equivalent in spirit to `wait-for-version` for App Services / Function Apps.
+      # Cannot use the same composite directly because the Container App ingress is
+      # internal-only (external_enabled = false), so the GH runner cannot reach the
+      # /info endpoint. Polls the Azure control plane instead — the same signal the
+      # portal uses to flag failed revisions.
+      - name: Wait for new revision to reach Running
+        shell: pwsh
+        run: |
+          $appName = "${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }}"
+          $rg = "${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }}"
+          $expectedSha = "${{ github.sha }}"
+
+          $latestRevision = az containerapp show --name $appName --resource-group $rg --query "properties.latestRevisionName" -o tsv
+          if (-not $latestRevision) { Write-Error "Could not read latestRevisionName"; exit 1 }
+          Write-Host "Newest revision after update: $latestRevision"
+
+          # Sanity: confirm the revision actually picked up our newly-pushed image,
+          # not a stale one (e.g. ACR push race).
+          $revisionImage = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.template.containers[0].image" -o tsv
+          if ($revisionImage -notlike "*:$expectedSha") {
+            Write-Error "Revision $latestRevision is running image '$revisionImage', expected tag :$expectedSha"
+            exit 1
+          }
+
+          $timeoutSeconds = 300
+          $start = Get-Date
+          while (((Get-Date) - $start).TotalSeconds -lt $timeoutSeconds) {
+            $running = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.runningState" -o tsv
+            $health  = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.healthState" -o tsv
+            Write-Host ("[{0:HH:mm:ss}] runningState={1} healthState={2}" -f (Get-Date), $running, $health)
+
+            if ($running -eq "Running" -and ($health -eq "Healthy" -or $health -eq "None")) {
+              Write-Host "Revision $latestRevision is Running."
+              exit 0
+            }
+            if ($running -eq "Failed" -or $health -eq "Unhealthy") {
+              Write-Host "::error::Revision $latestRevision failed to start. Recent container logs:"
+              az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
+              exit 1
+            }
+
+            Start-Sleep -Seconds 10
+          }
+
+          Write-Host "::error::Timed out after $timeoutSeconds s waiting for revision $latestRevision. Recent container logs:"
+          az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
+          exit 1
+
   terraform-plan-and-apply-prd:
     permissions:
       contents: read
@@ -256,3 +310,50 @@ jobs:
             --name ${{ needs.terraform-plan-and-apply-prd.outputs.container_app_name }} \
             --resource-group ${{ needs.terraform-plan-and-apply-prd.outputs.resource_group_name }} \
             --image "${{ needs.terraform-plan-and-apply-prd.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
+
+      # Container Apps `update` returns when the new revision is *created*, not when it
+      # is *healthy*. Without this gate, a startup crash leaves the new revision Failed
+      # while the previous revision silently continues serving traffic — the deploy
+      # workflow reports success and we run on stale code until someone notices.
+      # Polls the Azure control plane (the same signal the portal uses to flag failed
+      # revisions) because the Container App ingress is internal-only.
+      - name: Wait for new revision to reach Running
+        shell: pwsh
+        run: |
+          $appName = "${{ needs.terraform-plan-and-apply-prd.outputs.container_app_name }}"
+          $rg = "${{ needs.terraform-plan-and-apply-prd.outputs.resource_group_name }}"
+          $expectedSha = "${{ github.sha }}"
+
+          $latestRevision = az containerapp show --name $appName --resource-group $rg --query "properties.latestRevisionName" -o tsv
+          if (-not $latestRevision) { Write-Error "Could not read latestRevisionName"; exit 1 }
+          Write-Host "Newest revision after update: $latestRevision"
+
+          $revisionImage = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.template.containers[0].image" -o tsv
+          if ($revisionImage -notlike "*:$expectedSha") {
+            Write-Error "Revision $latestRevision is running image '$revisionImage', expected tag :$expectedSha"
+            exit 1
+          }
+
+          $timeoutSeconds = 300
+          $start = Get-Date
+          while (((Get-Date) - $start).TotalSeconds -lt $timeoutSeconds) {
+            $running = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.runningState" -o tsv
+            $health  = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.healthState" -o tsv
+            Write-Host ("[{0:HH:mm:ss}] runningState={1} healthState={2}" -f (Get-Date), $running, $health)
+
+            if ($running -eq "Running" -and ($health -eq "Healthy" -or $health -eq "None")) {
+              Write-Host "Revision $latestRevision is Running."
+              exit 0
+            }
+            if ($running -eq "Failed" -or $health -eq "Unhealthy") {
+              Write-Host "::error::Revision $latestRevision failed to start. Recent container logs:"
+              az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
+              exit 1
+            }
+
+            Start-Sleep -Seconds 10
+          }
+
+          Write-Host "::error::Timed out after $timeoutSeconds s waiting for revision $latestRevision. Recent container logs:"
+          az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
+          exit 1
