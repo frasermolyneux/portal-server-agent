@@ -1,46 +1,70 @@
 namespace XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 
 /// <summary>
-/// Monitors a game server's ban file for new untagged entries.
+/// Monitors a game server's ban file for new untagged entries and propagates the
+/// central regenerated blob back to the server. Owns the per-server
+/// <c>BanFileMonitor</c> status row — upserts it directly, no manual creation by
+/// admins.
 /// </summary>
 public interface IBanFileWatcher
 {
     /// <summary>
-    /// Check the ban file(s) for changes. Downloads and parses if size changed.
-    /// Returns new untagged ban entries, or empty if no changes.
+    /// Resolve the current ban file path (per game type + live mod), check for new
+    /// untagged bans, push the central blob if its ETag has changed, and upsert the
+    /// <c>BanFileMonitor</c> status row with the check + push + count results.
+    ///
+    /// Returns any new bans for the agent to publish via Service Bus. The agent
+    /// then calls <see cref="AcknowledgeImportAsync"/> after a successful publish
+    /// so the import-status fields are persisted only after the events are durable.
     /// </summary>
-    Task<BanFileCheckResult> CheckAsync(Agents.ServerContext context, CancellationToken ct = default);
+    Task<BanFileCheckResult> CheckAsync(
+        Agents.ServerContext context,
+        string? liveMod,
+        CancellationToken ct = default);
 
     /// <summary>
-    /// Updates the BanFileMonitor(s) with new file sizes after successful event publish.
-    /// Call this only after the event has been successfully published to prevent ban loss.
+    /// Persists the import-status fields (LastImportUtc, LastImportBanCount,
+    /// LastImportSampleNames) after the agent has successfully published the
+    /// detected bans. Skipped fields are left untouched on the row.
     /// </summary>
-    Task AcknowledgeAsync(IReadOnlyList<MonitorUpdate> updates, CancellationToken ct = default);
+    Task AcknowledgeImportAsync(
+        Guid serverId,
+        ImportAcknowledgment acknowledgment,
+        CancellationToken ct = default);
 }
 
 /// <summary>
-/// Result of a ban file check, including new bans and metadata needed
-/// to update the BanFileMonitor after successful publish.
+/// Result of a single ban file check. <see cref="NewBans"/> is the only payload
+/// the agent acts on; <see cref="ImportAcknowledgment"/> is opaque and round-tripped
+/// back to <see cref="IBanFileWatcher.AcknowledgeImportAsync"/> after publish.
 /// </summary>
 public sealed record BanFileCheckResult
 {
     public static readonly BanFileCheckResult Empty = new()
     {
         NewBans = [],
-        MonitorUpdates = []
+        ImportAcknowledgment = null
     };
 
     public required IReadOnlyList<DetectedBanEntry> NewBans { get; init; }
-    public required IReadOnlyList<MonitorUpdate> MonitorUpdates { get; init; }
+
+    /// <summary>
+    /// Non-null when bans were detected this cycle. Pass back to
+    /// <see cref="IBanFileWatcher.AcknowledgeImportAsync"/> after publish.
+    /// </summary>
+    public required ImportAcknowledgment? ImportAcknowledgment { get; init; }
 }
 
 /// <summary>
-/// Captures the new file size for a monitor so it can be persisted after publish.
+/// Captures the import metadata that should be written to the status row after a
+/// successful Service Bus publish. Held by the agent between the publish call and
+/// the acknowledge call; the watcher does not store it internally.
 /// </summary>
-public sealed record MonitorUpdate
+public sealed record ImportAcknowledgment
 {
-    public required Guid BanFileMonitorId { get; init; }
-    public required long NewFileSize { get; init; }
+    public required DateTime ImportUtc { get; init; }
+    public required int BanCount { get; init; }
+    public required string SampleNamesJson { get; init; }
 }
 
 /// <summary>
@@ -51,3 +75,4 @@ public sealed record DetectedBanEntry
     public required string PlayerGuid { get; init; }
     public required string PlayerName { get; init; }
 }
+

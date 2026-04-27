@@ -99,6 +99,7 @@ public class AgentOrchestratorTests
             FtpEnabled = true,
             RconEnabled = true,
             BanFileSyncEnabled = true,
+            BanFileRootPath = "/",
             ConfigHash = "hash-no-ftp"
         };
 
@@ -136,6 +137,7 @@ public class AgentOrchestratorTests
             FtpEnabled = true,
             RconEnabled = true,
             BanFileSyncEnabled = true,
+            BanFileRootPath = "/",
             ConfigHash = "hash-no-log"
         };
 
@@ -171,6 +173,7 @@ public class AgentOrchestratorTests
             FtpEnabled = false,
             RconEnabled = true,
             BanFileSyncEnabled = true,
+            BanFileRootPath = "/",
             ConfigHash = "hash-ftp-disabled"
         };
 
@@ -326,6 +329,7 @@ public class AgentOrchestratorTests
         FtpEnabled = true,
         RconEnabled = true,
         BanFileSyncEnabled = true,
+        BanFileRootPath = "/",
         ConfigHash = $"hash-{title}"
     };
 

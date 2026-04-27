@@ -193,50 +193,52 @@ public class BanFileWatcherTests
         var result = BanFileCheckResult.Empty;
 
         Assert.Empty(result.NewBans);
-        Assert.Empty(result.MonitorUpdates);
+        Assert.Null(result.ImportAcknowledgment);
     }
 
     [Fact]
-    public void ShouldPush_FirstTimeForMonitor_ReturnsTrue()
+    public void CountTags_MixedTags_GroupsCorrectly()
     {
-        var watcher = CreateWatcher();
-        var monitorId = Guid.NewGuid();
+        var content = """
+            abc001 ManualOne
+            abc002 ManualTwo
+            abc003 BanSyncOne [BANSYNC]-Player3
+            abc004 PbBan [PBBAN]
+            abc005 B3Ban [B3BAN]
+            abc006 ExternalOne [EXTERNAL]
+            abc007 BanSyncTwo [BANSYNC]-Player7
+            """;
 
-        Assert.True(watcher.ShouldPush(monitorId, "etag-1"));
+        var counts = BanFileWatcher.CountTags(content);
+
+        Assert.Equal(7, counts.Total);
+        Assert.Equal(2, counts.Untagged);
+        Assert.Equal(2, counts.BanSync);
+        Assert.Equal(3, counts.External);
     }
 
     [Fact]
-    public void ShouldPush_AfterMarkPushed_SameEtag_ReturnsFalse()
+    public void CountTags_EmptyAndWhitespaceLines_AreIgnored()
     {
-        var watcher = CreateWatcher();
-        var monitorId = Guid.NewGuid();
-        watcher.MarkPushed(monitorId, "etag-1");
+        var content = "\n\nabc001 OnlyOne\n   \n";
 
-        Assert.False(watcher.ShouldPush(monitorId, "etag-1"));
+        var counts = BanFileWatcher.CountTags(content);
+
+        Assert.Equal(1, counts.Total);
+        Assert.Equal(1, counts.Untagged);
     }
 
     [Fact]
-    public void ShouldPush_AfterMarkPushed_DifferentEtag_ReturnsTrue()
+    public void CountTags_TagComparisonIsCaseInsensitive()
     {
-        var watcher = CreateWatcher();
-        var monitorId = Guid.NewGuid();
-        watcher.MarkPushed(monitorId, "etag-1");
+        var content = "abc001 P [bansync]-foo\nabc002 Q [pbBan]";
 
-        Assert.True(watcher.ShouldPush(monitorId, "etag-2"));
-    }
+        var counts = BanFileWatcher.CountTags(content);
 
-    [Fact]
-    public void ShouldPush_PerMonitorTracking_IsIndependent()
-    {
-        var watcher = CreateWatcher();
-        var monitorA = Guid.NewGuid();
-        var monitorB = Guid.NewGuid();
-        watcher.MarkPushed(monitorA, "etag-1");
-
-        // Same etag on a different monitor should still trigger a push (each monitor is independent)
-        Assert.True(watcher.ShouldPush(monitorB, "etag-1"));
-        // And the original monitor should still consider that etag pushed
-        Assert.False(watcher.ShouldPush(monitorA, "etag-1"));
+        Assert.Equal(2, counts.Total);
+        Assert.Equal(1, counts.BanSync);
+        Assert.Equal(1, counts.External);
+        Assert.Equal(0, counts.Untagged);
     }
 
     [Fact]
@@ -249,13 +251,5 @@ public class BanFileWatcherTests
 
         Assert.Throws<ObjectDisposedException>(() => stream.Length);
     }
-
-    private static BanFileWatcher CreateWatcher()
-    {
-        var repoClient = new Mock<XtremeIdiots.Portal.Repository.Api.Client.V1.IRepositoryApiClient>();
-        var source = new Mock<IBanFileSource>();
-        var auditLogger = new Mock<MX.Observability.ApplicationInsights.Auditing.IAuditLogger>();
-        var logger = new Mock<ILogger<BanFileWatcher>>();
-        return new BanFileWatcher(repoClient.Object, source.Object, auditLogger.Object, logger.Object);
-    }
 }
+

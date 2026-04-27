@@ -213,25 +213,22 @@ public sealed class GameServerAgent
     {
         try
         {
-            var result = await _banFileWatcher.CheckAsync(_context, ct);
+            var result = await _banFileWatcher.CheckAsync(_context, _parser.ServerMod, ct);
             _lastBanFileCheck = DateTime.UtcNow;
 
-            if (result.NewBans.Count > 0)
+            if (result.NewBans.Count > 0 && result.ImportAcknowledgment is not null)
             {
-                // Publish first, then acknowledge (update monitor) — prevents ban loss if publish fails
+                // Publish first, then acknowledge — preserves the "no ban loss if publish
+                // fails" guarantee. The watcher has already persisted check + push +
+                // count fields; only the import-status fields wait on publish success.
                 await _publisher.PublishBanDetectedAsync(
                     _context.ServerId, _context.GameType, NextSequenceId(),
                     result.NewBans, ct);
 
-                await _banFileWatcher.AcknowledgeAsync(result.MonitorUpdates, ct);
+                await _banFileWatcher.AcknowledgeImportAsync(_context.ServerId, result.ImportAcknowledgment, ct);
 
                 _logger.LogInformation("[{Title}] Published {Count} new ban(s) from ban file",
                     _context.Title, result.NewBans.Count);
-            }
-            else if (result.MonitorUpdates.Count > 0)
-            {
-                // No new bans but monitor still needs LastSync update
-                await _banFileWatcher.AcknowledgeAsync(result.MonitorUpdates, ct);
             }
         }
         catch (Exception ex)

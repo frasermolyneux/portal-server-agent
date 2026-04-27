@@ -113,6 +113,7 @@ public class AgentHealthCheckTests
                 FtpEnabled = true,
                 RconEnabled = true,
                 BanFileSyncEnabled = true,
+                BanFileRootPath = "/",
                 ConfigHash = "test-hash"
             }
         };

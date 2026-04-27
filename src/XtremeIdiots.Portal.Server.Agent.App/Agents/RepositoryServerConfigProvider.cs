@@ -77,7 +77,18 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     continue;
                 }
 
-                var configHash = ComputeConfigHash(configs);
+                var banFileRootPath = string.IsNullOrWhiteSpace(dto.BanFileRootPath) ? "/" : dto.BanFileRootPath;
+
+                // Include DTO-level toggles that affect the agent loop in the hash so the
+                // orchestrator restarts the agent when an admin changes them. ComputeConfigHash
+                // by itself only sees the per-server config namespaces.
+                var configHash = ComputeConfigHash(configs, new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["dto.FtpEnabled"] = dto.FtpEnabled.ToString(),
+                    ["dto.RconEnabled"] = dto.RconEnabled.ToString(),
+                    ["dto.BanFileSyncEnabled"] = dto.BanFileSyncEnabled.ToString(),
+                    ["dto.BanFileRootPath"] = banFileRootPath,
+                });
 
                 servers.Add(new ServerContext
                 {
@@ -95,6 +106,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     FtpEnabled = dto.FtpEnabled,
                     RconEnabled = dto.RconEnabled,
                     BanFileSyncEnabled = dto.BanFileSyncEnabled,
+                    BanFileRootPath = banFileRootPath,
                     ConfigHash = configHash
                 });
             }
@@ -204,10 +216,13 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
     }
 
     /// <summary>
-    /// Computes a deterministic SHA256 hash of all configuration namespaces.
-    /// Keys are sorted to ensure consistent ordering regardless of API response order.
+    /// Computes a deterministic SHA256 hash of all configuration namespaces plus the
+    /// supplied <paramref name="extraFields"/>. Keys are sorted to ensure consistent
+    /// ordering regardless of API response order.
     /// </summary>
-    internal static string ComputeConfigHash(Dictionary<string, Dictionary<string, JsonElement>> configs)
+    internal static string ComputeConfigHash(
+        Dictionary<string, Dictionary<string, JsonElement>> configs,
+        SortedDictionary<string, string>? extraFields = null)
     {
         var parts = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -216,6 +231,14 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             foreach (var (key, value) in properties)
             {
                 parts[$"{ns}.{key}"] = value.ToString();
+            }
+        }
+
+        if (extraFields is not null)
+        {
+            foreach (var (key, value) in extraFields)
+            {
+                parts[key] = value;
             }
         }
 

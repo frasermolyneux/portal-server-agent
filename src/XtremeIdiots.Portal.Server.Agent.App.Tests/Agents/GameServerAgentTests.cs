@@ -29,6 +29,7 @@ public class GameServerAgentTests
         FtpEnabled = true,
         RconEnabled = true,
         BanFileSyncEnabled = true,
+        BanFileRootPath = "/",
         ConfigHash = "test-hash"
     };
 
@@ -50,7 +51,7 @@ public class GameServerAgentTests
             .ReturnsAsync(true);
 
         // Default: ban file watcher returns empty
-        _mockBanFileWatcher.Setup(b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<CancellationToken>()))
+        _mockBanFileWatcher.Setup(b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(BanFileCheckResult.Empty);
 
         // Default: RCON sync returns no IP-resolved events
@@ -373,18 +374,13 @@ public class GameServerAgentTests
     }
 
     [Fact]
-    public async Task RunAsync_AcknowledgesBanFileMonitorWhenNoNewBans()
+    public async Task RunAsync_DoesNotPublishOrAcknowledgeWhenWatcherReturnsNoBans()
     {
-        // Arrange — ban file watcher returns monitor updates but no new bans (file unchanged heartbeat)
-        var monitorId = Guid.NewGuid();
-        var heartbeatResult = new BanFileCheckResult
-        {
-            NewBans = [],
-            MonitorUpdates = [new MonitorUpdate { BanFileMonitorId = monitorId, NewFileSize = 1024 }]
-        };
-
-        _mockBanFileWatcher.Setup(b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(heartbeatResult);
+        // Arrange — ban file watcher returns empty result (file unchanged heartbeat).
+        // Status writes happen inside the watcher itself, so the agent has nothing
+        // to publish or acknowledge in this case.
+        _mockBanFileWatcher.Setup(b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BanFileCheckResult.Empty);
 
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
@@ -402,18 +398,73 @@ public class GameServerAgentTests
         // Act
         await agent.RunAsync(cts.Token);
 
-        // Assert — AcknowledgeAsync should be called to update LastSync even without new bans
+        // Assert — CheckAsync should be called at least once
         _mockBanFileWatcher.Verify(
-            b => b.AcknowledgeAsync(
-                It.Is<IReadOnlyList<MonitorUpdate>>(u => u.Count == 1 && u[0].BanFileMonitorId == monitorId),
-                It.IsAny<CancellationToken>()),
+            b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
 
-        // Verify no ban events were published
+        // No publish (no bans) and no acknowledge (no ImportAcknowledgment)
         _mockPublisher.Verify(
             p => p.PublishBanDetectedAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(),
                 It.IsAny<IReadOnlyList<DetectedBanEntry>>(), It.IsAny<CancellationToken>()),
             Times.Never);
+
+        _mockBanFileWatcher.Verify(
+            b => b.AcknowledgeImportAsync(It.IsAny<Guid>(), It.IsAny<ImportAcknowledgment>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_PublishesBansThenAcknowledgesImport_WhenWatcherReturnsBans()
+    {
+        // Arrange — watcher returns one detected ban + acknowledgment payload.
+        var detectedBan = new DetectedBanEntry { PlayerGuid = "abc123", PlayerName = "Hacker" };
+        var ack = new ImportAcknowledgment
+        {
+            ImportUtc = DateTime.UtcNow,
+            BanCount = 1,
+            SampleNamesJson = "[\"Hacker\"]"
+        };
+        var publishResult = new BanFileCheckResult
+        {
+            NewBans = [detectedBan],
+            ImportAcknowledgment = ack
+        };
+
+        _mockBanFileWatcher.Setup(b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(publishResult);
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var agent = CreateAgent();
+
+        // Act
+        await agent.RunAsync(cts.Token);
+
+        // Assert — publish first, then acknowledge.
+        _mockPublisher.Verify(
+            p => p.PublishBanDetectedAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<string>(),
+                It.IsAny<long>(),
+                It.Is<IReadOnlyList<DetectedBanEntry>>(b => b.Count == 1 && b[0].PlayerGuid == "abc123"),
+                It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
+
+        _mockBanFileWatcher.Verify(
+            b => b.AcknowledgeImportAsync(
+                _testContext.ServerId,
+                It.Is<ImportAcknowledgment>(a => a.BanCount == 1 && a.SampleNamesJson == "[\"Hacker\"]"),
+                It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
     }
 
     [Fact]

@@ -29,6 +29,13 @@ public sealed record ServerContext
     public required bool BanFileSyncEnabled { get; init; }
 
     /// <summary>
+    /// FTP path prefix on the game server below which the ban file lives. Resolved
+    /// from <c>GameServer.BanFileRootPath</c>; defaults to <c>"/"</c> for legacy
+    /// servers that have not yet had the root path set.
+    /// </summary>
+    public required string BanFileRootPath { get; init; }
+
+    /// <summary>
     /// SHA256 hash of the server's configuration values.
     /// Used by the orchestrator to detect config changes and restart the agent.
     /// </summary>
