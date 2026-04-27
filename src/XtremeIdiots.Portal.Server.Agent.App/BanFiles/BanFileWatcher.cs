@@ -51,9 +51,13 @@ public sealed class BanFileWatcher : IBanFileWatcher
 
     /// <summary>
     /// Maximum jitter applied when scheduling a central blob push after the ETag changes.
-    /// Spreads ~80 simultaneous 4 MB FTP uploads across a wide window.
+    /// Spreads simultaneous 4 MB FTP uploads across this window. Trade-off: too short and
+    /// the storage account sees a thundering herd after every portal-sync regeneration; too
+    /// long and admins see stale "Bans on file" counts on the dashboard for that long after
+    /// each new ban. 5 min comfortably covers a fleet of ~80 servers without making per-server
+    /// push lag user-visible.
     /// </summary>
-    internal static readonly TimeSpan PushStaggerMaxJitter = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan PushStaggerMaxJitter = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Per-server scheduled push state. Set when a new central ETag is observed; cleared
