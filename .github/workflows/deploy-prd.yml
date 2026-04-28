@@ -195,7 +195,7 @@ jobs:
             $health  = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.healthState" -o tsv
             Write-Host ("[{0:HH:mm:ss}] runningState={1} healthState={2}" -f (Get-Date), $running, $health)
 
-            if ($running -eq "Running" -and ($health -eq "Healthy" -or $health -eq "None")) {
+            if (($running -in @("Running","RunningAtMaxScale","ScaledToZero")) -and ($health -eq "Healthy" -or $health -eq "None")) {
               Write-Host "Revision $latestRevision is Running."
               exit 0
             }
@@ -341,7 +341,7 @@ jobs:
             $health  = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.healthState" -o tsv
             Write-Host ("[{0:HH:mm:ss}] runningState={1} healthState={2}" -f (Get-Date), $running, $health)
 
-            if ($running -eq "Running" -and ($health -eq "Healthy" -or $health -eq "None")) {
+            if (($running -in @("Running","RunningAtMaxScale","ScaledToZero")) -and ($health -eq "Healthy" -or $health -eq "None")) {
               Write-Host "Revision $latestRevision is Running."
               exit 0
             }
