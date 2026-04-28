@@ -31,9 +31,10 @@ public sealed class BlobBanFileSource : IBanFileSource
             throw new InvalidOperationException(
                 $"{BanFileStorageOptions.SectionName}:ContainerName is not configured");
 
-        // The ban-files container lives on portal-sync's storage account, separate from the
-        // agent's own offset/lock storage, so build a dedicated BlobServiceClient. Uses the
-        // same DefaultAzureCredential flow as the rest of the app (managed identity in Azure).
+        // The ban-files container lives on portal-core's shared app-data storage account,
+        // separate from the agent's own offset/lock storage, so build a dedicated
+        // BlobServiceClient. Uses the same DefaultAzureCredential flow as the rest of the
+        // app (managed identity in Azure).
         var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
         {
             ManagedIdentityClientId = Environment.GetEnvironmentVariable("AZURE_CLIENT_ID")
