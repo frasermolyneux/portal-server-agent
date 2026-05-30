@@ -9,7 +9,7 @@ public interface ILogParserFactory
     /// Create a new parser instance for the specified game type.
     /// </summary>
     /// <param name="gameType">
-    /// The game type identifier (e.g. "CallOfDuty2", "CallOfDuty4", "CallOfDuty5").
+    /// The game type identifier (e.g. "CallOfDuty2", "CallOfDuty4", "CallOfDuty4x", "CallOfDuty5").
     /// </param>
     /// <returns>A new <see cref="ILogParser"/> configured for the game type.</returns>
     /// <exception cref="ArgumentException">Thrown when the game type is not supported.</exception>
@@ -18,7 +18,7 @@ public interface ILogParserFactory
 
 /// <summary>
 /// Default implementation of <see cref="ILogParserFactory"/>.
-/// Creates Call of Duty 2, 4, and 5 log parsers.
+/// Creates Call of Duty 2, 4, 4x, and 5 log parsers.
 /// </summary>
 public sealed class LogParserFactory : ILogParserFactory
 {
@@ -27,6 +27,7 @@ public sealed class LogParserFactory : ILogParserFactory
     {
         "CallOfDuty2" => new Cod2LogParser(),
         "CallOfDuty4" => new Cod4LogParser(),
+        "CallOfDuty4x" => new Cod4xLogParser(),
         "CallOfDuty5" => new Cod5LogParser(),
         _ => throw new ArgumentException($"Unsupported game type: {gameType}", nameof(gameType))
     };

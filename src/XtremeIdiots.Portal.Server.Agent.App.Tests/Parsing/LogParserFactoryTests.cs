@@ -9,6 +9,7 @@ public sealed class LogParserFactoryTests
     [Theory]
     [InlineData("CallOfDuty2", typeof(Cod2LogParser))]
     [InlineData("CallOfDuty4", typeof(Cod4LogParser))]
+    [InlineData("CallOfDuty4x", typeof(Cod4xLogParser))]
     [InlineData("CallOfDuty5", typeof(Cod5LogParser))]
     public void Create_SupportedGameType_ReturnsCorrectParser(string gameType, Type expectedType)
     {
