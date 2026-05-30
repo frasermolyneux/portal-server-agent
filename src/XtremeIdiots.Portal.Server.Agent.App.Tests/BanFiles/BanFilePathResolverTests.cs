@@ -91,4 +91,33 @@ public class BanFilePathResolverTests
         Assert.Equal("/ban.txt", result.Path);
         Assert.Null(result.ResolvedForMod);
     }
+
+    [Fact]
+    public void Resolve_Cod4x_WithMod_PutsBanlistV2UnderModsFolder()
+    {
+        // CoD4x mirrors the CoD4/5 mod-folder layout but emits the cod4x simplebanlist
+        // v2 format (banlist_v2.dat) instead of the legacy ban.txt.
+        var result = _sut.Resolve("CallOfDuty4x", "/cod4x/", liveMod: "xi_promod");
+
+        Assert.Equal("/cod4x/mods/xi_promod/banlist_v2.dat", result.Path);
+        Assert.Equal("xi_promod", result.ResolvedForMod);
+    }
+
+    [Fact]
+    public void Resolve_Cod4x_WithoutMod_FallsBackToMainBanlistV2()
+    {
+        var result = _sut.Resolve("CallOfDuty4x", "/", liveMod: null);
+
+        Assert.Equal("/main/banlist_v2.dat", result.Path);
+        Assert.Equal("main", result.ResolvedForMod);
+    }
+
+    [Fact]
+    public void Resolve_Cod4x_StripsLeadingModsPrefix()
+    {
+        var result = _sut.Resolve("CallOfDuty4x", "/", liveMod: "mods/xi_promod");
+
+        Assert.Equal("/mods/xi_promod/banlist_v2.dat", result.Path);
+        Assert.Equal("xi_promod", result.ResolvedForMod);
+    }
 }

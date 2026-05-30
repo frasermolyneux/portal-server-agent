@@ -6,6 +6,8 @@ namespace XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 /// CoD2: <c>{root}/ban.txt</c> (ban file lives at the server root, never under <c>mods/</c>).
 /// CoD4 / CoD5: <c>{root}/mods/{liveMod}/ban.txt</c> when a mod is running, otherwise
 /// <c>{root}/main/ban.txt</c>. All comparisons are case-insensitive.
+/// CoD4x: <c>{root}/mods/{liveMod}/banlist_v2.dat</c> (cod4x simplebanlist v2 format),
+/// falling back to <c>{root}/main/banlist_v2.dat</c> when no mod is reported.
 ///
 /// Unknown game types fall back to <c>{root}/ban.txt</c> (the safest assumption).
 /// Add new rules here as new game types are onboarded — keep the implementation
@@ -27,7 +29,11 @@ public sealed class BanFilePathResolver : IBanFilePathResolver
             },
 
             // CoD4 / CoD5: under mods/<mod>/ when a mod is active, else main/.
-            "CallOfDuty4" or "CallOfDuty5" => ResolveCodModPath(normalisedRoot, liveMod),
+            "CallOfDuty4" or "CallOfDuty5" => ResolveCodModPath(normalisedRoot, liveMod, "ban.txt"),
+
+            // CoD4x: same mod-folder layout as CoD4/5 but emits the cod4x simplebanlist
+            // v2 format (banlist_v2.dat) instead of the legacy ban.txt.
+            "CallOfDuty4x" => ResolveCodModPath(normalisedRoot, liveMod, "banlist_v2.dat"),
 
             // Default: server root. Keeps newly-onboarded game types working until
             // a specific rule is added.
@@ -39,15 +45,15 @@ public sealed class BanFilePathResolver : IBanFilePathResolver
         };
     }
 
-    private static ResolvedBanFilePath ResolveCodModPath(string normalisedRoot, string? liveMod)
+    private static ResolvedBanFilePath ResolveCodModPath(string normalisedRoot, string? liveMod, string fileName)
     {
         // Treat empty or whitespace mod as "no mod" (server may report empty when on the
-        // base game) — fall back to main/ which is where the stock ban.txt lives.
+        // base game) — fall back to main/ which is where the stock ban file lives.
         if (string.IsNullOrWhiteSpace(liveMod))
         {
             return new ResolvedBanFilePath
             {
-                Path = $"{normalisedRoot}main/ban.txt",
+                Path = $"{normalisedRoot}main/{fileName}",
                 ResolvedForMod = "main"
             };
         }
@@ -61,7 +67,7 @@ public sealed class BanFilePathResolver : IBanFilePathResolver
 
         return new ResolvedBanFilePath
         {
-            Path = $"{normalisedRoot}mods/{trimmedMod}/ban.txt",
+            Path = $"{normalisedRoot}mods/{trimmedMod}/{fileName}",
             ResolvedForMod = trimmedMod
         };
     }

@@ -174,7 +174,16 @@ public sealed class BanFileWatcher : IBanFileWatcher
                             newContent = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
                         }
 
-                        detectedBans = ParseBanLines(newContent);
+                        // CoD4x uses the cod4x simplebanlist v2 wire format
+                        // (\playerid\…\asteamid\…\rsn\…) which the legacy "GUID NAME"
+                        // ParseBanLines can't decode. Sync-pushed lines already carry the
+                        // [BANSYNC] tag in the reason field so SkipTags would drop them
+                        // anyway — gating here also protects against manual edits surfacing
+                        // garbage GUIDs to the manual-ingest path. Admins should use RCON
+                        // for ad-hoc CoD4x bans.
+                        detectedBans = string.Equals(context.GameType, "CallOfDuty4x", StringComparison.OrdinalIgnoreCase)
+                            ? []
+                            : ParseBanLines(newContent);
 
                         _logger.LogInformation(
                             "[{Title}] Ban file {Path}: {NewSize} bytes (was {OldSize}), found {BanCount} new untagged ban(s)",
