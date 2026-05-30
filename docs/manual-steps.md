@@ -12,9 +12,9 @@ These are the manual prerequisites and one-off operator tasks that sit outside T
 
 Both plugins are required so the agent's dual-format ban-file push (Phase 3) lands cleanly:
 
-| Plugin | Purpose |
-|---|---|
-| `legacybanlist` | Maintains the original `ban.txt` (vanilla CoD4 format) — preserved for backwards compatibility. |
+| Plugin          | Purpose                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------- |
+| `legacybanlist` | Maintains the original `ban.txt` (vanilla CoD4 format) — preserved for backwards compatibility.   |
 | `simplebanlist` | Maintains the CoD4x "simple" ban list — the format actually consumed by CoD4x servers at runtime. |
 
 Add both to the server's plugin load configuration (typically `loadPlugin legacybanlist` and `loadPlugin simplebanlist` in `server.cfg`). The agent pushes both files on every ban-file sync cycle; either plugin missing on the server side will silently drop the corresponding ban list.
@@ -23,12 +23,12 @@ Add both to the server's plugin load configuration (typically `loadPlugin legacy
 
 The agent's CoD4x log parser is built against the **modern** CoD4x log format. The following cvar values are checked once per agent lifecycle via a startup probe (`Cod4xCvarProbe`) that runs immediately after the first successful RCON sync. The probe is **read-only** — it never writes cvars.
 
-| Cvar | Required value | Action on mismatch |
-|---|---|---|
-| `sv_legacymode` | `0` | **Warning** emitted via structured logger as named event `Cod4xCvarMismatch`. Surfaces in App Insights traces for the server agent role. Parser will still run but legacy-format log lines will be silently dropped. |
-| `g_logSync` | `1` or `3` (either accepted) | Probe-only — value is logged at Information level for inventory. `3` (instant flush) is preferred for low-latency event ingest; `1` (per-line flush) is acceptable. |
-| `g_logTimeStampInSeconds` | `0` or `1` (either accepted) | Probe-only — value is logged at Information level for inventory. Parser handles both timestamp shapes. |
-| `logfile` | any non-zero value | Probe-only — value is logged at Information level for inventory. `0` means no log file is written and the agent will have nothing to tail. |
+| Cvar                      | Required value               | Action on mismatch                                                                                                                                                                                                   |
+| ------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sv_legacymode`           | `0`                          | **Warning** emitted via structured logger as named event `Cod4xCvarMismatch`. Surfaces in App Insights traces for the server agent role. Parser will still run but legacy-format log lines will be silently dropped. |
+| `g_logSync`               | `1` or `3` (either accepted) | Probe-only — value is logged at Information level for inventory. `3` (instant flush) is preferred for low-latency event ingest; `1` (per-line flush) is acceptable.                                                  |
+| `g_logTimeStampInSeconds` | `0` or `1` (either accepted) | Probe-only — value is logged at Information level for inventory. Parser handles both timestamp shapes.                                                                                                               |
+| `logfile`                 | any non-zero value           | Probe-only — value is logged at Information level for inventory. `0` means no log file is written and the agent will have nothing to tail.                                                                           |
 
 ### Verifying after rollout
 
