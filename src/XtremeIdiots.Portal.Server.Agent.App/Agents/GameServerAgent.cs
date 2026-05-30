@@ -18,6 +18,7 @@ public sealed class GameServerAgent
     private readonly IOffsetStore _offsetStore;
     private readonly IServerLock _serverLock;
     private readonly IServerSyncService _syncService;
+    private readonly ICod4xCvarProbe _cvarProbe;
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILogger _logger;
 
@@ -43,6 +44,7 @@ public sealed class GameServerAgent
         IOffsetStore offsetStore,
         IServerLock serverLock,
         IServerSyncService syncService,
+        ICod4xCvarProbe cvarProbe,
         IBanFileWatcher banFileWatcher,
         ILogger logger)
     {
@@ -53,6 +55,7 @@ public sealed class GameServerAgent
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
         _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
+        _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -100,6 +103,10 @@ public sealed class GameServerAgent
             var initialIpEvents = await _syncService.SyncAsync(_context.ServerId, _parser, ct);
             await PublishIpResolvedEventsAsync(initialIpEvents, ct);
             _lastRconSync = DateTime.UtcNow;
+
+            // 4a. One-shot CoD4x cvar probe (no-op for other game types). Self-gates
+            // so it runs at most once per agent lifecycle per server.
+            await _cvarProbe.ProbeAsync(_context, ct);
 
             // 5. Main loop
             while (!ct.IsCancellationRequested)

@@ -24,6 +24,7 @@ public class AgentHealthCheckTests
             new Mock<IOffsetStore>().Object,
             new Mock<IServerLock>().Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
@@ -63,6 +64,7 @@ public class AgentHealthCheckTests
             new Mock<IOffsetStore>().Object,
             new Mock<IServerLock>().Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
@@ -156,6 +158,7 @@ public class AgentHealthCheckTests
             mockOffsetStore.Object,
             mockServerLock.Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);

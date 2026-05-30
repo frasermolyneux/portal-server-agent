@@ -45,7 +45,7 @@ if (!string.IsNullOrWhiteSpace(appConfigEndpoint))
             {
                 refresh.Register("Sentinel", environmentLabel, refreshAll: true)
                     .SetRefreshInterval(TimeSpan.FromMinutes(5));
-            });        options.ConfigureKeyVault(kv =>
+            }); options.ConfigureKeyVault(kv =>
         {
             kv.SetCredential(credential);
             kv.SetSecretRefreshInterval(TimeSpan.FromHours(1));
@@ -119,6 +119,7 @@ builder.Services.AddSingleton<IEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddSingleton<IOffsetStore, BlobOffsetStore>();
 builder.Services.AddSingleton<IServerLock, BlobServerLock>();
 builder.Services.AddSingleton<IServerSyncService, ServerSyncService>();
+builder.Services.AddSingleton<ICod4xCvarProbe, Cod4xCvarProbe>();
 builder.Services.AddSingleton<IBanFilePathResolver, BanFilePathResolver>();
 builder.Services.AddSingleton<IBanFileWatcher, BanFileWatcher>();
 

@@ -39,6 +39,7 @@ public class GameServerAgentTests
     private readonly Mock<IOffsetStore> _mockOffsetStore = new();
     private readonly Mock<IServerLock> _mockServerLock = new();
     private readonly Mock<IServerSyncService> _mockSyncService = new();
+    private readonly Mock<ICod4xCvarProbe> _mockCvarProbe = new();
     private readonly Mock<IBanFileWatcher> _mockBanFileWatcher = new();
     private readonly ILogger _logger = NullLogger.Instance;
 
@@ -61,7 +62,7 @@ public class GameServerAgentTests
 
     private GameServerAgent CreateAgent() =>
         new(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBanFileWatcher.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
 
     [Fact]
     public async Task RunAsync_PublishesServerConnectedOnStart()
@@ -365,7 +366,7 @@ public class GameServerAgentTests
             .ReturnsAsync((SavedOffset?)null);
 
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBanFileWatcher.Object, _logger);
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 
