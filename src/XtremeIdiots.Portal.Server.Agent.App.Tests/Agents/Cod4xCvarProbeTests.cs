@@ -87,14 +87,14 @@ public class Cod4xCvarProbeTests
     }
 
     [Fact]
-    public async Task ProbeAsync_ReadsAllFourCvars_WhenCod4xAndRconEnabled()
+    public async Task ProbeAsync_ReadsAllProbedCvars_WhenCod4xAndRconEnabled()
     {
         // Arrange — return a benign success for every cvar
         foreach (var cvar in Cod4xCvarProbe.ProbedCvars)
         {
             var localCvar = cvar;
             _mockRconApi.Setup(r => r.GetDvar(_serverId, localCvar, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(SuccessResult(localCvar, localCvar == "sv_legacymode" ? "0" : "1"));
+                .ReturnsAsync(SuccessResult(localCvar, "1"));
         }
 
         var probe = CreateProbe();
@@ -110,40 +110,16 @@ public class Cod4xCvarProbeTests
                 Times.Once,
                 $"Expected probe to read {cvar} exactly once");
         }
+
+        _mockRconApi.Verify(
+            r => r.GetDvar(_serverId, "sv_legacymode", It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
-    public async Task ProbeAsync_LogsWarning_WhenSvLegacyModeIsNonZero()
-    {
-        // Arrange — sv_legacymode reports "1", others are benign
-        _mockRconApi.Setup(r => r.GetDvar(_serverId, "sv_legacymode", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessResult("sv_legacymode", "1"));
-        _mockRconApi.Setup(r => r.GetDvar(_serverId, "g_logSync", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessResult("g_logSync", "3"));
-        _mockRconApi.Setup(r => r.GetDvar(_serverId, "g_logTimeStampInSeconds", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessResult("g_logTimeStampInSeconds", "1"));
-        _mockRconApi.Setup(r => r.GetDvar(_serverId, "logfile", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessResult("logfile", "2"));
-
-        var probe = CreateProbe();
-
-        // Act
-        await probe.ProbeAsync(CreateContext());
-
-        // Assert — exactly one Warning carrying the Cod4xCvarMismatch event name
-        var warnings = _logger.Entries
-            .Where(e => e.Level == LogLevel.Warning && e.Message.Contains(Cod4xCvarProbe.MismatchEventName, StringComparison.Ordinal))
-            .ToList();
-        Assert.Single(warnings);
-        Assert.Contains("sv_legacymode", warnings[0].Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task ProbeAsync_DoesNotLogMismatch_WhenSvLegacyModeIsZero()
+    public async Task ProbeAsync_DoesNotLogCod4xCvarMismatch()
     {
         // Arrange — every cvar returns benign values
-        _mockRconApi.Setup(r => r.GetDvar(_serverId, "sv_legacymode", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessResult("sv_legacymode", "0"));
         _mockRconApi.Setup(r => r.GetDvar(_serverId, "g_logSync", It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessResult("g_logSync", "3"));
         _mockRconApi.Setup(r => r.GetDvar(_serverId, "g_logTimeStampInSeconds", It.IsAny<CancellationToken>()))
@@ -159,18 +135,16 @@ public class Cod4xCvarProbeTests
         // Assert — no Cod4xCvarMismatch warning was emitted
         Assert.DoesNotContain(
             _logger.Entries,
-            e => e.Message.Contains(Cod4xCvarProbe.MismatchEventName, StringComparison.Ordinal));
+            e => e.Message.Contains("Cod4xCvarMismatch", StringComparison.Ordinal));
     }
 
     [Fact]
     public async Task ProbeAsync_LogsWarningAndContinues_WhenApiReturnsFailure()
     {
-        // Arrange — sv_legacymode read fails, the others succeed
+        // Arrange — one cvar read fails, the others succeed
         var failedResult = new ApiResult<DvarValueDto>(HttpStatusCode.NotFound, null);
-        _mockRconApi.Setup(r => r.GetDvar(_serverId, "sv_legacymode", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(failedResult);
         _mockRconApi.Setup(r => r.GetDvar(_serverId, "g_logSync", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessResult("g_logSync", "3"));
+            .ReturnsAsync(failedResult);
         _mockRconApi.Setup(r => r.GetDvar(_serverId, "g_logTimeStampInSeconds", It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessResult("g_logTimeStampInSeconds", "1"));
         _mockRconApi.Setup(r => r.GetDvar(_serverId, "logfile", It.IsAny<CancellationToken>()))
@@ -181,7 +155,7 @@ public class Cod4xCvarProbeTests
         // Act
         await probe.ProbeAsync(CreateContext());
 
-        // Assert — all four cvars were attempted (probe did not abort)
+        // Assert — all probed cvars were attempted (probe did not abort)
         foreach (var cvar in Cod4xCvarProbe.ProbedCvars)
         {
             _mockRconApi.Verify(
@@ -214,11 +188,11 @@ public class Cod4xCvarProbeTests
     [Fact]
     public async Task ProbeAsync_RunsOnlyOnce_PerServer()
     {
-        // Arrange — every probed cvar returns "0" so the probe is a no-op mismatch-wise
+        // Arrange — every probed cvar returns a benign value
         foreach (var cvar in Cod4xCvarProbe.ProbedCvars)
         {
             _mockRconApi.Setup(r => r.GetDvar(_serverId, cvar, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(SuccessResult(cvar, "0"));
+                .ReturnsAsync(SuccessResult(cvar, "1"));
         }
 
         var probe = CreateProbe();

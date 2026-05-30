@@ -3,8 +3,7 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 /// <summary>
 /// One-shot probe that reads a known-good set of cvars from a CoD4x game server via
 /// the Servers Integration RCON API. Used to surface server-side configuration drift
-/// (e.g. <c>sv_legacymode</c> left enabled) that would otherwise silently break
-/// log parsing or ban-file sync.
+/// that could otherwise silently break log parsing or ban-file sync.
 /// </summary>
 /// <remarks>
 /// Probe-and-log only — no enforcement. Each agent lifecycle probes once, the first
