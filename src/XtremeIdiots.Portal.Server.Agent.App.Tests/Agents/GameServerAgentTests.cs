@@ -96,6 +96,13 @@ public class GameServerAgentTests
             p => p.PublishServerConnectedAsync(
                 _testContext.ServerId, _testContext.GameType, It.IsAny<long>(), It.IsAny<CancellationToken>()),
             Times.Once);
+
+        _mockBroadcastService.Verify(
+            r => r.SayAsync(
+                _testContext.ServerId,
+                It.Is<string>(msg => msg.StartsWith("^4[^1>XI< BOT^4]^7 Agent is now online (version ")),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -638,7 +645,15 @@ public class GameServerAgentTests
 
         await agent.RunAsync(cts.Token);
 
-        _mockBroadcastService.Verify(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockBroadcastService.Verify(
+            r => r.SayAsync(
+                context.ServerId,
+                It.Is<string>(msg => msg.StartsWith("^4[^1>XI< BOT^4]^7 Agent is now online (version ")),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockBroadcastService.Verify(
+            r => r.SayAsync(context.ServerId, "message-1", It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

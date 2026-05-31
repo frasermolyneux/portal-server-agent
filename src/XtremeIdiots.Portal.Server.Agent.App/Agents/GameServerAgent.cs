@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using MX.Api.Abstractions;
 
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
@@ -103,6 +105,9 @@ public sealed class GameServerAgent
             };
 
             await _tailer.ConnectAsync(ftpConfig, startOffset, ct);
+
+            // 2a. Broadcast startup status once after successful connection.
+            await SendStartupOnlineBroadcastAsync(ct);
 
             // 3. Publish server connected event
             await _publisher.PublishServerConnectedAsync(_context.ServerId, _context.GameType, NextSequenceId(), ct);
@@ -225,11 +230,8 @@ public sealed class GameServerAgent
         }
 
         var index = _nextBroadcastIndex % enabledMessages.Length;
-        var prefix = _context.AgentNamePrefix?.Trim() ?? string.Empty;
         var messageBody = enabledMessages[index].Message;
-        var message = string.IsNullOrWhiteSpace(prefix)
-            ? messageBody
-            : $"{prefix} {messageBody}";
+        var message = BuildPrefixedMessage(messageBody);
 
         ApiResult result;
 
@@ -256,6 +258,41 @@ public sealed class GameServerAgent
 
         _nextBroadcastIndex++;
         _lastBroadcastAt = DateTime.UtcNow;
+    }
+
+    private async Task SendStartupOnlineBroadcastAsync(CancellationToken ct)
+    {
+        var version = typeof(GameServerAgent).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion
+            ?? typeof(GameServerAgent).Assembly.GetName().Version?.ToString()
+            ?? "unknown";
+
+        var message = BuildPrefixedMessage($"Agent is now online (version {version})");
+
+        try
+        {
+            var result = await _broadcastService.SayAsync(_context.ServerId, message, ct);
+            if (!result.IsSuccess)
+            {
+                _logger.LogWarning(
+                    "[{Title}] Startup online broadcast failed: status {StatusCode}",
+                    _context.Title,
+                    result.StatusCode);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[{Title}] Startup online broadcast threw", _context.Title);
+        }
+    }
+
+    private string BuildPrefixedMessage(string messageBody)
+    {
+        var prefix = _context.AgentNamePrefix?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(prefix)
+            ? messageBody
+            : $"{prefix} {messageBody}";
     }
 
     private long NextSequenceId() => Interlocked.Increment(ref _sequenceId);
