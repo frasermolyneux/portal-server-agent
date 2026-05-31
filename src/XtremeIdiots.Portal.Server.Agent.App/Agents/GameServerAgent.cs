@@ -1,4 +1,5 @@
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
@@ -18,6 +19,7 @@ public sealed class GameServerAgent
     private readonly IOffsetStore _offsetStore;
     private readonly IServerLock _serverLock;
     private readonly IServerSyncService _syncService;
+    private readonly IRconApi _rconApi;
     private readonly ICod4xCvarProbe _cvarProbe;
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILogger _logger;
@@ -28,6 +30,8 @@ public sealed class GameServerAgent
     private DateTime _lastLeaseRenew = DateTime.MinValue;
     private DateTime _lastRconSync = DateTime.MinValue;
     private DateTime _lastBanFileCheck = DateTime.MinValue;
+    private DateTime _lastBroadcastAt = DateTime.MinValue;
+    private int _nextBroadcastIndex;
 
     internal static readonly TimeSpan OffsetSaveInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan StatusPublishInterval = TimeSpan.FromSeconds(60);
@@ -44,6 +48,7 @@ public sealed class GameServerAgent
         IOffsetStore offsetStore,
         IServerLock serverLock,
         IServerSyncService syncService,
+        IRconApi rconApi,
         ICod4xCvarProbe cvarProbe,
         IBanFileWatcher banFileWatcher,
         ILogger logger)
@@ -55,6 +60,7 @@ public sealed class GameServerAgent
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
         _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
+        _rconApi = rconApi ?? throw new ArgumentNullException(nameof(rconApi));
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -160,6 +166,8 @@ public sealed class GameServerAgent
                     {
                         await CheckBanFileAsync(ct);
                     }
+
+                    await SendScheduledBroadcastAsync(ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -188,6 +196,47 @@ public sealed class GameServerAgent
             await _serverLock.ReleaseAsync(_context.ServerId, CancellationToken.None);
 
             _logger.LogInformation("[{Title}] Agent stopped for server {ServerId}", _context.Title, _context.ServerId);
+        }
+    }
+
+    private async Task SendScheduledBroadcastAsync(CancellationToken ct)
+    {
+        var broadcastSettings = _context.Broadcasts;
+        if (!broadcastSettings.Enabled)
+        {
+            return;
+        }
+
+        var enabledMessages = broadcastSettings.Messages
+            .Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Message))
+            .ToArray();
+
+        if (enabledMessages.Length == 0)
+        {
+            return;
+        }
+
+        var interval = TimeSpan.FromSeconds(Math.Max(broadcastSettings.IntervalSeconds, 1));
+        if (DateTime.UtcNow - _lastBroadcastAt <= interval)
+        {
+            return;
+        }
+
+        var index = _nextBroadcastIndex % enabledMessages.Length;
+        var message = enabledMessages[index].Message;
+
+        try
+        {
+            await _rconApi.Say(_context.ServerId, message);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[{Title}] Scheduled broadcast send failed", _context.Title);
+        }
+        finally
+        {
+            _nextBroadcastIndex++;
+            _lastBroadcastAt = DateTime.UtcNow;
         }
     }
 

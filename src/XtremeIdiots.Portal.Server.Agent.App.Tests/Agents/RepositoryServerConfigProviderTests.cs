@@ -81,6 +81,129 @@ public class RepositoryServerConfigProviderTests
         Assert.Equal(28960, server.QueryPort);
         Assert.Equal("secret", server.RconPassword);
         Assert.True(server.BanFileSyncEnabled);
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
+        Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_ParsesBroadcastSettings()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Broadcast Server", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                enabled = true,
+                intervalSeconds = 120,
+                messages = new object[]
+                {
+                    new { message = "Message A", enabled = true },
+                    new { message = "Message B", enabled = false }
+                }
+            })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.True(server.Broadcasts.Enabled);
+        Assert.Equal(120, server.Broadcasts.IntervalSeconds);
+        Assert.Equal(2, server.Broadcasts.Messages.Count);
+        Assert.Equal("Message A", server.Broadcasts.Messages[0].Message);
+        Assert.True(server.Broadcasts.Messages[0].Enabled);
+        Assert.Equal("Message B", server.Broadcasts.Messages[1].Message);
+        Assert.False(server.Broadcasts.Messages[1].Enabled);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_InvalidBroadcastSettings_DefaultsSafely()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Broadcast Defaults", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                enabled = "invalid",
+                intervalSeconds = "bad",
+                messages = new object[]
+                {
+                    new { message = "Message A", enabled = "bad" },
+                    new { message = "", enabled = true },
+                    new { enabled = true }
+                }
+            })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
+        var message = Assert.Single(server.Broadcasts.Messages);
+        Assert.Equal("Message A", message.Message);
+        Assert.False(message.Enabled);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_BroadcastChanges_ChangeConfigHash()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Broadcast Hash", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                enabled = true,
+                intervalSeconds = 60,
+                messages = new object[] { new { message = "Message A", enabled = true } }
+            })
+        });
+
+        var provider = CreateProvider();
+        var first = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                enabled = true,
+                intervalSeconds = 60,
+                messages = new object[] { new { message = "Message B", enabled = true } }
+            })
+        });
+
+        var second = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.NotEqual(first.Single().ConfigHash, second.Single().ConfigHash);
     }
 
     [Fact]

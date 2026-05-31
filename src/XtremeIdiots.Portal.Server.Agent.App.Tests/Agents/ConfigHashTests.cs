@@ -120,6 +120,32 @@ public class ConfigHashTests
         Assert.Equal(64, hash.Length);
     }
 
+    [Fact]
+    public void ComputeConfigHash_ChangesWhenBroadcastHashInputsChange()
+    {
+        var configs = CreateSampleConfigs();
+        var extras1 = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["broadcasts.enabled"] = "True",
+            ["broadcasts.intervalSeconds"] = "60",
+            ["broadcasts.messages[0].message"] = "Message A",
+            ["broadcasts.messages[0].enabled"] = "True",
+        };
+
+        var extras2 = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["broadcasts.enabled"] = "True",
+            ["broadcasts.intervalSeconds"] = "60",
+            ["broadcasts.messages[0].message"] = "Message A",
+            ["broadcasts.messages[0].enabled"] = "False",
+        };
+
+        var hash1 = RepositoryServerConfigProvider.ComputeConfigHash(configs, extras1);
+        var hash2 = RepositoryServerConfigProvider.ComputeConfigHash(configs, extras2);
+
+        Assert.NotEqual(hash1, hash2);
+    }
+
     private static Dictionary<string, Dictionary<string, JsonElement>> CreateSampleConfigs()
     {
         return new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase)

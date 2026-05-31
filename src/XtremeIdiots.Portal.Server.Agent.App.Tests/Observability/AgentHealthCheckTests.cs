@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
 
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
@@ -24,6 +25,7 @@ public class AgentHealthCheckTests
             new Mock<IOffsetStore>().Object,
             new Mock<IServerLock>().Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<IRconApi>().Object,
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
@@ -64,6 +66,7 @@ public class AgentHealthCheckTests
             new Mock<IOffsetStore>().Object,
             new Mock<IServerLock>().Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<IRconApi>().Object,
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
@@ -158,6 +161,7 @@ public class AgentHealthCheckTests
             mockOffsetStore.Object,
             mockServerLock.Object,
             new Mock<IServerSyncService>().Object,
+            new Mock<IRconApi>().Object,
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             NullLoggerFactory.Instance,
