@@ -225,7 +225,11 @@ public sealed class GameServerAgent
         }
 
         var index = _nextBroadcastIndex % enabledMessages.Length;
-        var message = enabledMessages[index].Message;
+        var prefix = _context.AgentNamePrefix?.Trim() ?? string.Empty;
+        var messageBody = enabledMessages[index].Message;
+        var message = string.IsNullOrWhiteSpace(prefix)
+            ? messageBody
+            : $"{prefix} {messageBody}";
 
         ApiResult result;
 

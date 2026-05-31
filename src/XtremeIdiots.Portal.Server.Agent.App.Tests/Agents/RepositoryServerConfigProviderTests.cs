@@ -24,6 +24,8 @@ public class RepositoryServerConfigProviderTests
     private readonly Mock<IGameServersApi> _mockGameServersApi = new();
     private readonly Mock<IVersionedGameServerConfigurationsApi> _mockVersionedConfigs = new();
     private readonly Mock<IGameServerConfigurationsApi> _mockConfigApi = new();
+    private readonly Mock<IVersionedGlobalConfigurationsApi> _mockVersionedGlobalConfigs = new();
+    private readonly Mock<IGlobalConfigurationsApi> _mockGlobalConfigApi = new();
     private readonly ILogger<RepositoryServerConfigProvider> _logger = NullLogger<RepositoryServerConfigProvider>.Instance;
 
     public RepositoryServerConfigProviderTests()
@@ -32,10 +34,19 @@ public class RepositoryServerConfigProviderTests
         _mockVersioned.Setup(v => v.V1).Returns(_mockGameServersApi.Object);
         _mockClient.Setup(c => c.GameServerConfigurations).Returns(_mockVersionedConfigs.Object);
         _mockVersionedConfigs.Setup(v => v.V1).Returns(_mockConfigApi.Object);
+        _mockClient.Setup(c => c.GlobalConfigurations).Returns(_mockVersionedGlobalConfigs.Object);
+        _mockVersionedGlobalConfigs.Setup(v => v.V1).Returns(_mockGlobalConfigApi.Object);
 
         // Default: config API returns empty for any server (server will be skipped)
         _mockConfigApi
             .Setup(a => a.GetConfigurations(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<ConfigurationDto>>(
+                HttpStatusCode.OK,
+                new ApiResponse<CollectionModel<ConfigurationDto>>(
+                    new CollectionModel<ConfigurationDto>(Array.Empty<ConfigurationDto>()))));
+
+        _mockGlobalConfigApi
+            .Setup(a => a.GetConfigurations(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult<CollectionModel<ConfigurationDto>>(
                 HttpStatusCode.OK,
                 new ApiResponse<CollectionModel<ConfigurationDto>>(
@@ -81,9 +92,88 @@ public class RepositoryServerConfigProviderTests
         Assert.Equal(28960, server.QueryPort);
         Assert.Equal("secret", server.RconPassword);
         Assert.True(server.BanFileSyncEnabled);
+        Assert.Equal(ServerContext.DefaultAgentNamePrefix, server.AgentNamePrefix);
         Assert.False(server.Broadcasts.Enabled);
         Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
         Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesGlobalAgentNamePrefix_WhenServerOverrideMissing()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Global Prefix Server", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupGlobalConfigApi(new[]
+        {
+            CreateConfigDto("agent", new { agentName = "^2[Global Prefix]^7" })
+        });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Equal("^2[Global Prefix]^7", Assert.Single(result).AgentNamePrefix);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesServerAgentNamePrefixOverride_WhenPresent()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Server Prefix Server", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupGlobalConfigApi(new[]
+        {
+            CreateConfigDto("agent", new { agentName = "^2[Global Prefix]^7" })
+        });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log", agentName = "^1[Server Override]^7" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Equal("^1[Server Override]^7", Assert.Single(result).AgentNamePrefix);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesDefaultAgentNamePrefix_WhenGlobalPrefixWhitespace()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Whitespace Prefix Server", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupGlobalConfigApi(new[]
+        {
+            CreateConfigDto("agent", new { agentName = "   " })
+        });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Equal(ServerContext.DefaultAgentNamePrefix, Assert.Single(result).AgentNamePrefix);
     }
 
     [Fact]
@@ -123,6 +213,38 @@ public class RepositoryServerConfigProviderTests
         Assert.True(server.Broadcasts.Messages[0].Enabled);
         Assert.Equal("Message B", server.Broadcasts.Messages[1].Message);
         Assert.False(server.Broadcasts.Messages[1].Enabled);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_BroadcastMessageEnabledDefaultsToTrue_WhenMissing()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Broadcast Missing Enabled", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess(new[] { dto });
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                enabled = true,
+                intervalSeconds = 120,
+                messages = new object[]
+                {
+                    new { message = "Message A" }
+                }
+            })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.True(Assert.Single(server.Broadcasts.Messages).Enabled);
     }
 
     [Fact]
@@ -483,6 +605,17 @@ public class RepositoryServerConfigProviderTests
 
         _mockConfigApi
             .Setup(a => a.GetConfigurations(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(apiResult);
+    }
+
+    private void SetupGlobalConfigApi(ConfigurationDto[] configs)
+    {
+        var collection = new CollectionModel<ConfigurationDto>(configs);
+        var apiResponse = new ApiResponse<CollectionModel<ConfigurationDto>>(collection);
+        var apiResult = new ApiResult<CollectionModel<ConfigurationDto>>(HttpStatusCode.OK, apiResponse);
+
+        _mockGlobalConfigApi
+            .Setup(a => a.GetConfigurations(It.IsAny<CancellationToken>()))
             .ReturnsAsync(apiResult);
     }
 

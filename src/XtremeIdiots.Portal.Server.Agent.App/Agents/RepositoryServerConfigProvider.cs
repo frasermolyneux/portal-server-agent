@@ -29,6 +29,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
     {
         try
         {
+            var globalAgentNamePrefix = await FetchGlobalAgentNamePrefixAsync(ct);
+
             var result = await _repositoryClient.GameServers.V1.GetGameServers(
                 gameTypes: null,
                 gameServerIds: null,
@@ -78,6 +80,13 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 }
 
                 var broadcasts = ParseBroadcastSettings(configs);
+                var agentNamePrefix = globalAgentNamePrefix;
+                if (TryGetStringValue(configs, "agent", "agentName", out var serverAgentName) &&
+                    !string.IsNullOrWhiteSpace(serverAgentName))
+                {
+                    agentNamePrefix = serverAgentName;
+                }
+
                 var banFileRootPath = string.IsNullOrWhiteSpace(dto.BanFileRootPath) ? "/" : dto.BanFileRootPath;
 
                 // Include DTO-level toggles that affect the agent loop in the hash so the
@@ -90,6 +99,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     ["dto.BanFileSyncEnabled"] = dto.BanFileSyncEnabled.ToString(),
                     ["dto.BanFileRootPath"] = banFileRootPath,
                 };
+                configHashInputs["agent.agentNamePrefix"] = agentNamePrefix;
                 AppendBroadcastHashFields(configHashInputs, broadcasts);
                 var configHash = ComputeConfigHash(configs, configHashInputs);
 
@@ -110,6 +120,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     RconEnabled = dto.RconEnabled,
                     BanFileSyncEnabled = dto.BanFileSyncEnabled,
                     BanFileRootPath = banFileRootPath,
+                    AgentNamePrefix = agentNamePrefix,
                     Broadcasts = broadcasts,
                     ConfigHash = configHash
                 });
@@ -123,6 +134,51 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             _logger.LogError(ex, "Unexpected error fetching servers from Repository API");
             return Array.Empty<ServerContext>();
         }
+    }
+
+    private async Task<string> FetchGlobalAgentNamePrefixAsync(CancellationToken ct)
+    {
+        try
+        {
+            var result = await _repositoryClient.GlobalConfigurations.V1.GetConfigurations(ct);
+            if (!result.IsSuccess || result.Result?.Data?.Items is null)
+            {
+                return ServerContext.DefaultAgentNamePrefix;
+            }
+
+            var agentConfig = result.Result.Data.Items
+                .FirstOrDefault(x => string.Equals(x.Namespace, "agent", StringComparison.OrdinalIgnoreCase));
+
+            if (agentConfig is null || string.IsNullOrWhiteSpace(agentConfig.Configuration))
+            {
+                return ServerContext.DefaultAgentNamePrefix;
+            }
+
+            try
+            {
+                var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(agentConfig.Configuration);
+                if (properties is not null &&
+                    properties.TryGetValue("agentName", out var agentNameElement) &&
+                    agentNameElement.ValueKind == JsonValueKind.String)
+                {
+                    var parsed = agentNameElement.GetString();
+                    if (!string.IsNullOrWhiteSpace(parsed))
+                    {
+                        return parsed;
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Invalid global config payload; fall back to default prefix.
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to fetch global agent prefix, using default");
+        }
+
+        return ServerContext.DefaultAgentNamePrefix;
     }
 
     /// <summary>
@@ -254,9 +310,9 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     continue;
                 }
 
-                var messageEnabled = item.TryGetProperty("enabled", out var enabledElement) &&
-                                     enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
-                                     enabledElement.GetBoolean();
+                var messageEnabled = !item.TryGetProperty("enabled", out var enabledElement) ||
+                                     (enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                                      enabledElement.GetBoolean());
 
                 parsedMessages.Add(new BroadcastMessage
                 {

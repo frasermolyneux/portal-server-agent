@@ -6,6 +6,7 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 public sealed record ServerContext
 {
     public const int DefaultBroadcastIntervalSeconds = 500;
+    public const string DefaultAgentNamePrefix = "^4[^1>XI< BOT^4]^7";
 
     public required Guid ServerId { get; init; }
     public required string GameType { get; init; }
@@ -42,6 +43,12 @@ public sealed record ServerContext
     /// Used by the orchestrator to detect config changes and restart the agent.
     /// </summary>
     public required string ConfigHash { get; init; }
+
+    /// <summary>
+    /// Prefix prepended to each broadcast message. Resolved from per-server override
+    /// first, then global configuration fallback.
+    /// </summary>
+    public string AgentNamePrefix { get; init; } = DefaultAgentNamePrefix;
 
     /// <summary>
     /// Broadcast message scheduling configuration (from "broadcasts" namespace).

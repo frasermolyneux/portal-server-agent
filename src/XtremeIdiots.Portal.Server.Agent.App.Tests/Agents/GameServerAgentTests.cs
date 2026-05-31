@@ -580,6 +580,7 @@ public class GameServerAgentTests
     {
         var context = _testContext with
         {
+            AgentNamePrefix = "^1[Agent]^7",
             Broadcasts = new BroadcastSettings
             {
                 Enabled = true,
@@ -606,9 +607,9 @@ public class GameServerAgentTests
 
         await agent.RunAsync(cts.Token);
 
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-1", It.IsAny<CancellationToken>()), Times.AtLeastOnce);
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-2", It.IsAny<CancellationToken>()), Times.Once);
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-disabled", It.IsAny<CancellationToken>()), Times.Never);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "^1[Agent]^7 message-1", It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "^1[Agent]^7 message-2", It.IsAny<CancellationToken>()), Times.Once);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "^1[Agent]^7 message-disabled", It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -645,6 +646,7 @@ public class GameServerAgentTests
     {
         var context = _testContext with
         {
+            AgentNamePrefix = "^3[RetryAgent]^7",
             Broadcasts = new BroadcastSettings
             {
                 Enabled = true,
@@ -672,7 +674,7 @@ public class GameServerAgentTests
 
         await agent.RunAsync(cts.Token);
 
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-1", It.IsAny<CancellationToken>()), Times.AtLeast(2));
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-2", It.IsAny<CancellationToken>()), Times.Never);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "^3[RetryAgent]^7 message-1", It.IsAny<CancellationToken>()), Times.AtLeast(2));
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "^3[RetryAgent]^7 message-2", It.IsAny<CancellationToken>()), Times.Never);
     }
 }
