@@ -236,6 +236,7 @@ public sealed class GameServerAgent
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "[{Title}] Scheduled broadcast send failed", _context.Title);
+            _lastBroadcastAt = DateTime.UtcNow;
             return;
         }
 
@@ -245,6 +246,7 @@ public sealed class GameServerAgent
                 "[{Title}] Scheduled broadcast send failed: status {StatusCode}",
                 _context.Title,
                 result.StatusCode);
+            _lastBroadcastAt = DateTime.UtcNow;
             return;
         }
 
