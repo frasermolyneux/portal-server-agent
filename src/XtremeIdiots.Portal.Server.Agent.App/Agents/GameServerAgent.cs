@@ -1,4 +1,7 @@
+using MX.Api.Abstractions;
+
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
@@ -18,6 +21,7 @@ public sealed class GameServerAgent
     private readonly IOffsetStore _offsetStore;
     private readonly IServerLock _serverLock;
     private readonly IServerSyncService _syncService;
+    private readonly IRconBroadcastService _broadcastService;
     private readonly ICod4xCvarProbe _cvarProbe;
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILogger _logger;
@@ -28,6 +32,8 @@ public sealed class GameServerAgent
     private DateTime _lastLeaseRenew = DateTime.MinValue;
     private DateTime _lastRconSync = DateTime.MinValue;
     private DateTime _lastBanFileCheck = DateTime.MinValue;
+    private DateTime _lastBroadcastAt = DateTime.MinValue;
+    private int _nextBroadcastIndex;
 
     internal static readonly TimeSpan OffsetSaveInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan StatusPublishInterval = TimeSpan.FromSeconds(60);
@@ -44,6 +50,7 @@ public sealed class GameServerAgent
         IOffsetStore offsetStore,
         IServerLock serverLock,
         IServerSyncService syncService,
+        IRconBroadcastService broadcastService,
         ICod4xCvarProbe cvarProbe,
         IBanFileWatcher banFileWatcher,
         ILogger logger)
@@ -55,6 +62,7 @@ public sealed class GameServerAgent
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
         _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
+        _broadcastService = broadcastService ?? throw new ArgumentNullException(nameof(broadcastService));
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -160,6 +168,8 @@ public sealed class GameServerAgent
                     {
                         await CheckBanFileAsync(ct);
                     }
+
+                    await SendScheduledBroadcastAsync(ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -189,6 +199,59 @@ public sealed class GameServerAgent
 
             _logger.LogInformation("[{Title}] Agent stopped for server {ServerId}", _context.Title, _context.ServerId);
         }
+    }
+
+    private async Task SendScheduledBroadcastAsync(CancellationToken ct)
+    {
+        var broadcastSettings = _context.Broadcasts;
+        if (!broadcastSettings.Enabled)
+        {
+            return;
+        }
+
+        var enabledMessages = broadcastSettings.Messages
+            .Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Message))
+            .ToArray();
+
+        if (enabledMessages.Length == 0)
+        {
+            return;
+        }
+
+        var interval = TimeSpan.FromSeconds(Math.Max(broadcastSettings.IntervalSeconds, 1));
+        if (DateTime.UtcNow - _lastBroadcastAt <= interval)
+        {
+            return;
+        }
+
+        var index = _nextBroadcastIndex % enabledMessages.Length;
+        var message = enabledMessages[index].Message;
+
+        ApiResult result;
+
+        try
+        {
+            result = await _broadcastService.SayAsync(_context.ServerId, message, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[{Title}] Scheduled broadcast send failed", _context.Title);
+            _lastBroadcastAt = DateTime.UtcNow;
+            return;
+        }
+
+        if (!result.IsSuccess)
+        {
+            _logger.LogWarning(
+                "[{Title}] Scheduled broadcast send failed: status {StatusCode}",
+                _context.Title,
+                result.StatusCode);
+            _lastBroadcastAt = DateTime.UtcNow;
+            return;
+        }
+
+        _nextBroadcastIndex++;
+        _lastBroadcastAt = DateTime.UtcNow;
     }
 
     private long NextSequenceId() => Interlocked.Increment(ref _sequenceId);

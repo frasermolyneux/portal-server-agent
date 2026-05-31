@@ -77,18 +77,21 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     continue;
                 }
 
+                var broadcasts = ParseBroadcastSettings(configs);
                 var banFileRootPath = string.IsNullOrWhiteSpace(dto.BanFileRootPath) ? "/" : dto.BanFileRootPath;
 
                 // Include DTO-level toggles that affect the agent loop in the hash so the
                 // orchestrator restarts the agent when an admin changes them. ComputeConfigHash
                 // by itself only sees the per-server config namespaces.
-                var configHash = ComputeConfigHash(configs, new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                var configHashInputs = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["dto.FtpEnabled"] = dto.FtpEnabled.ToString(),
                     ["dto.RconEnabled"] = dto.RconEnabled.ToString(),
                     ["dto.BanFileSyncEnabled"] = dto.BanFileSyncEnabled.ToString(),
                     ["dto.BanFileRootPath"] = banFileRootPath,
-                });
+                };
+                AppendBroadcastHashFields(configHashInputs, broadcasts);
+                var configHash = ComputeConfigHash(configs, configHashInputs);
 
                 servers.Add(new ServerContext
                 {
@@ -107,6 +110,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     RconEnabled = dto.RconEnabled,
                     BanFileSyncEnabled = dto.BanFileSyncEnabled,
                     BanFileRootPath = banFileRootPath,
+                    Broadcasts = broadcasts,
                     ConfigHash = configHash
                 });
             }
@@ -213,6 +217,106 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 return true;
         }
         return false;
+    }
+
+    private static BroadcastSettings ParseBroadcastSettings(
+        Dictionary<string, Dictionary<string, JsonElement>> configs)
+    {
+        if (!configs.TryGetValue("broadcasts", out var namespaceConfig))
+        {
+            return new BroadcastSettings();
+        }
+
+        _ = TryGetBoolValue(configs, "broadcasts", "enabled", out var enabled);
+
+        var intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
+        if (TryGetIntValue(configs, "broadcasts", "intervalSeconds", out var parsedInterval) && parsedInterval > 0)
+        {
+            intervalSeconds = parsedInterval;
+        }
+
+        IReadOnlyList<BroadcastMessage> messages = Array.Empty<BroadcastMessage>();
+        if (namespaceConfig.TryGetValue("messages", out var messagesElement) && messagesElement.ValueKind == JsonValueKind.Array)
+        {
+            var parsedMessages = new List<BroadcastMessage>();
+            foreach (var item in messagesElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object ||
+                    !item.TryGetProperty("message", out var messageElement) ||
+                    messageElement.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var messageText = messageElement.GetString();
+                if (string.IsNullOrWhiteSpace(messageText))
+                {
+                    continue;
+                }
+
+                var messageEnabled = item.TryGetProperty("enabled", out var enabledElement) &&
+                                     enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                                     enabledElement.GetBoolean();
+
+                parsedMessages.Add(new BroadcastMessage
+                {
+                    Message = messageText,
+                    Enabled = messageEnabled
+                });
+            }
+
+            messages = parsedMessages;
+        }
+
+        return new BroadcastSettings
+        {
+            Enabled = enabled,
+            IntervalSeconds = intervalSeconds,
+            Messages = messages
+        };
+    }
+
+    private static bool TryGetBoolValue(
+        Dictionary<string, Dictionary<string, JsonElement>> configs,
+        string ns, string key, out bool value)
+    {
+        value = false;
+        if (configs.TryGetValue(ns, out var nsConfig) &&
+            nsConfig.TryGetValue(key, out var element))
+        {
+            if (element.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                value = element.GetBoolean();
+                return true;
+            }
+
+            if (element.ValueKind == JsonValueKind.String && bool.TryParse(element.GetString(), out value))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AppendBroadcastHashFields(
+        SortedDictionary<string, string>? configHashInputs,
+        BroadcastSettings broadcasts)
+    {
+        if (configHashInputs is null)
+        {
+            return;
+        }
+
+        configHashInputs["broadcasts.enabled"] = broadcasts.Enabled.ToString();
+        configHashInputs["broadcasts.intervalSeconds"] = broadcasts.IntervalSeconds.ToString();
+
+        for (var index = 0; index < broadcasts.Messages.Count; index++)
+        {
+            var message = broadcasts.Messages[index];
+            configHashInputs[$"broadcasts.messages[{index}].message"] = message.Message;
+            configHashInputs[$"broadcasts.messages[{index}].enabled"] = message.Enabled.ToString();
+        }
     }
 
     /// <summary>

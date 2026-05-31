@@ -1,8 +1,13 @@
+using System.Net;
+
 using Moq;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
+using MX.Api.Abstractions;
+
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
@@ -39,6 +44,7 @@ public class GameServerAgentTests
     private readonly Mock<IOffsetStore> _mockOffsetStore = new();
     private readonly Mock<IServerLock> _mockServerLock = new();
     private readonly Mock<IServerSyncService> _mockSyncService = new();
+    private readonly Mock<IRconBroadcastService> _mockBroadcastService = new();
     private readonly Mock<ICod4xCvarProbe> _mockCvarProbe = new();
     private readonly Mock<IBanFileWatcher> _mockBanFileWatcher = new();
     private readonly ILogger _logger = NullLogger.Instance;
@@ -58,11 +64,13 @@ public class GameServerAgentTests
         // Default: RCON sync returns no IP-resolved events
         _mockSyncService.Setup(s => s.SyncAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<XtremeIdiots.Portal.Server.Agent.App.Parsing.PlayerIpResolvedEvent>)Array.Empty<XtremeIdiots.Portal.Server.Agent.App.Parsing.PlayerIpResolvedEvent>());
+        _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
     }
 
     private GameServerAgent CreateAgent() =>
         new(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
 
     [Fact]
     public async Task RunAsync_PublishesServerConnectedOnStart()
@@ -366,7 +374,7 @@ public class GameServerAgentTests
             .ReturnsAsync((SavedOffset?)null);
 
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 
@@ -565,5 +573,106 @@ public class GameServerAgentTests
             p => p.PublishAsync(testEvent, _testContext.ServerId, _testContext.GameType,
                 It.IsAny<long>(), It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_BroadcastsEnabled_RotatesEnabledMessages()
+    {
+        var context = _testContext with
+        {
+            Broadcasts = new BroadcastSettings
+            {
+                Enabled = true,
+                IntervalSeconds = 1,
+                Messages = new[]
+                {
+                    new BroadcastMessage { Message = "message-1", Enabled = true },
+                    new BroadcastMessage { Message = "message-disabled", Enabled = false },
+                    new BroadcastMessage { Message = "message-2", Enabled = true }
+                }
+            }
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2600));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
+
+        await agent.RunAsync(cts.Token);
+
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-1", It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-2", It.IsAny<CancellationToken>()), Times.Once);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-disabled", It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_BroadcastsDisabled_DoesNotSendBroadcasts()
+    {
+        var context = _testContext with
+        {
+            Broadcasts = new BroadcastSettings
+            {
+                Enabled = false,
+                IntervalSeconds = 1,
+                Messages = [new BroadcastMessage { Message = "message-1", Enabled = true }]
+            }
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
+
+        await agent.RunAsync(cts.Token);
+
+        _mockBroadcastService.Verify(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_BroadcastSendFails_RetriesSameMessageWithoutRotating()
+    {
+        var context = _testContext with
+        {
+            Broadcasts = new BroadcastSettings
+            {
+                Enabled = true,
+                IntervalSeconds = 1,
+                Messages =
+                [
+                    new BroadcastMessage { Message = "message-1", Enabled = true },
+                    new BroadcastMessage { Message = "message-2", Enabled = true }
+                ]
+            }
+        };
+
+        _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult(HttpStatusCode.InternalServerError));
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2500));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
+
+        await agent.RunAsync(cts.Token);
+
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-1", It.IsAny<CancellationToken>()), Times.AtLeast(2));
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "message-2", It.IsAny<CancellationToken>()), Times.Never);
     }
 }

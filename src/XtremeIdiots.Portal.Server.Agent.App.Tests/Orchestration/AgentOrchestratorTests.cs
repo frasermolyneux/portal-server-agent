@@ -3,6 +3,7 @@ using Moq;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
@@ -21,6 +22,7 @@ public class AgentOrchestratorTests
     private readonly Mock<IOffsetStore> _mockOffsetStore = new();
     private readonly Mock<IServerLock> _mockServerLock = new();
     private readonly Mock<IServerSyncService> _mockSyncService = new();
+    private readonly Mock<IRconBroadcastService> _mockBroadcastService = new();
     private readonly Mock<ICod4xCvarProbe> _mockCvarProbe = new();
     private readonly Mock<IBanFileWatcher> _mockBanFileWatcher = new();
     private readonly ILoggerFactory _loggerFactory = NullLoggerFactory.Instance;
@@ -37,7 +39,7 @@ public class AgentOrchestratorTests
     private AgentOrchestrator CreateOrchestrator() =>
         new(_mockConfigProvider.Object, _mockTailerFactory.Object, _mockParserFactory.Object,
             _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object,
-            _mockSyncService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _loggerFactory, _logger);
+            _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _loggerFactory, _logger);
 
     [Fact]
     public async Task RefreshAgents_WithNoServers_StartsNoAgents()

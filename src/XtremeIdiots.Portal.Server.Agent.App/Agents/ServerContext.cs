@@ -5,6 +5,8 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 /// </summary>
 public sealed record ServerContext
 {
+    public const int DefaultBroadcastIntervalSeconds = 500;
+
     public required Guid ServerId { get; init; }
     public required string GameType { get; init; }
     public required string Title { get; init; }
@@ -40,4 +42,22 @@ public sealed record ServerContext
     /// Used by the orchestrator to detect config changes and restart the agent.
     /// </summary>
     public required string ConfigHash { get; init; }
+
+    /// <summary>
+    /// Broadcast message scheduling configuration (from "broadcasts" namespace).
+    /// </summary>
+    public BroadcastSettings Broadcasts { get; init; } = new();
+}
+
+public sealed record BroadcastSettings
+{
+    public bool Enabled { get; init; }
+    public int IntervalSeconds { get; init; } = ServerContext.DefaultBroadcastIntervalSeconds;
+    public IReadOnlyList<BroadcastMessage> Messages { get; init; } = Array.Empty<BroadcastMessage>();
+}
+
+public sealed record BroadcastMessage
+{
+    public required string Message { get; init; }
+    public bool Enabled { get; init; }
 }

@@ -119,6 +119,7 @@ builder.Services.AddSingleton<IEventPublisher, ServiceBusEventPublisher>();
 builder.Services.AddSingleton<IOffsetStore, BlobOffsetStore>();
 builder.Services.AddSingleton<IServerLock, BlobServerLock>();
 builder.Services.AddSingleton<IServerSyncService, ServerSyncService>();
+builder.Services.AddSingleton<IRconBroadcastService, RconBroadcastService>();
 builder.Services.AddSingleton<ICod4xCvarProbe, Cod4xCvarProbe>();
 builder.Services.AddSingleton<IBanFilePathResolver, BanFilePathResolver>();
 builder.Services.AddSingleton<IBanFileWatcher, BanFileWatcher>();
