@@ -1,3 +1,5 @@
+using MX.Api.Abstractions;
+
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
@@ -19,7 +21,7 @@ public sealed class GameServerAgent
     private readonly IOffsetStore _offsetStore;
     private readonly IServerLock _serverLock;
     private readonly IServerSyncService _syncService;
-    private readonly IRconApi _rconApi;
+    private readonly IRconBroadcastService _broadcastService;
     private readonly ICod4xCvarProbe _cvarProbe;
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILogger _logger;
@@ -48,7 +50,7 @@ public sealed class GameServerAgent
         IOffsetStore offsetStore,
         IServerLock serverLock,
         IServerSyncService syncService,
-        IRconApi rconApi,
+        IRconBroadcastService broadcastService,
         ICod4xCvarProbe cvarProbe,
         IBanFileWatcher banFileWatcher,
         ILogger logger)
@@ -60,7 +62,7 @@ public sealed class GameServerAgent
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
         _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
-        _rconApi = rconApi ?? throw new ArgumentNullException(nameof(rconApi));
+        _broadcastService = broadcastService ?? throw new ArgumentNullException(nameof(broadcastService));
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -225,19 +227,29 @@ public sealed class GameServerAgent
         var index = _nextBroadcastIndex % enabledMessages.Length;
         var message = enabledMessages[index].Message;
 
+        ApiResult result;
+
         try
         {
-            await _rconApi.Say(_context.ServerId, message);
+            result = await _broadcastService.SayAsync(_context.ServerId, message, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "[{Title}] Scheduled broadcast send failed", _context.Title);
+            return;
         }
-        finally
+
+        if (!result.IsSuccess)
         {
-            _nextBroadcastIndex++;
-            _lastBroadcastAt = DateTime.UtcNow;
+            _logger.LogWarning(
+                "[{Title}] Scheduled broadcast send failed: status {StatusCode}",
+                _context.Title,
+                result.StatusCode);
+            return;
         }
+
+        _nextBroadcastIndex++;
+        _lastBroadcastAt = DateTime.UtcNow;
     }
 
     private long NextSequenceId() => Interlocked.Increment(ref _sequenceId);

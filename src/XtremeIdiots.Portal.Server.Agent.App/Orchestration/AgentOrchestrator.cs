@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
-using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
@@ -22,7 +21,7 @@ public class AgentOrchestrator : BackgroundService
     private readonly IOffsetStore _offsetStore;
     private readonly IServerLock _serverLock;
     private readonly IServerSyncService _syncService;
-    private readonly IRconApi _rconApi;
+    private readonly IRconBroadcastService _broadcastService;
     private readonly ICod4xCvarProbe _cvarProbe;
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILoggerFactory _loggerFactory;
@@ -42,7 +41,7 @@ public class AgentOrchestrator : BackgroundService
         IOffsetStore offsetStore,
         IServerLock serverLock,
         IServerSyncService syncService,
-        IRconApi rconApi,
+        IRconBroadcastService broadcastService,
         ICod4xCvarProbe cvarProbe,
         IBanFileWatcher banFileWatcher,
         ILoggerFactory loggerFactory,
@@ -55,7 +54,7 @@ public class AgentOrchestrator : BackgroundService
         _offsetStore = offsetStore ?? throw new ArgumentNullException(nameof(offsetStore));
         _serverLock = serverLock ?? throw new ArgumentNullException(nameof(serverLock));
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
-        _rconApi = rconApi ?? throw new ArgumentNullException(nameof(rconApi));
+        _broadcastService = broadcastService ?? throw new ArgumentNullException(nameof(broadcastService));
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
@@ -234,7 +233,7 @@ public class AgentOrchestrator : BackgroundService
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 
-            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _rconApi, _cvarProbe, _banFileWatcher, agentLogger);
+            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _banFileWatcher, agentLogger);
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
             _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash));
