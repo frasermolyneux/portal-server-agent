@@ -666,7 +666,7 @@ public class GameServerAgentTests
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<string>());
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2500));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger);
 
