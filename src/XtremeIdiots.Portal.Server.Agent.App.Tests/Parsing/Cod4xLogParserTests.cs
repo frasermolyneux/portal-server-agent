@@ -68,6 +68,7 @@ public sealed class Cod4xLogParserTests
         var chat = Assert.IsType<ChatMessageEvent>(result);
         Assert.Equal(AnotherValidPlayerId, chat.PlayerGuid);
         Assert.Equal("iBoomBoom>XI<A", chat.Username);
+        Assert.Equal(3, chat.SlotId);
         Assert.Equal("message text", chat.Message);
         Assert.False(chat.IsTeamChat);
     }

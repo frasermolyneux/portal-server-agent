@@ -69,6 +69,7 @@ public sealed class Cod5LogParserTests
 
         var chat = Assert.IsType<ChatMessageEvent>(result);
         Assert.Equal("283895439", chat.PlayerGuid);
+        Assert.Equal(2, chat.SlotId);
         Assert.Equal("hello world", chat.Message);
     }
 

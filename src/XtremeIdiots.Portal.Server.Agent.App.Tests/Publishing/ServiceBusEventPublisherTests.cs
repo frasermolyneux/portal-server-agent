@@ -88,6 +88,7 @@ public class ServiceBusEventPublisherTests
             Timestamp = new DateTime(2025, 1, 15, 12, 0, 0, DateTimeKind.Utc),
             PlayerGuid = "guid456",
             Username = "Chatter",
+            SlotId = 7,
             Message = "Hello world",
             IsTeamChat = true
         };
@@ -101,6 +102,7 @@ public class ServiceBusEventPublisherTests
 
         Assert.Equal("guid456", root.GetProperty("playerGuid").GetString());
         Assert.Equal("Chatter", root.GetProperty("username").GetString());
+        Assert.Equal(7, root.GetProperty("slotId").GetInt32());
         Assert.Equal("Hello world", root.GetProperty("message").GetString());
         Assert.Equal("Team", root.GetProperty("type").GetString());
         Assert.Equal(ServerId, root.GetProperty("serverId").GetGuid());
@@ -122,6 +124,7 @@ public class ServiceBusEventPublisherTests
             Timestamp = DateTime.UtcNow,
             PlayerGuid = "guid456",
             Username = "Chatter",
+            SlotId = 4,
             Message = "Hi",
             IsTeamChat = false
         };
@@ -132,6 +135,7 @@ public class ServiceBusEventPublisherTests
         var json = captured!.Body.ToString();
         using var doc = JsonDocument.Parse(json);
         Assert.Equal("All", doc.RootElement.GetProperty("type").GetString());
+        Assert.Equal(4, doc.RootElement.GetProperty("slotId").GetInt32());
     }
 
     [Fact]
@@ -339,7 +343,7 @@ public class ServiceBusEventPublisherTests
             new PlayerConnectedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "a", Username = "P", SlotId = 0 },
             ServerId, GameType, 1);
         await _publisher.PublishAsync(
-            new ChatMessageEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "b", Username = "Q", Message = "hi", IsTeamChat = false },
+            new ChatMessageEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "b", Username = "Q", SlotId = 1, Message = "hi", IsTeamChat = false },
             ServerId, GameType, 2);
 
         await _publisher.DisposeAsync();

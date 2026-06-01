@@ -75,6 +75,11 @@ public sealed record ChatMessageEvent : GameEvent
     public required string Username { get; init; }
 
     /// <summary>
+    /// Client slot number the player occupied when sending the message.
+    /// </summary>
+    public required int SlotId { get; init; }
+
+    /// <summary>
     /// The chat message content.
     /// </summary>
     public required string Message { get; init; }

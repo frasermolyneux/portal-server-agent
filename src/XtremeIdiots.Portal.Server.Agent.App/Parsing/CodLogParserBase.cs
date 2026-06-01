@@ -313,9 +313,13 @@ public abstract class CodLogParserBase : ILogParser
     private GameEvent? HandleSay(Match match, DateTime timestamp)
     {
         var action = match.Groups["action"].Value;
+        var cidStr = match.Groups["cid"].Value;
         var guid = match.Groups["guid"].Value;
         var name = match.Groups["name"].Value;
         var text = match.Groups["text"].Value;
+
+        if (!int.TryParse(cidStr, out var cid))
+            return null;
 
         if (!IsValidGuid(guid))
             return null;
@@ -331,6 +335,7 @@ public abstract class CodLogParserBase : ILogParser
             Timestamp = timestamp,
             PlayerGuid = guid,
             Username = name,
+            SlotId = cid,
             Message = text,
             IsTeamChat = isTeamChat
         };

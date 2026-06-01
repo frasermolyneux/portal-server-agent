@@ -185,6 +185,7 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 SequenceId = sequenceId,
                 PlayerGuid = e.PlayerGuid,
                 Username = e.Username,
+                SlotId = e.SlotId,
                 Message = e.Message,
                 Type = e.IsTeamChat ? SbEvents.ChatMessageType.Team : SbEvents.ChatMessageType.All
             }, JsonOptions)),
