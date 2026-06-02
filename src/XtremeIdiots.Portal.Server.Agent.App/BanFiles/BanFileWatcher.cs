@@ -36,6 +36,8 @@ namespace XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 /// </summary>
 public sealed class BanFileWatcher : IBanFileWatcher
 {
+    internal readonly record struct LaneKey(Guid ServerId, bool LegacyLane);
+
     private readonly IRepositoryApiClient _repositoryClient;
     private readonly IBanFileSource _banFileSource;
     private readonly IBanFilePathResolver _pathResolver;
@@ -61,20 +63,20 @@ public sealed class BanFileWatcher : IBanFileWatcher
     /// Per-server scheduled push state. Set when a new central ETag is observed; cleared
     /// after a successful push or when the central ETag changes again.
     /// </summary>
-    private readonly ConcurrentDictionary<Guid, ScheduledPush> _scheduledPushes = new();
+    private readonly ConcurrentDictionary<LaneKey, ScheduledPush> _scheduledPushes = new();
 
     /// <summary>
     /// Per-server cached per-tag counts keyed by the remote file size that produced them.
     /// Invalidated on size mismatch; reduces 80× full-file reads per minute to one
     /// re-count only when the file actually changes.
     /// </summary>
-    private readonly ConcurrentDictionary<Guid, CachedCounts> _countCache = new();
+    private readonly ConcurrentDictionary<LaneKey, CachedCounts> _countCache = new();
 
     /// <summary>
     /// Per-server "consecutive failure" counter, used to drive a degraded badge on
     /// the dashboard. Reset on the next successful check.
     /// </summary>
-    private readonly ConcurrentDictionary<Guid, int> _consecutiveFailures = new();
+    private readonly ConcurrentDictionary<LaneKey, int> _consecutiveFailures = new();
 
     public BanFileWatcher(
         IRepositoryApiClient repositoryClient,
@@ -111,7 +113,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var resolvedPath = _pathResolver.Resolve(context.GameType, context.BanFileRootPath, liveMod);
+        var laneKey = new LaneKey(context.ServerId, false);
+        var resolvedPath = _pathResolver.Resolve(context.GameType, context.BanFileRootPath, liveMod, legacyLane: false);
 
         // Pull the existing status row up-front — its RemoteFileSize is the baseline
         // for the append-only ingest, and its LastPushedETag tells us whether the
@@ -162,7 +165,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
                             context.Title, resolvedPath.Path, lastKnownSize, currentSize);
                         lastKnownSize = 0;
                         // Truncation invalidates count cache.
-                        _countCache.TryRemove(context.ServerId, out _);
+                        _countCache.TryRemove(laneKey, out _);
                     }
 
                     if (currentSize != lastKnownSize)
@@ -199,7 +202,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
                     if (detectedBans.Count == 0)
                     {
                         var pushOutcome = await TryPushCentralBanFileAsync(
-                            remoteClient, context, existingMonitor, resolvedPath, currentSize, ct).ConfigureAwait(false);
+                            remoteClient, context, existingMonitor, resolvedPath, currentSize, laneKey, legacyLane: false, ct).ConfigureAwait(false);
 
                         centralEtag = pushOutcome.CentralEtag;
                         centralEtagSeenAt = pushOutcome.CentralEtagSeenAt;
@@ -240,14 +243,14 @@ public sealed class BanFileWatcher : IBanFileWatcher
         // Update or invalidate the consecutive failure counter.
         var consecutiveFailures = checkResult == "Success"
             ? 0
-            : _consecutiveFailures.AddOrUpdate(context.ServerId, 1, (_, prev) => prev + 1);
+            : _consecutiveFailures.AddOrUpdate(laneKey, 1, (_, prev) => prev + 1);
         if (checkResult == "Success")
-            _consecutiveFailures[context.ServerId] = 0;
+            _consecutiveFailures[laneKey] = 0;
 
         // Re-count per-tag totals from the remote size — cached to avoid re-reading
         // the full file on every cycle when nothing has changed.
         var counts = await GetOrRecountAsync(
-            context, resolvedPath.Path, finalSize, ct).ConfigureAwait(false);
+            context, resolvedPath.Path, finalSize, legacyLane: false, ct).ConfigureAwait(false);
 
         // Build and persist the status snapshot. This always happens — even when bans
         // were detected, so the dashboard sees the cycle even before publish completes.
@@ -273,6 +276,26 @@ public sealed class BanFileWatcher : IBanFileWatcher
             RemoteBanSyncCount = counts?.BanSync,
             RemoteExternalCount = counts?.External
         };
+
+        if (string.Equals(context.GameType, "CallOfDuty4x", StringComparison.OrdinalIgnoreCase))
+        {
+            var legacyStatus = await CheckPassiveLaneAsync(context, liveMod, existingMonitor, legacyLane: true, ct).ConfigureAwait(false);
+            statusDto.LegacyLastCheckUtc = legacyStatus.LastCheckUtc;
+            statusDto.LegacyLastCheckResult = legacyStatus.LastCheckResult;
+            statusDto.LegacyLastCheckErrorMessage = legacyStatus.LastCheckErrorMessage;
+            statusDto.LegacyRemoteFilePath = legacyStatus.RemoteFilePath;
+            statusDto.LegacyResolvedForMod = legacyStatus.ResolvedForMod;
+            statusDto.LegacyRemoteFileSize = legacyStatus.RemoteFileSize;
+            statusDto.LegacyLastPushUtc = legacyStatus.LastPushUtc;
+            statusDto.LegacyLastPushedETag = legacyStatus.LastPushedETag;
+            statusDto.LegacyLastPushedSize = legacyStatus.LastPushedSize;
+            statusDto.LegacyLastCentralBlobETag = legacyStatus.LastCentralBlobETag;
+            statusDto.LegacyLastCentralBlobUtc = legacyStatus.LastCentralBlobUtc;
+            statusDto.LegacyRemoteTotalLineCount = legacyStatus.RemoteTotalLineCount;
+            statusDto.LegacyRemoteUntaggedCount = legacyStatus.RemoteUntaggedCount;
+            statusDto.LegacyRemoteBanSyncCount = legacyStatus.RemoteBanSyncCount;
+            statusDto.LegacyRemoteExternalCount = legacyStatus.RemoteExternalCount;
+        }
 
         await UpsertStatusAsync(statusDto, context, ct).ConfigureAwait(false);
 
@@ -336,12 +359,14 @@ public sealed class BanFileWatcher : IBanFileWatcher
         BanFileMonitorDto? existingMonitor,
         ResolvedBanFilePath resolvedPath,
         long currentRemoteSize,
+        LaneKey laneKey,
+        bool legacyLane,
         CancellationToken ct)
     {
         CentralBanFile? central;
         try
         {
-            central = await _banFileSource.GetAsync(context.GameType, ct).ConfigureAwait(false);
+            central = await _banFileSource.GetAsync(context.GameType, legacyLane, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -356,12 +381,12 @@ public sealed class BanFileWatcher : IBanFileWatcher
         await using (central)
         {
             var nowUtc = DateTime.UtcNow;
-            var lastPushedEtag = existingMonitor?.LastPushedETag;
+            var lastPushedEtag = legacyLane ? existingMonitor?.LegacyLastPushedETag : existingMonitor?.LastPushedETag;
             var alreadyPushed = string.Equals(lastPushedEtag, central.ETag, StringComparison.Ordinal);
 
             if (alreadyPushed)
             {
-                _scheduledPushes.TryRemove(context.ServerId, out _);
+                _scheduledPushes.TryRemove(laneKey, out _);
                 return PushOutcome.NoPush(central.ETag, nowUtc);
             }
 
@@ -369,7 +394,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
             // across PushStaggerMaxJitter so the storage account does not see N×4 MB
             // simultaneous reads.
             var scheduled = _scheduledPushes.AddOrUpdate(
-                context.ServerId,
+                laneKey,
                 _ => new ScheduledPush(central.ETag, nowUtc + RandomJitter()),
                 (_, existing) => string.Equals(existing.CentralEtag, central.ETag, StringComparison.Ordinal)
                     ? existing
@@ -411,7 +436,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
             {
                 await remoteClient.UploadAsync(central.Content, resolvedPath.Path, ct).ConfigureAwait(false);
 
-                _scheduledPushes.TryRemove(context.ServerId, out _);
+                _scheduledPushes.TryRemove(laneKey, out _);
                 _logger.LogInformation(
                     "[{Title}] Pushed central ban file ({Length} bytes, ETag {ETag}) to {Path}",
                     context.Title, central.Length, central.ETag, resolvedPath.Path);
@@ -489,12 +514,15 @@ public sealed class BanFileWatcher : IBanFileWatcher
         ServerContext context,
         string remoteFilePath,
         long? remoteSize,
+        bool legacyLane,
         CancellationToken ct)
     {
         if (!remoteSize.HasValue)
             return null;
 
-        if (_countCache.TryGetValue(context.ServerId, out var cached) && cached.RemoteFileSize == remoteSize.Value)
+        var laneKey = new LaneKey(context.ServerId, legacyLane);
+
+        if (_countCache.TryGetValue(laneKey, out var cached) && cached.RemoteFileSize == remoteSize.Value)
             return cached.Counts;
 
         try
@@ -511,7 +539,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
                 }
 
                 var counts = CountTags(content);
-                _countCache[context.ServerId] = new CachedCounts(remoteSize.Value, counts);
+                _countCache[laneKey] = new CachedCounts(remoteSize.Value, counts);
                 return counts;
             }
             finally
@@ -525,6 +553,124 @@ public sealed class BanFileWatcher : IBanFileWatcher
                 context.Title, remoteFilePath);
             return null;
         }
+    }
+
+    private async Task<LaneCycleStatus> CheckPassiveLaneAsync(
+        ServerContext context,
+        string? liveMod,
+        BanFileMonitorDto? existingMonitor,
+        bool legacyLane,
+        CancellationToken ct)
+    {
+        var laneKey = new LaneKey(context.ServerId, legacyLane);
+        var resolvedPath = _pathResolver.Resolve(context.GameType, context.BanFileRootPath, liveMod, legacyLane);
+        var lastKnownSize = legacyLane ? (existingMonitor?.LegacyRemoteFileSize ?? 0) : (existingMonitor?.RemoteFileSize ?? 0);
+
+        long? finalSize = null;
+        long? pushedSize = null;
+        string? pushedEtag = null;
+        DateTime? pushedAt = null;
+        string? centralEtag = null;
+        DateTime? centralEtagSeenAt = null;
+        string? checkErrorMessage = null;
+        var checkResult = "Success";
+
+        try
+        {
+            await using var remoteClient = _remoteFileClientFactory.Create(context);
+            await remoteClient.ConnectAsync(ct).ConfigureAwait(false);
+
+            try
+            {
+                long currentSize;
+                try
+                {
+                    currentSize = await remoteClient.GetFileSizeAsync(resolvedPath.Path, ct).ConfigureAwait(false);
+                }
+                catch (RemoteFileNotFoundException ex)
+                {
+                    checkResult = "FileNotFound";
+                    checkErrorMessage = ex.Message;
+                    currentSize = -1;
+                }
+
+                if (currentSize >= 0)
+                {
+                    if (currentSize < lastKnownSize)
+                    {
+                        _countCache.TryRemove(laneKey, out _);
+                    }
+
+                    finalSize = currentSize;
+
+                    var pushOutcome = await TryPushCentralBanFileAsync(
+                        remoteClient,
+                        context,
+                        existingMonitor,
+                        resolvedPath,
+                        currentSize,
+                        laneKey,
+                        legacyLane,
+                        ct).ConfigureAwait(false);
+
+                    centralEtag = pushOutcome.CentralEtag;
+                    centralEtagSeenAt = pushOutcome.CentralEtagSeenAt;
+                    if (pushOutcome.Pushed)
+                    {
+                        finalSize = pushOutcome.NewSize;
+                        pushedSize = pushOutcome.NewSize;
+                        pushedEtag = pushOutcome.CentralEtag;
+                        pushedAt = DateTime.UtcNow;
+                    }
+                }
+            }
+            finally
+            {
+                await remoteClient.DisconnectAsync(ct).ConfigureAwait(false);
+            }
+        }
+        catch (RemoteFileNotFoundException ex)
+        {
+            checkResult = "FileNotFound";
+            checkErrorMessage = ex.Message;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            checkResult = "FileTransportError";
+            checkErrorMessage = $"{ex.GetType().Name}: {ex.Message}";
+        }
+
+        var consecutiveFailures = checkResult == "Success"
+            ? 0
+            : _consecutiveFailures.AddOrUpdate(laneKey, 1, (_, prev) => prev + 1);
+        if (checkResult == "Success")
+            _consecutiveFailures[laneKey] = 0;
+
+        var counts = await GetOrRecountAsync(context, resolvedPath.Path, finalSize, legacyLane, ct).ConfigureAwait(false);
+
+        return new LaneCycleStatus
+        {
+            LastCheckUtc = DateTime.UtcNow,
+            LastCheckResult = checkResult,
+            LastCheckErrorMessage = checkErrorMessage,
+            RemoteFilePath = resolvedPath.Path,
+            ResolvedForMod = resolvedPath.ResolvedForMod,
+            RemoteFileSize = finalSize,
+            LastPushUtc = pushedAt,
+            LastPushedETag = pushedEtag,
+            LastPushedSize = pushedSize,
+            LastCentralBlobETag = centralEtag,
+            LastCentralBlobUtc = centralEtagSeenAt,
+            ConsecutiveFailureCount = consecutiveFailures,
+            RemoteTotalLineCount = counts?.Total,
+            RemoteUntaggedCount = counts?.Untagged,
+            RemoteBanSyncCount = counts?.BanSync,
+            RemoteExternalCount = counts?.External
+        };
     }
 
     /// <summary>
@@ -652,6 +798,26 @@ public sealed class BanFileWatcher : IBanFileWatcher
     private sealed record CachedCounts(long RemoteFileSize, TagCounts Counts);
 
     private sealed record ScheduledPush(string CentralEtag, DateTime ScheduledFor);
+
+    private sealed class LaneCycleStatus
+    {
+        public DateTime? LastCheckUtc { get; init; }
+        public string? LastCheckResult { get; init; }
+        public string? LastCheckErrorMessage { get; init; }
+        public string? RemoteFilePath { get; init; }
+        public string? ResolvedForMod { get; init; }
+        public long? RemoteFileSize { get; init; }
+        public DateTime? LastPushUtc { get; init; }
+        public string? LastPushedETag { get; init; }
+        public long? LastPushedSize { get; init; }
+        public string? LastCentralBlobETag { get; init; }
+        public DateTime? LastCentralBlobUtc { get; init; }
+        public int? ConsecutiveFailureCount { get; init; }
+        public int? RemoteTotalLineCount { get; init; }
+        public int? RemoteUntaggedCount { get; init; }
+        public int? RemoteBanSyncCount { get; init; }
+        public int? RemoteExternalCount { get; init; }
+    }
 
     /// <summary>Outcome of <see cref="TryPushCentralBanFileAsync"/>.</summary>
     internal sealed record PushOutcome

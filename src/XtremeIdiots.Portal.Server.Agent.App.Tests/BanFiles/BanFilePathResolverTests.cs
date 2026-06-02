@@ -113,6 +113,15 @@ public class BanFilePathResolverTests
     }
 
     [Fact]
+    public void Resolve_Cod4x_LegacyLane_UsesLegacyBanlistDat()
+    {
+        var result = _sut.Resolve("CallOfDuty4x", "/", liveMod: "xi_promod", legacyLane: true);
+
+        Assert.Equal("/mods/xi_promod/banlist.dat", result.Path);
+        Assert.Equal("xi_promod", result.ResolvedForMod);
+    }
+
+    [Fact]
     public void Resolve_Cod4x_StripsLeadingModsPrefix()
     {
         var result = _sut.Resolve("CallOfDuty4x", "/", liveMod: "mods/xi_promod");

@@ -15,7 +15,7 @@ namespace XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 /// </summary>
 public sealed class BanFilePathResolver : IBanFilePathResolver
 {
-    public ResolvedBanFilePath Resolve(string gameType, string rootPath, string? liveMod)
+    public ResolvedBanFilePath Resolve(string gameType, string rootPath, string? liveMod, bool legacyLane = false)
     {
         var normalisedRoot = NormaliseRoot(rootPath);
 
@@ -33,7 +33,7 @@ public sealed class BanFilePathResolver : IBanFilePathResolver
 
             // CoD4x: same mod-folder layout as CoD4/5 but emits the cod4x simplebanlist
             // v2 format (banlist_v2.dat) instead of the legacy ban.txt.
-            "CallOfDuty4x" => ResolveCodModPath(normalisedRoot, liveMod, "banlist_v2.dat"),
+            "CallOfDuty4x" => ResolveCodModPath(normalisedRoot, liveMod, legacyLane ? "banlist.dat" : "banlist_v2.dat"),
 
             // Default: server root. Keeps newly-onboarded game types working until
             // a specific rule is added.

@@ -11,7 +11,7 @@ public interface IBanFileSource
     /// Returns <c>null</c> when the blob does not exist (e.g. no bans yet for the game).
     /// The returned <see cref="CentralBanFile.Content"/> stream is owned by the caller and must be disposed.
     /// </summary>
-    Task<CentralBanFile?> GetAsync(string gameType, CancellationToken ct = default);
+    Task<CentralBanFile?> GetAsync(string gameType, bool legacyLane = false, CancellationToken ct = default);
 }
 
 /// <summary>

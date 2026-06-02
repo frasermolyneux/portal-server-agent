@@ -19,7 +19,7 @@ public interface IBanFilePathResolver
     /// Defaults to <c>"/"</c> when not configured.</param>
     /// <param name="liveMod">Mod name as reported by the live parser. May be null
     /// or empty when the server is offline or the mod is not yet known.</param>
-    ResolvedBanFilePath Resolve(string gameType, string rootPath, string? liveMod);
+    ResolvedBanFilePath Resolve(string gameType, string rootPath, string? liveMod, bool legacyLane = false);
 }
 
 /// <summary>
