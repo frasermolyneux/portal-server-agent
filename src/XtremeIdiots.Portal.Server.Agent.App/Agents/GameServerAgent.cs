@@ -7,6 +7,7 @@ using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
+using XtremeIdiots.Portal.Server.Agent.App.Screenshots;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
@@ -26,6 +27,7 @@ public sealed class GameServerAgent
     private readonly IRconBroadcastService _broadcastService;
     private readonly ICod4xCvarProbe _cvarProbe;
     private readonly IBanFileWatcher _banFileWatcher;
+    private readonly IScreenshotWatcher _screenshotWatcher;
     private readonly ILogger _logger;
 
     private long _sequenceId;
@@ -34,6 +36,7 @@ public sealed class GameServerAgent
     private DateTime _lastLeaseRenew = DateTime.MinValue;
     private DateTime _lastRconSync = DateTime.MinValue;
     private DateTime _lastBanFileCheck = DateTime.MinValue;
+    private DateTime _lastScreenshotCheck = DateTime.MinValue;
     private DateTime _lastBroadcastAt = DateTime.MinValue;
     private int _nextBroadcastIndex;
 
@@ -55,6 +58,7 @@ public sealed class GameServerAgent
         IRconBroadcastService broadcastService,
         ICod4xCvarProbe cvarProbe,
         IBanFileWatcher banFileWatcher,
+        IScreenshotWatcher screenshotWatcher,
         ILogger logger)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -67,6 +71,7 @@ public sealed class GameServerAgent
         _broadcastService = broadcastService ?? throw new ArgumentNullException(nameof(broadcastService));
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
+        _screenshotWatcher = screenshotWatcher ?? throw new ArgumentNullException(nameof(screenshotWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -174,6 +179,11 @@ public sealed class GameServerAgent
                     if (_context.BanFileSyncEnabled && DateTime.UtcNow - _lastBanFileCheck > BanFileCheckInterval)
                     {
                         await CheckBanFileAsync(ct);
+                    }
+
+                    if (_context.Screenshots.Enabled && DateTime.UtcNow - _lastScreenshotCheck > _context.Screenshots.PollInterval)
+                    {
+                        await CheckScreenshotsAsync(ct);
                     }
 
                     await SendScheduledBroadcastAsync(ct);
@@ -347,6 +357,19 @@ public sealed class GameServerAgent
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[{Title}] Ban file check failed", _context.Title);
+        }
+    }
+
+    private async Task CheckScreenshotsAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _screenshotWatcher.CheckAsync(_context, ct);
+            _lastScreenshotCheck = DateTime.UtcNow;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{Title}] Screenshot check failed", _context.Title);
         }
     }
 

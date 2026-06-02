@@ -58,6 +58,29 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         }
     }
 
+    public async Task<IReadOnlyList<RemoteFileEntry>> ListFilesAsync(string directoryPath, CancellationToken ct = default)
+    {
+        try
+        {
+            var entries = await Task.Run(() => _client.ListDirectory(directoryPath).ToList(), ct).ConfigureAwait(false);
+
+            return entries
+                .Where(x => !x.IsDirectory && !x.IsSymbolicLink)
+                .Select(x => new RemoteFileEntry
+                {
+                    Path = x.FullName,
+                    Name = x.Name,
+                    Size = x.Attributes.Size,
+                    LastWriteUtc = x.LastWriteTimeUtc
+                })
+                .ToList();
+        }
+        catch (SftpPathNotFoundException ex)
+        {
+            throw new RemoteFileNotFoundException($"Remote directory '{directoryPath}' was not found.", ex);
+        }
+    }
+
     public async Task<long> GetFileSizeAsync(string path, CancellationToken ct = default)
     {
         try

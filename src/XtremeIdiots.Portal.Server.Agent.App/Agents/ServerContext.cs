@@ -39,6 +39,10 @@ public sealed record ServerContext
 {
     public const int DefaultBroadcastIntervalSeconds = 500;
     public const string DefaultAgentNamePrefix = "^4[^1>XI< BOT^4]^7";
+    public const string DefaultScreenshotFilePattern = "*.jpg";
+    public const int DefaultScreenshotPollIntervalSeconds = 60;
+    public const int MinScreenshotPollIntervalSeconds = 10;
+    public const int MaxScreenshotPollIntervalSeconds = 300;
 
     public required Guid ServerId { get; init; }
     public required string GameType { get; init; }
@@ -120,6 +124,11 @@ public sealed record ServerContext
     /// Broadcast message scheduling configuration (from "broadcasts" namespace).
     /// </summary>
     public BroadcastSettings Broadcasts { get; init; } = new();
+
+    /// <summary>
+    /// Screenshot monitoring configuration (from "screenshots" namespace).
+    /// </summary>
+    public ScreenshotSettings Screenshots { get; init; } = new();
 }
 
 public sealed record BroadcastSettings
@@ -133,4 +142,14 @@ public sealed record BroadcastMessage
 {
     public required string Message { get; init; }
     public bool Enabled { get; init; }
+}
+
+public sealed record ScreenshotSettings
+{
+    public bool Enabled { get; init; }
+    public string DirectoryPath { get; init; } = string.Empty;
+    public string FilePattern { get; init; } = ServerContext.DefaultScreenshotFilePattern;
+    public int PollIntervalSeconds { get; init; } = ServerContext.DefaultScreenshotPollIntervalSeconds;
+
+    public TimeSpan PollInterval => TimeSpan.FromSeconds(PollIntervalSeconds);
 }

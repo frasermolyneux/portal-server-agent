@@ -30,6 +30,28 @@ public sealed class FtpRemoteFileClient : IRemoteFileClient
         }
     }
 
+    public async Task<IReadOnlyList<RemoteFileEntry>> ListFilesAsync(string directoryPath, CancellationToken ct = default)
+    {
+        try
+        {
+            var listing = await _client.GetListing(directoryPath, FtpListOption.Auto, ct).ConfigureAwait(false);
+            return listing
+                .Where(x => x.Type == FtpObjectType.File)
+                .Select(x => new RemoteFileEntry
+                {
+                    Path = x.FullName,
+                    Name = x.Name,
+                    Size = x.Size,
+                    LastWriteUtc = NormalizeUtc(x.Modified)
+                })
+                .ToList();
+        }
+        catch (Exception ex) when (IsFileNotFound(ex))
+        {
+            throw new RemoteFileNotFoundException($"Remote directory '{directoryPath}' was not found.", ex);
+        }
+    }
+
     public async Task<long> GetFileSizeAsync(string path, CancellationToken ct = default)
     {
         try
@@ -73,4 +95,14 @@ public sealed class FtpRemoteFileClient : IRemoteFileClient
     private static bool IsFileNotFound(Exception ex)
         => ex.Message.Contains("No such file", StringComparison.OrdinalIgnoreCase)
            || ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase);
+
+    private static DateTime NormalizeUtc(DateTime value)
+    {
+        return value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+        };
+    }
 }

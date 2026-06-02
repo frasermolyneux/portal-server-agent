@@ -10,6 +10,7 @@ using XtremeIdiots.Portal.Server.Agent.App.Observability;
 using XtremeIdiots.Portal.Server.Agent.App.Orchestration;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
+using XtremeIdiots.Portal.Server.Agent.App.Screenshots;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Observability;
 
@@ -27,6 +28,7 @@ public class AgentHealthCheckTests
             new Mock<IRconBroadcastService>().Object,
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
+            new Mock<IScreenshotWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -68,6 +70,7 @@ public class AgentHealthCheckTests
             new Mock<IRconBroadcastService>().Object,
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
+            new Mock<IScreenshotWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -163,6 +166,7 @@ public class AgentHealthCheckTests
             new Mock<IRconBroadcastService>().Object,
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
+            new Mock<IScreenshotWatcher>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 

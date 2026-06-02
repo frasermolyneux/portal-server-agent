@@ -677,6 +677,58 @@ public class RepositoryServerConfigProviderTests
         Assert.Empty(result);
     }
 
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_ParsesScreenshotSettings()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Screenshot Config", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("screenshots", new { enabled = true, directoryPath = "/screenshots", filePattern = "*.png", pollIntervalSeconds = 45 })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.True(server.Screenshots.Enabled);
+        Assert.Equal("/screenshots", server.Screenshots.DirectoryPath);
+        Assert.Equal("*.png", server.Screenshots.FilePattern);
+        Assert.Equal(45, server.Screenshots.PollIntervalSeconds);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_ScreenshotPollInterval_IsBounded()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Screenshot Interval", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("screenshots", new { enabled = true, directoryPath = "/shots", pollIntervalSeconds = 1 })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.Equal(ServerContext.MinScreenshotPollIntervalSeconds, server.Screenshots.PollIntervalSeconds);
+        Assert.Equal(ServerContext.DefaultScreenshotFilePattern, server.Screenshots.FilePattern);
+    }
+
     private void SetupApiSuccess(GameServerDto[] dtos)
     {
         var collection = new CollectionModel<GameServerDto>(dtos);
