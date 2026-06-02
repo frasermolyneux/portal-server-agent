@@ -12,7 +12,7 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
 /// <summary>
 /// Manages a single game server connection. Tails the log file, parses events,
-/// publishes to Service Bus, and periodically saves the FTP offset.
+/// publishes to Service Bus, and periodically saves the tailing offset.
 /// </summary>
 public sealed class GameServerAgent
 {

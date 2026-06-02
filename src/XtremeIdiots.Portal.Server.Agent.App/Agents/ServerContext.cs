@@ -44,7 +44,7 @@ public sealed record ServerContext
     public required string GameType { get; init; }
     public required string Title { get; init; }
 
-    // Legacy FTP-shaped fields retained for compatibility with existing callers/tests.
+    // Legacy transport-shaped fields retained for compatibility with existing callers/tests.
     public required string FtpHostname { get; init; }
     public required int FtpPort { get; init; }
     public required string FtpUsername { get; init; }
@@ -73,7 +73,7 @@ public sealed record ServerContext
     public required bool BanFileSyncEnabled { get; init; }
 
     /// <summary>
-    /// FTP path prefix on the game server below which the ban file lives. Resolved
+    /// File transport path prefix on the game server below which the ban file lives. Resolved
     /// from <c>GameServer.BanFileRootPath</c>; defaults to <c>"/"</c> for legacy
     /// servers that have not yet had the root path set.
     /// </summary>

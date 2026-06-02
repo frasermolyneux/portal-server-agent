@@ -439,11 +439,11 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_SkipsServersWithMissingFtpConfig()
+    public async Task GetAgentEnabledServersAsync_SkipsServersWithMissingFileTransportConfig()
     {
-        // Arrange — config has rcon + agent but no ftp namespace
+        // Arrange — config has rcon + agent but no file transport namespace
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "No FTP Config", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "No File Transport Config", GameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -465,7 +465,7 @@ public class RepositoryServerConfigProviderTests
     [Fact]
     public async Task GetAgentEnabledServersAsync_SkipsServersWithMissingRconConfig()
     {
-        // Arrange — config has ftp + agent but no rcon namespace
+        // Arrange — config has file transport + agent but no rcon namespace
         var serverId = Guid.NewGuid();
         var dto = CreateGameServerDto(serverId, "No RCON Config", GameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
@@ -489,7 +489,7 @@ public class RepositoryServerConfigProviderTests
     [Fact]
     public async Task GetAgentEnabledServersAsync_SkipsServersWithMissingAgentConfig()
     {
-        // Arrange — config has ftp + rcon but no agent namespace
+        // Arrange — config has file transport + rcon but no agent namespace
         var serverId = Guid.NewGuid();
         var dto = CreateGameServerDto(serverId, "No Agent Config", GameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
@@ -570,9 +570,9 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_MalformedJsonSkipsServer()
+    public async Task GetAgentEnabledServersAsync_MalformedFileTransportJsonSkipsServer()
     {
-        // Arrange — ftp config has malformed JSON, so ftp namespace is missing
+        // Arrange — file transport config has malformed JSON, so the namespace is missing
         var serverId = Guid.NewGuid();
         var dto = CreateGameServerDto(serverId, "Bad JSON Server", GameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
@@ -595,7 +595,7 @@ public class RepositoryServerConfigProviderTests
         // Act
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        // Assert — malformed ftp config means server is skipped
+        // Assert — malformed file transport config means server is skipped
         Assert.Empty(result);
     }
 
@@ -653,11 +653,11 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_SkipsServersWithIncompleteFtpConfig()
+    public async Task GetAgentEnabledServersAsync_SkipsServersWithIncompleteFileTransportConfig()
     {
-        // Arrange — ftp namespace exists but is missing required keys
+        // Arrange — file transport namespace exists but is missing required keys
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Incomplete FTP", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Incomplete File Transport", GameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -673,7 +673,7 @@ public class RepositoryServerConfigProviderTests
         // Act
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        // Assert — incomplete ftp config means server is skipped
+        // Assert — incomplete file transport config means server is skipped
         Assert.Empty(result);
     }
 

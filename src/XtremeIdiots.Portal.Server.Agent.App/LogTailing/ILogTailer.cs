@@ -14,7 +14,7 @@ public interface ILogTailer : IAsyncDisposable
     Task ConnectAsync(FileTransportTailerConfig config, long? startOffset = null, CancellationToken ct = default);
 
     /// <summary>
-    /// Backwards-compatible overload for legacy FTP-shaped call sites.
+    /// Backwards-compatible overload for legacy transport-shaped call sites.
     /// </summary>
     Task ConnectAsync(FtpTailerConfig config, long? startOffset = null, CancellationToken ct = default)
         => ConnectAsync(config.ToTransportConfig(), startOffset, ct);

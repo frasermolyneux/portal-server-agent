@@ -82,15 +82,15 @@ public class AgentOrchestratorTests
     }
 
     [Fact]
-    public async Task RefreshAgents_SkipsServersWithoutFtpConfig()
+    public async Task RefreshAgents_SkipsServersWithoutFileTransportConfig()
     {
         // Arrange
-        var serverWithFtp = CreateTestServerContext("With FTP");
-        var serverWithoutFtp = new ServerContext
+        var serverWithTransport = CreateTestServerContext("With File Transport");
+        var serverWithoutTransport = new ServerContext
         {
             ServerId = Guid.NewGuid(),
             GameType = "CallOfDuty4",
-            Title = "No FTP",
+            Title = "No File Transport",
             FtpHostname = "",
             FtpPort = 21,
             FtpUsername = "",
@@ -113,7 +113,7 @@ public class AgentOrchestratorTests
         };
 
         _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new[] { serverWithFtp, serverWithoutFtp });
+            .ReturnsAsync(new[] { serverWithTransport, serverWithoutTransport });
 
         SetupFactoryMocks();
 
@@ -122,7 +122,7 @@ public class AgentOrchestratorTests
         // Act
         await orchestrator.RefreshAgentsAsync(CancellationToken.None);
 
-        // Assert — only the server with FTP should have an agent
+        // Assert — only the server with file transport settings should have an agent
         Assert.Equal(1, orchestrator.ActiveAgentCount);
     }
 
@@ -169,14 +169,14 @@ public class AgentOrchestratorTests
     }
 
     [Fact]
-    public async Task RefreshAgents_AgentEnabledButFtpDisabled_SkipsServer()
+    public async Task RefreshAgents_AgentEnabledButFileTransportDisabled_SkipsServer()
     {
         // Arrange
         var server = new ServerContext
         {
             ServerId = Guid.NewGuid(),
             GameType = "CallOfDuty4",
-            Title = "FTP Disabled",
+            Title = "File Transport Disabled",
             FtpHostname = "ftp.example.com",
             FtpPort = 21,
             FtpUsername = "user",
