@@ -1,9 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Reflection;
 
 using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
+using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.GameServers;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 
@@ -65,7 +65,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 }
 
                 var resolvedTransportType = transportMetadata.ResolvedType;
-                var resolvedTransportEnabled = ResolveFileTransportEnabled(dto);
+                var resolvedTransportEnabled = dto.FileTransportEnabled;
                 var transportNamespace = resolvedTransportType;
 
                 if (!TryGetStringValue(configs, transportNamespace, "hostname", out var transportHostname) ||
@@ -116,7 +116,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 // by itself only sees the per-server config namespaces.
                 var configHashInputs = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    ["dto.FtpEnabled"] = dto.FtpEnabled.ToString(),
                     ["dto.FileTransportEnabled"] = resolvedTransportEnabled.ToString(),
                     ["dto.FileTransportType"] = resolvedTransportType,
                     ["dto.RconEnabled"] = dto.RconEnabled.ToString(),
@@ -220,42 +219,10 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         return ServerContext.DefaultAgentNamePrefix;
     }
 
-    private static bool ResolveFileTransportEnabled(object dto)
+    private static TransportTypeResolution ResolveTransportType(GameServerDto dto)
     {
-        var fileTransportEnabledProperty = dto.GetType().GetProperty("FileTransportEnabled", BindingFlags.Public | BindingFlags.Instance);
-        if (fileTransportEnabledProperty is not null)
-        {
-            var value = fileTransportEnabledProperty.GetValue(dto);
-            if (value is bool enabled)
-            {
-                return enabled;
-            }
-        }
-
-        var ftpEnabledProperty = dto.GetType().GetProperty("FtpEnabled", BindingFlags.Public | BindingFlags.Instance);
-        if (ftpEnabledProperty?.GetValue(dto) is bool ftpEnabled)
-        {
-            return ftpEnabled;
-        }
-
-        return true;
-    }
-
-    private static TransportTypeResolution ResolveTransportType(object dto)
-    {
-        var fileTransportTypeProperty = dto.GetType().GetProperty("FileTransportType", BindingFlags.Public | BindingFlags.Instance);
-        if (fileTransportTypeProperty is null)
-        {
-            return new TransportTypeResolution
-            {
-                IsPresent = false,
-                IsValid = true,
-                ResolvedType = FileTransportTypes.Ftp
-            };
-        }
-
-        var value = fileTransportTypeProperty.GetValue(dto);
-        if (value is null)
+        var value = dto.FileTransportType;
+        if (value == FileTransportType.Unknown)
         {
             return new TransportTypeResolution
             {
@@ -275,31 +242,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 RawValue = rawValue,
                 ResolvedType = normalized
             };
-        }
-
-        // Value-type enum properties can appear as their default (0) even when
-        // effectively unset in payloads from older contracts. Treat that as
-        // metadata absent so legacy FTP fallback remains deterministic.
-        if (fileTransportTypeProperty.PropertyType.IsEnum)
-        {
-            try
-            {
-                var numericValue = Convert.ToInt32(value);
-                if (numericValue == 0)
-                {
-                    return new TransportTypeResolution
-                    {
-                        IsPresent = false,
-                        IsValid = true,
-                        RawValue = rawValue,
-                        ResolvedType = FileTransportTypes.Ftp
-                    };
-                }
-            }
-            catch
-            {
-                // Fall through to invalid metadata handling.
-            }
         }
 
         return new TransportTypeResolution

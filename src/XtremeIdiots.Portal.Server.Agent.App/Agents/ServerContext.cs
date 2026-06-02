@@ -93,7 +93,7 @@ public sealed record ServerContext
 
     public string EffectiveFileTransportType => FileTransportTypes.Normalize(FileTransportType);
 
-    public bool EffectiveFileTransportEnabled => FileTransportEnabled ?? FtpEnabled;
+    public bool EffectiveFileTransportEnabled => FileTransportEnabled ?? false;
 
     public string EffectiveFileTransportHostname => FileTransportHostname ?? FtpHostname;
 
