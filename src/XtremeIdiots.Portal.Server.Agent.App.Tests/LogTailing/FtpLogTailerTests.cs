@@ -206,8 +206,28 @@ public class FtpLogTailerTests
 
         var factory = new LogTailerFactory(loggerFactory.Object);
 
-        var tailer1 = factory.Create();
-        var tailer2 = factory.Create();
+        var context = new XtremeIdiots.Portal.Server.Agent.App.Agents.ServerContext
+        {
+            ServerId = Guid.NewGuid(),
+            GameType = "CallOfDuty4",
+            Title = "Factory Test",
+            FtpHostname = "ftp.example.com",
+            FtpPort = 21,
+            FtpUsername = "user",
+            FtpPassword = "pass",
+            LogFilePath = "/logs/games_mp.log",
+            Hostname = "game.example.com",
+            QueryPort = 28960,
+            RconPassword = "secret",
+            FtpEnabled = true,
+            RconEnabled = true,
+            BanFileSyncEnabled = true,
+            BanFileRootPath = "/",
+            ConfigHash = "factory"
+        };
+
+        var tailer1 = factory.Create(context);
+        var tailer2 = factory.Create(context);
 
         Assert.NotNull(tailer1);
         Assert.NotNull(tailer2);
@@ -218,6 +238,46 @@ public class FtpLogTailerTests
     public void LogTailerFactory_WithNullLoggerFactory_ThrowsArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(() => new LogTailerFactory(null!));
+    }
+
+    [Fact]
+    public void LogTailerFactory_Create_WithSftpContext_ReturnsSftpTailer()
+    {
+        var loggerFactory = new Mock<ILoggerFactory>();
+        loggerFactory.Setup(f => f.CreateLogger(It.IsAny<string>()))
+            .Returns(new Mock<ILogger<SftpLogTailer>>().Object);
+
+        var factory = new LogTailerFactory(loggerFactory.Object);
+        var context = new XtremeIdiots.Portal.Server.Agent.App.Agents.ServerContext
+        {
+            ServerId = Guid.NewGuid(),
+            GameType = "CallOfDuty4",
+            Title = "SFTP Factory Test",
+            FtpHostname = "ftp.example.com",
+            FtpPort = 21,
+            FtpUsername = "user",
+            FtpPassword = "pass",
+            FileTransportEnabled = true,
+            FileTransportType = "sftp",
+            FileTransportHostname = "sftp.example.com",
+            FileTransportPort = 22,
+            FileTransportUsername = "sftp-user",
+            FileTransportPassword = "sftp-pass",
+            FileTransportHostKeyFingerprint = "AABBCC",
+            LogFilePath = "/logs/games_mp.log",
+            Hostname = "game.example.com",
+            QueryPort = 28960,
+            RconPassword = "secret",
+            FtpEnabled = true,
+            RconEnabled = true,
+            BanFileSyncEnabled = true,
+            BanFileRootPath = "/",
+            ConfigHash = "factory-sftp"
+        };
+
+        var tailer = factory.Create(context);
+
+        Assert.IsType<SftpLogTailer>(tailer);
     }
 
     #endregion

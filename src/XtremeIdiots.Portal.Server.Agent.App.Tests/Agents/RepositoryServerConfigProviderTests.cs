@@ -99,6 +99,97 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesSftpNamespaceWhenTransportTypeIsSftp()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(
+            serverId,
+            "SFTP Server",
+            GameType.CallOfDuty4,
+            hostname: "game.example.com",
+            queryPort: 28960,
+            fileTransportType: "sftp",
+            fileTransportEnabled: true);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("sftp", new { hostname = "sftp.example.com", port = 2222, username = "sftp-user", password = "sftp-pass", hostKeyFingerprint = "aa:bb:cc" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.Equal("sftp", server.EffectiveFileTransportType);
+        Assert.True(server.EffectiveFileTransportEnabled);
+        Assert.Equal("sftp.example.com", server.EffectiveFileTransportHostname);
+        Assert.Equal(2222, server.EffectiveFileTransportPort);
+        Assert.Equal("sftp-user", server.EffectiveFileTransportUsername);
+        Assert.Equal("sftp-pass", server.EffectiveFileTransportPassword);
+        Assert.Equal("aa:bb:cc", server.FileTransportHostKeyFingerprint);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_SkipsServerWhenSelectedTransportNamespaceMissing()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(
+            serverId,
+            "SFTP Namespace Missing",
+            GameType.CallOfDuty4,
+            hostname: "game.example.com",
+            queryPort: 28960,
+            fileTransportType: "sftp",
+            fileTransportEnabled: true);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_SkipsServerWhenTransportMetadataInvalid()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(
+            serverId,
+            "Invalid transport metadata",
+            GameType.CallOfDuty4,
+            hostname: "game.example.com",
+            queryPort: 28960,
+            fileTransportType: "smtp",
+            fileTransportEnabled: true);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
     public async Task GetAgentEnabledServersAsync_UsesGlobalAgentNamePrefix_WhenServerOverrideMissing()
     {
         var serverId = Guid.NewGuid();
@@ -635,7 +726,9 @@ public class RepositoryServerConfigProviderTests
         string hostname = "localhost", int queryPort = 28960,
         bool banFileSyncEnabled = true,
         bool ftpEnabled = true,
-        bool rconEnabled = true)
+        bool rconEnabled = true,
+        string? fileTransportType = null,
+        bool? fileTransportEnabled = null)
     {
         var dto = new GameServerDto();
         var type = typeof(GameServerDto);
@@ -649,10 +742,34 @@ public class RepositoryServerConfigProviderTests
         SetProperty(type, dto, nameof(GameServerDto.BanFileSyncEnabled), banFileSyncEnabled);
         SetProperty(type, dto, nameof(GameServerDto.FtpEnabled), ftpEnabled);
         SetProperty(type, dto, nameof(GameServerDto.RconEnabled), rconEnabled);
+        SetOptionalProperty(type, dto, "FileTransportType", fileTransportType);
+        SetOptionalProperty(type, dto, "FileTransportEnabled", fileTransportEnabled);
 
         return dto;
     }
 
     private static void SetProperty(Type type, object obj, string propertyName, object? value) =>
         type.GetProperty(propertyName)!.SetValue(obj, value);
+
+    private static void SetOptionalProperty(Type type, object obj, string propertyName, object? value)
+    {
+        var property = type.GetProperty(propertyName);
+        if (property is not null)
+        {
+            if (value is string text && property.PropertyType.IsEnum)
+            {
+                if (Enum.TryParse(property.PropertyType, text, ignoreCase: true, out var parsed))
+                {
+                    property.SetValue(obj, parsed);
+                    return;
+                }
+
+                var unsupported = Enum.ToObject(property.PropertyType, 999);
+                property.SetValue(obj, unsupported);
+                return;
+            }
+
+            property.SetValue(obj, value);
+        }
+    }
 }

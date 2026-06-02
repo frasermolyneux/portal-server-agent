@@ -127,7 +127,7 @@ public class AgentHealthCheckTests
             .ReturnsAsync(servers);
 
         var mockTailer = new Mock<ILogTailer>();
-        mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+        mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
             .Returns(async (CancellationToken ct) =>
@@ -137,7 +137,7 @@ public class AgentHealthCheckTests
             });
 
         var mockTailerFactory = new Mock<ILogTailerFactory>();
-        mockTailerFactory.Setup(f => f.Create()).Returns(mockTailer.Object);
+        mockTailerFactory.Setup(f => f.Create(It.IsAny<ServerContext>())).Returns(mockTailer.Object);
 
         var mockParserFactory = new Mock<ILogParserFactory>();
         mockParserFactory.Setup(f => f.Create(It.IsAny<string>())).Returns(new Mock<ILogParser>().Object);

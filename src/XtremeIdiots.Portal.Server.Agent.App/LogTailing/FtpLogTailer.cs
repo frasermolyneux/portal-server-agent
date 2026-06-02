@@ -23,7 +23,7 @@ public sealed class FtpLogTailer : ILogTailer
 
     private readonly ILogger<FtpLogTailer> _logger;
     private AsyncFtpClient? _client;
-    private FtpTailerConfig? _config;
+    private FileTransportTailerConfig? _config;
     private long _lastFileSize;
     private string _partialLine = string.Empty;
     private int _reconnectAttempts;
@@ -47,9 +47,14 @@ public sealed class FtpLogTailer : ILogTailer
     public string? CurrentFilePath => _config?.FilePath;
 
     /// <inheritdoc />
-    public async Task ConnectAsync(FtpTailerConfig config, long? startOffset = null, CancellationToken ct = default)
+    public async Task ConnectAsync(FileTransportTailerConfig config, long? startOffset = null, CancellationToken ct = default)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
+
+        if (!string.Equals(config.TransportType, "ftp", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"FtpLogTailer does not support transport type '{config.TransportType}'.");
+        }
 
         _logger.LogInformation("Connecting to FTP server {Hostname}:{Port} for file {FilePath}",
             config.Hostname, config.Port, config.FilePath);

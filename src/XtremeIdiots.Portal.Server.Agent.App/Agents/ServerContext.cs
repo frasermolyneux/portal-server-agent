@@ -1,5 +1,37 @@
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
+public static class FileTransportTypes
+{
+    public const string Ftp = "ftp";
+    public const string Sftp = "sftp";
+
+    public static string Normalize(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.Equals(normalized, Sftp, StringComparison.OrdinalIgnoreCase) ? Sftp : Ftp;
+    }
+
+    public static bool TryNormalize(string? value, out string normalized)
+    {
+        normalized = string.Empty;
+
+        var candidate = value?.Trim();
+        if (string.Equals(candidate, Ftp, StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = Ftp;
+            return true;
+        }
+
+        if (string.Equals(candidate, Sftp, StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = Sftp;
+            return true;
+        }
+
+        return false;
+    }
+}
+
 /// <summary>
 /// Configuration for a single game server agent, derived from the server config provider.
 /// </summary>
@@ -12,11 +44,20 @@ public sealed record ServerContext
     public required string GameType { get; init; }
     public required string Title { get; init; }
 
-    // FTP config (from "ftp" config namespace)
+    // Legacy FTP-shaped fields retained for compatibility with existing callers/tests.
     public required string FtpHostname { get; init; }
     public required int FtpPort { get; init; }
     public required string FtpUsername { get; init; }
     public required string FtpPassword { get; init; }
+
+    // Transport-aware file configuration (authoritative when provided).
+    public bool? FileTransportEnabled { get; init; }
+    public string? FileTransportType { get; init; }
+    public string? FileTransportHostname { get; init; }
+    public int? FileTransportPort { get; init; }
+    public string? FileTransportUsername { get; init; }
+    public string? FileTransportPassword { get; init; }
+    public string? FileTransportHostKeyFingerprint { get; init; }
 
     // Agent config (from "agent" config namespace)
     public required string? LogFilePath { get; init; }
@@ -49,6 +90,31 @@ public sealed record ServerContext
     /// first, then global configuration fallback.
     /// </summary>
     public string AgentNamePrefix { get; init; } = DefaultAgentNamePrefix;
+
+    public string EffectiveFileTransportType => FileTransportTypes.Normalize(FileTransportType);
+
+    public bool EffectiveFileTransportEnabled => FileTransportEnabled ?? FtpEnabled;
+
+    public string EffectiveFileTransportHostname => FileTransportHostname ?? FtpHostname;
+
+    public int EffectiveFileTransportPort
+    {
+        get
+        {
+            if (FileTransportPort.HasValue)
+            {
+                return FileTransportPort.Value;
+            }
+
+            return string.Equals(EffectiveFileTransportType, FileTransportTypes.Sftp, StringComparison.OrdinalIgnoreCase)
+                ? 22
+                : FtpPort;
+        }
+    }
+
+    public string EffectiveFileTransportUsername => FileTransportUsername ?? FtpUsername;
+
+    public string EffectiveFileTransportPassword => FileTransportPassword ?? FtpPassword;
 
     /// <summary>
     /// Broadcast message scheduling configuration (from "broadcasts" namespace).

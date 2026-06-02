@@ -2,9 +2,6 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 
-using FluentFTP;
-using FluentFTP.Exceptions;
-
 using Microsoft.Extensions.Logging;
 
 using MX.Observability.ApplicationInsights.Auditing;
@@ -42,6 +39,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
     private readonly IRepositoryApiClient _repositoryClient;
     private readonly IBanFileSource _banFileSource;
     private readonly IBanFilePathResolver _pathResolver;
+    private readonly IRemoteFileClientFactory _remoteFileClientFactory;
     private readonly IAuditLogger _auditLogger;
     private readonly ILogger<BanFileWatcher> _logger;
     private readonly Random _jitterRng;
@@ -82,12 +80,14 @@ public sealed class BanFileWatcher : IBanFileWatcher
         IRepositoryApiClient repositoryClient,
         IBanFileSource banFileSource,
         IBanFilePathResolver pathResolver,
+        IRemoteFileClientFactory remoteFileClientFactory,
         IAuditLogger auditLogger,
         ILogger<BanFileWatcher> logger)
     {
         _repositoryClient = repositoryClient ?? throw new ArgumentNullException(nameof(repositoryClient));
         _banFileSource = banFileSource ?? throw new ArgumentNullException(nameof(banFileSource));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _remoteFileClientFactory = remoteFileClientFactory ?? throw new ArgumentNullException(nameof(remoteFileClientFactory));
         _auditLogger = auditLogger ?? throw new ArgumentNullException(nameof(auditLogger));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _jitterRng = new Random();
@@ -98,10 +98,11 @@ public sealed class BanFileWatcher : IBanFileWatcher
         IRepositoryApiClient repositoryClient,
         IBanFileSource banFileSource,
         IBanFilePathResolver pathResolver,
+        IRemoteFileClientFactory remoteFileClientFactory,
         IAuditLogger auditLogger,
         ILogger<BanFileWatcher> logger,
         Random jitterRng)
-        : this(repositoryClient, banFileSource, pathResolver, auditLogger, logger)
+        : this(repositoryClient, banFileSource, pathResolver, remoteFileClientFactory, auditLogger, logger)
     {
         _jitterRng = jitterRng ?? throw new ArgumentNullException(nameof(jitterRng));
     }
@@ -131,17 +132,17 @@ public sealed class BanFileWatcher : IBanFileWatcher
 
         try
         {
-            using var ftp = new AsyncFtpClient(context.FtpHostname, context.FtpUsername, context.FtpPassword, context.FtpPort);
-            await ftp.Connect(ct).ConfigureAwait(false);
+            await using var remoteClient = _remoteFileClientFactory.Create(context);
+            await remoteClient.ConnectAsync(ct).ConfigureAwait(false);
 
             try
             {
                 long currentSize;
                 try
                 {
-                    currentSize = await ftp.GetFileSize(resolvedPath.Path, -1, ct).ConfigureAwait(false);
+                    currentSize = await remoteClient.GetFileSizeAsync(resolvedPath.Path, ct).ConfigureAwait(false);
                 }
-                catch (FtpException ex) when (IsFileNotFound(ex))
+                catch (RemoteFileNotFoundException ex)
                 {
                     // Path resolution may have raced with a mod change, or the server has
                     // never had a ban.txt at the resolved path. Surface as a clean
@@ -168,7 +169,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
                     {
                         // Append-only download: only the new tail.
                         string newContent;
-                        await using (var stream = await ftp.OpenRead(resolvedPath.Path, FtpDataType.Binary, lastKnownSize, false, ct).ConfigureAwait(false))
+                        await using (var stream = await remoteClient.OpenReadAsync(resolvedPath.Path, lastKnownSize, ct).ConfigureAwait(false))
                         using (var reader = new StreamReader(stream))
                         {
                             newContent = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
@@ -198,7 +199,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
                     if (detectedBans.Count == 0)
                     {
                         var pushOutcome = await TryPushCentralBanFileAsync(
-                            ftp, context, existingMonitor, resolvedPath, currentSize, ct).ConfigureAwait(false);
+                            remoteClient, context, existingMonitor, resolvedPath, currentSize, ct).ConfigureAwait(false);
 
                         centralEtag = pushOutcome.CentralEtag;
                         centralEtagSeenAt = pushOutcome.CentralEtagSeenAt;
@@ -214,8 +215,15 @@ public sealed class BanFileWatcher : IBanFileWatcher
             }
             finally
             {
-                await ftp.Disconnect(ct).ConfigureAwait(false);
+                await remoteClient.DisconnectAsync(ct).ConfigureAwait(false);
             }
+        }
+        catch (RemoteFileNotFoundException ex)
+        {
+            checkResult = "FileNotFound";
+            checkErrorMessage = ex.Message;
+            _logger.LogWarning(ex, "[{Title}] Ban file not found during transport operations for path {Path}",
+                context.Title, resolvedPath.Path);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -223,7 +231,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
         }
         catch (Exception ex)
         {
-            checkResult = "FtpError";
+            checkResult = "FileTransportError";
             checkErrorMessage = $"{ex.GetType().Name}: {ex.Message}";
             _logger.LogWarning(ex, "[{Title}] Ban file check failed (monitor {MonitorId}, path {Path})",
                 context.Title, monitorIdForLogs, resolvedPath.Path);
@@ -323,7 +331,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
     /// this cycle so the caller can record it on the status row even when no push occurred.
     /// </summary>
     internal async Task<PushOutcome> TryPushCentralBanFileAsync(
-        AsyncFtpClient ftp,
+        IRemoteFileClient remoteClient,
         ServerContext context,
         BanFileMonitorDto? existingMonitor,
         ResolvedBanFilePath resolvedPath,
@@ -382,7 +390,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
             long currentSizeBeforePush;
             try
             {
-                currentSizeBeforePush = await ftp.GetFileSize(resolvedPath.Path, -1, ct).ConfigureAwait(false);
+                currentSizeBeforePush = await remoteClient.GetFileSizeAsync(resolvedPath.Path, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -401,8 +409,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
 
             try
             {
-                central.Content.Seek(0, SeekOrigin.Begin);
-                await ftp.UploadStream(central.Content, resolvedPath.Path, FtpRemoteExists.Overwrite, true, null, ct).ConfigureAwait(false);
+                await remoteClient.UploadAsync(central.Content, resolvedPath.Path, ct).ConfigureAwait(false);
 
                 _scheduledPushes.TryRemove(context.ServerId, out _);
                 _logger.LogInformation(
@@ -492,12 +499,12 @@ public sealed class BanFileWatcher : IBanFileWatcher
 
         try
         {
-            using var ftp = new AsyncFtpClient(context.FtpHostname, context.FtpUsername, context.FtpPassword, context.FtpPort);
-            await ftp.Connect(ct).ConfigureAwait(false);
+            await using var remoteClient = _remoteFileClientFactory.Create(context);
+            await remoteClient.ConnectAsync(ct).ConfigureAwait(false);
             try
             {
                 string content;
-                await using (var stream = await ftp.OpenRead(remoteFilePath, FtpDataType.Binary, 0, false, ct).ConfigureAwait(false))
+                await using (var stream = await remoteClient.OpenReadAsync(remoteFilePath, 0, ct).ConfigureAwait(false))
                 using (var reader = new StreamReader(stream))
                 {
                     content = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
@@ -509,7 +516,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
             }
             finally
             {
-                await ftp.Disconnect(ct).ConfigureAwait(false);
+                await remoteClient.DisconnectAsync(ct).ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -606,11 +613,6 @@ public sealed class BanFileWatcher : IBanFileWatcher
         var ms = _jitterRng.NextInt64(0, (long)PushStaggerMaxJitter.TotalMilliseconds);
         return TimeSpan.FromMilliseconds(ms);
     }
-
-    private static bool IsFileNotFound(FtpException ex)
-        => ex.Message.Contains("No such file", StringComparison.OrdinalIgnoreCase)
-           || ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
-           || ex.Message.Contains("550", StringComparison.Ordinal);
 
     internal static IReadOnlyList<DetectedBanEntry> ParseBanLines(string content)
     {

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 
 using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
@@ -52,15 +53,36 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             {
                 var configs = await FetchConfigurationsAsync(dto.GameServerId, dto.Title, ct);
 
-                if (!TryGetStringValue(configs, "ftp", "hostname", out var ftpHostname) ||
-                    !TryGetStringValue(configs, "ftp", "username", out var ftpUsername) ||
-                    !TryGetStringValue(configs, "ftp", "password", out var ftpPassword) ||
-                    !TryGetIntValue(configs, "ftp", "port", out var ftpPort))
+                var transportMetadata = ResolveTransportType(dto);
+                if (transportMetadata.IsPresent && !transportMetadata.IsValid)
                 {
                     _logger.LogWarning(
-                        "Skipping server {ServerId} ({Title}) — missing FTP configuration in config namespace",
-                        dto.GameServerId, dto.Title);
+                        "Skipping server {ServerId} ({Title}) — invalid FileTransportType metadata value '{Value}'",
+                        dto.GameServerId,
+                        dto.Title,
+                        transportMetadata.RawValue);
                     continue;
+                }
+
+                var resolvedTransportType = transportMetadata.ResolvedType;
+                var resolvedTransportEnabled = ResolveFileTransportEnabled(dto);
+                var transportNamespace = resolvedTransportType;
+
+                if (!TryGetStringValue(configs, transportNamespace, "hostname", out var transportHostname) ||
+                    !TryGetStringValue(configs, transportNamespace, "username", out var transportUsername) ||
+                    !TryGetStringValue(configs, transportNamespace, "password", out var transportPassword) ||
+                    !TryGetIntValue(configs, transportNamespace, "port", out var transportPort))
+                {
+                    _logger.LogWarning(
+                        "Skipping server {ServerId} ({Title}) — missing {TransportType} configuration in config namespace '{Namespace}'",
+                        dto.GameServerId, dto.Title, resolvedTransportType, transportNamespace);
+                    continue;
+                }
+
+                string? sftpHostKeyFingerprint = null;
+                if (string.Equals(resolvedTransportType, FileTransportTypes.Sftp, StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = TryGetStringValue(configs, transportNamespace, "hostKeyFingerprint", out sftpHostKeyFingerprint);
                 }
 
                 if (!TryGetStringValue(configs, "rcon", "password", out var rconPassword))
@@ -95,10 +117,20 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 var configHashInputs = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["dto.FtpEnabled"] = dto.FtpEnabled.ToString(),
+                    ["dto.FileTransportEnabled"] = resolvedTransportEnabled.ToString(),
+                    ["dto.FileTransportType"] = resolvedTransportType,
                     ["dto.RconEnabled"] = dto.RconEnabled.ToString(),
                     ["dto.BanFileSyncEnabled"] = dto.BanFileSyncEnabled.ToString(),
                     ["dto.BanFileRootPath"] = banFileRootPath,
                 };
+                configHashInputs[$"{transportNamespace}.hostname"] = transportHostname;
+                configHashInputs[$"{transportNamespace}.port"] = transportPort.ToString();
+                configHashInputs[$"{transportNamespace}.username"] = transportUsername;
+                configHashInputs[$"{transportNamespace}.password"] = transportPassword;
+                if (!string.IsNullOrWhiteSpace(sftpHostKeyFingerprint))
+                {
+                    configHashInputs[$"{transportNamespace}.hostKeyFingerprint"] = sftpHostKeyFingerprint;
+                }
                 configHashInputs["agent.agentNamePrefix"] = agentNamePrefix;
                 AppendBroadcastHashFields(configHashInputs, broadcasts);
                 var configHash = ComputeConfigHash(configs, configHashInputs);
@@ -108,10 +140,17 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     ServerId = dto.GameServerId,
                     GameType = dto.GameType.ToString(),
                     Title = dto.Title,
-                    FtpHostname = ftpHostname,
-                    FtpPort = ftpPort,
-                    FtpUsername = ftpUsername,
-                    FtpPassword = ftpPassword,
+                    FtpHostname = transportHostname,
+                    FtpPort = transportPort,
+                    FtpUsername = transportUsername,
+                    FtpPassword = transportPassword,
+                    FileTransportEnabled = resolvedTransportEnabled,
+                    FileTransportType = resolvedTransportType,
+                    FileTransportHostname = transportHostname,
+                    FileTransportPort = transportPort,
+                    FileTransportUsername = transportUsername,
+                    FileTransportPassword = transportPassword,
+                    FileTransportHostKeyFingerprint = sftpHostKeyFingerprint,
                     LogFilePath = logFilePath,
                     Hostname = dto.Hostname,
                     QueryPort = dto.QueryPort,
@@ -179,6 +218,105 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         }
 
         return ServerContext.DefaultAgentNamePrefix;
+    }
+
+    private static bool ResolveFileTransportEnabled(object dto)
+    {
+        var fileTransportEnabledProperty = dto.GetType().GetProperty("FileTransportEnabled", BindingFlags.Public | BindingFlags.Instance);
+        if (fileTransportEnabledProperty is not null)
+        {
+            var value = fileTransportEnabledProperty.GetValue(dto);
+            if (value is bool enabled)
+            {
+                return enabled;
+            }
+        }
+
+        var ftpEnabledProperty = dto.GetType().GetProperty("FtpEnabled", BindingFlags.Public | BindingFlags.Instance);
+        if (ftpEnabledProperty?.GetValue(dto) is bool ftpEnabled)
+        {
+            return ftpEnabled;
+        }
+
+        return true;
+    }
+
+    private static TransportTypeResolution ResolveTransportType(object dto)
+    {
+        var fileTransportTypeProperty = dto.GetType().GetProperty("FileTransportType", BindingFlags.Public | BindingFlags.Instance);
+        if (fileTransportTypeProperty is null)
+        {
+            return new TransportTypeResolution
+            {
+                IsPresent = false,
+                IsValid = true,
+                ResolvedType = FileTransportTypes.Ftp
+            };
+        }
+
+        var value = fileTransportTypeProperty.GetValue(dto);
+        if (value is null)
+        {
+            return new TransportTypeResolution
+            {
+                IsPresent = false,
+                IsValid = true,
+                ResolvedType = FileTransportTypes.Ftp
+            };
+        }
+
+        var rawValue = value.ToString();
+        if (FileTransportTypes.TryNormalize(rawValue, out var normalized))
+        {
+            return new TransportTypeResolution
+            {
+                IsPresent = true,
+                IsValid = true,
+                RawValue = rawValue,
+                ResolvedType = normalized
+            };
+        }
+
+        // Value-type enum properties can appear as their default (0) even when
+        // effectively unset in payloads from older contracts. Treat that as
+        // metadata absent so legacy FTP fallback remains deterministic.
+        if (fileTransportTypeProperty.PropertyType.IsEnum)
+        {
+            try
+            {
+                var numericValue = Convert.ToInt32(value);
+                if (numericValue == 0)
+                {
+                    return new TransportTypeResolution
+                    {
+                        IsPresent = false,
+                        IsValid = true,
+                        RawValue = rawValue,
+                        ResolvedType = FileTransportTypes.Ftp
+                    };
+                }
+            }
+            catch
+            {
+                // Fall through to invalid metadata handling.
+            }
+        }
+
+        return new TransportTypeResolution
+        {
+            IsPresent = true,
+            IsValid = false,
+            RawValue = rawValue,
+            ResolvedType = FileTransportTypes.Ftp
+        };
+    }
+
+    private sealed record TransportTypeResolution
+    {
+        public required bool IsPresent { get; init; }
+        public required bool IsValid { get; init; }
+        public string? RawValue { get; init; }
+        public required string ResolvedType { get; init; }
     }
 
     /// <summary>

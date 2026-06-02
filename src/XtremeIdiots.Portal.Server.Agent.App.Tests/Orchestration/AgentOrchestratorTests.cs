@@ -193,6 +193,30 @@ public class AgentOrchestratorTests
     }
 
     [Fact]
+    public async Task RefreshAgents_SftpWithoutHostKeyFingerprint_SkipsServer()
+    {
+        var server = CreateTestServerContext("SFTP Missing Fingerprint") with
+        {
+            FileTransportEnabled = true,
+            FileTransportType = "sftp",
+            FileTransportHostname = "sftp.example.com",
+            FileTransportPort = 22,
+            FileTransportUsername = "sftp-user",
+            FileTransportPassword = "sftp-pass",
+            FileTransportHostKeyFingerprint = null
+        };
+
+        _mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([server]);
+
+        var orchestrator = CreateOrchestrator();
+
+        await orchestrator.RefreshAgentsAsync(CancellationToken.None);
+
+        Assert.Equal(0, orchestrator.ActiveAgentCount);
+    }
+
+    [Fact]
     public async Task RefreshAgents_DoesNotDuplicateExistingAgents()
     {
         // Arrange
@@ -290,7 +314,7 @@ public class AgentOrchestratorTests
         await orchestrator.RefreshAgentsAsync(CancellationToken.None);
 
         // Assert — tailer factory should only be called once (no restart)
-        _mockTailerFactory.Verify(f => f.Create(), Times.Once);
+        _mockTailerFactory.Verify(f => f.Create(It.IsAny<ServerContext>()), Times.Once);
     }
 
     [Fact]
@@ -339,7 +363,7 @@ public class AgentOrchestratorTests
     private void SetupFactoryMocks()
     {
         var mockTailer = new Mock<ILogTailer>();
-        mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+        mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
             .Returns(async (CancellationToken ct) =>
@@ -349,7 +373,7 @@ public class AgentOrchestratorTests
                 return (IReadOnlyList<string>)Array.Empty<string>();
             });
 
-        _mockTailerFactory.Setup(f => f.Create()).Returns(mockTailer.Object);
+        _mockTailerFactory.Setup(f => f.Create(It.IsAny<ServerContext>())).Returns(mockTailer.Object);
         _mockParserFactory.Setup(f => f.Create(It.IsAny<string>())).Returns(new Mock<ILogParser>().Object);
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);

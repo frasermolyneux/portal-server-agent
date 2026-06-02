@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 
+using XtremeIdiots.Portal.Server.Agent.App.Agents;
+
 namespace XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 
 /// <summary>
@@ -10,11 +12,11 @@ public interface ILogTailerFactory
     /// <summary>
     /// Creates a new <see cref="ILogTailer"/> instance.
     /// </summary>
-    ILogTailer Create();
+    ILogTailer Create(ServerContext context);
 }
 
 /// <summary>
-/// Default factory that creates <see cref="FtpLogTailer"/> instances.
+/// Default factory that creates transport-specific <see cref="ILogTailer"/> instances.
 /// </summary>
 public sealed class LogTailerFactory : ILogTailerFactory
 {
@@ -30,5 +32,12 @@ public sealed class LogTailerFactory : ILogTailerFactory
     }
 
     /// <inheritdoc />
-    public ILogTailer Create() => new FtpLogTailer(_loggerFactory.CreateLogger<FtpLogTailer>());
+    public ILogTailer Create(ServerContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return string.Equals(context.EffectiveFileTransportType, FileTransportTypes.Sftp, StringComparison.OrdinalIgnoreCase)
+            ? new SftpLogTailer(_loggerFactory.CreateLogger<SftpLogTailer>())
+            : new FtpLogTailer(_loggerFactory.CreateLogger<FtpLogTailer>());
+    }
 }

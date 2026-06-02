@@ -207,16 +207,28 @@ public class AgentOrchestrator : BackgroundService
             if (_agents.ContainsKey(server.ServerId))
                 continue;
 
-            if (!server.FtpEnabled || !server.RconEnabled)
+            if (!server.EffectiveFileTransportEnabled || !server.RconEnabled)
             {
-                _logger.LogWarning("Server {Title} ({ServerId}) has FTP or RCON disabled, skipping",
-                    server.Title, server.ServerId);
+                _logger.LogWarning(
+                    "Server {Title} ({ServerId}) has file transport ({TransportType}) or RCON disabled, skipping",
+                    server.Title, server.ServerId, server.EffectiveFileTransportType);
                 continue;
             }
 
-            if (string.IsNullOrEmpty(server.FtpHostname) || string.IsNullOrEmpty(server.FtpUsername))
+            if (string.IsNullOrWhiteSpace(server.EffectiveFileTransportHostname) ||
+                string.IsNullOrWhiteSpace(server.EffectiveFileTransportUsername))
             {
-                _logger.LogWarning("Server {Title} ({ServerId}) has no FTP config, skipping",
+                _logger.LogWarning(
+                    "Server {Title} ({ServerId}) has no {TransportType} credentials, skipping",
+                    server.Title, server.ServerId, server.EffectiveFileTransportType);
+                continue;
+            }
+
+            if (string.Equals(server.EffectiveFileTransportType, FileTransportTypes.Sftp, StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrWhiteSpace(server.FileTransportHostKeyFingerprint))
+            {
+                _logger.LogWarning(
+                    "Server {Title} ({ServerId}) is configured for SFTP but has no host key fingerprint, skipping",
                     server.Title, server.ServerId);
                 continue;
             }
@@ -229,7 +241,7 @@ public class AgentOrchestrator : BackgroundService
             }
 
             var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var tailer = _tailerFactory.Create();
+            var tailer = _tailerFactory.Create(server);
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 

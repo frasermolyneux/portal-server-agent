@@ -94,17 +94,19 @@ public sealed class GameServerAgent
             if (startOffset.HasValue)
                 _logger.LogInformation("[{Title}] Resuming from offset {Offset}", _context.Title, startOffset.Value);
 
-            // 2. Connect FTP tailer
-            var ftpConfig = new FtpTailerConfig
+            // 2. Connect file transport tailer
+            var tailerConfig = new FileTransportTailerConfig
             {
-                Hostname = _context.FtpHostname,
-                Port = _context.FtpPort,
-                Username = _context.FtpUsername,
-                Password = _context.FtpPassword,
+                TransportType = _context.EffectiveFileTransportType,
+                Hostname = _context.EffectiveFileTransportHostname,
+                Port = _context.EffectiveFileTransportPort,
+                Username = _context.EffectiveFileTransportUsername,
+                Password = _context.EffectiveFileTransportPassword,
+                HostKeyFingerprint = _context.FileTransportHostKeyFingerprint,
                 FilePath = _context.LogFilePath ?? throw new InvalidOperationException("LogFilePath not set")
             };
 
-            await _tailer.ConnectAsync(ftpConfig, startOffset, ct);
+            await _tailer.ConnectAsync(tailerConfig, startOffset, ct);
 
             // 2a. Broadcast startup status once after successful connection.
             await SendStartupOnlineBroadcastAsync(ct);

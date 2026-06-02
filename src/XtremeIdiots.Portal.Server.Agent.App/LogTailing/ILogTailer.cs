@@ -11,7 +11,13 @@ public interface ILogTailer : IAsyncDisposable
     /// If <paramref name="startOffset"/> is provided and the file size is at least that large,
     /// resumes from that offset; otherwise starts from the end of the file.
     /// </summary>
-    Task ConnectAsync(FtpTailerConfig config, long? startOffset = null, CancellationToken ct = default);
+    Task ConnectAsync(FileTransportTailerConfig config, long? startOffset = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Backwards-compatible overload for legacy FTP-shaped call sites.
+    /// </summary>
+    Task ConnectAsync(FtpTailerConfig config, long? startOffset = null, CancellationToken ct = default)
+        => ConnectAsync(config.ToTransportConfig(), startOffset, ct);
 
     /// <summary>
     /// Poll for new lines. Returns empty if no new data.

@@ -79,7 +79,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -121,7 +121,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var pollCount = 0;
@@ -156,7 +156,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -186,7 +186,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -226,7 +226,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var pollCount = 0;
@@ -268,7 +268,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(_testContext.ServerId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(savedOffset);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), 42L, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), 42L, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -282,7 +282,7 @@ public class GameServerAgentTests
 
         // Assert — tailer connected with the saved offset
         _mockTailer.Verify(
-            t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), 42L, It.IsAny<CancellationToken>()),
+            t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), 42L, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -300,7 +300,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(_testContext.ServerId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(savedOffset);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -314,7 +314,7 @@ public class GameServerAgentTests
 
         // Assert — tailer connected without an offset (null) since file path doesn't match
         _mockTailer.Verify(
-            t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()),
+            t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -332,7 +332,7 @@ public class GameServerAgentTests
 
         // Assert — tailer should never connect, no events published
         _mockTailer.Verify(
-            t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+            t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _mockPublisher.Verify(
             p => p.PublishServerConnectedAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()),
@@ -346,7 +346,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -401,7 +401,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -453,7 +453,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -490,7 +490,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
@@ -516,7 +516,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         // Simulate several polls returning empty (as would happen with the -1 file size guard)
@@ -552,7 +552,7 @@ public class GameServerAgentTests
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
 
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var pollCount = 0;
@@ -603,7 +603,7 @@ public class GameServerAgentTests
 
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<string>());
@@ -634,7 +634,7 @@ public class GameServerAgentTests
 
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<string>());
@@ -678,7 +678,7 @@ public class GameServerAgentTests
             .ReturnsAsync(new ApiResult(HttpStatusCode.InternalServerError));
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
-        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FtpTailerConfig>(), null, It.IsAny<CancellationToken>()))
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<string>());
@@ -693,3 +693,4 @@ public class GameServerAgentTests
         _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "^3[RetryAgent]^7 message-2", It.IsAny<CancellationToken>()), Times.Never);
     }
 }
+
