@@ -129,4 +129,40 @@ public class BanFilePathResolverTests
         Assert.Equal("/mods/xi_promod/banlist_v2.dat", result.Path);
         Assert.Equal("xi_promod", result.ResolvedForMod);
     }
+
+    [Fact]
+    public void Resolve_PreservesServerReportedModsTokenCase()
+    {
+        var result = _sut.Resolve("CallOfDuty4x", "/home/cod4xserver/.callofduty4", liveMod: "Mods/xi_mw2_old");
+
+        Assert.Equal("/home/cod4xserver/.callofduty4/Mods/xi_mw2_old/banlist_v2.dat", result.Path);
+        Assert.Equal("xi_mw2_old", result.ResolvedForMod);
+    }
+
+    [Fact]
+    public void Resolve_NormalisesBackslashesInLiveModAndPreservesModsTokenCase()
+    {
+        var result = _sut.Resolve("CallOfDuty4", "/home/cod4server/.callofduty4", liveMod: "MODS\\xi_sniper");
+
+        Assert.Equal("/home/cod4server/.callofduty4/MODS/xi_sniper/ban.txt", result.Path);
+        Assert.Equal("xi_sniper", result.ResolvedForMod);
+    }
+
+    [Fact]
+    public void Resolve_LiveModTokenOnly_FallsBackToMain()
+    {
+        var result = _sut.Resolve("CallOfDuty4x", "/home/cod4xserver/.callofduty4", liveMod: "mods/");
+
+        Assert.Equal("/home/cod4xserver/.callofduty4/main/banlist_v2.dat", result.Path);
+        Assert.Equal("main", result.ResolvedForMod);
+    }
+
+    [Fact]
+    public void Resolve_LeadingSlashBeforeModsToken_PreservesServerReportedTokenCase()
+    {
+        var result = _sut.Resolve("CallOfDuty4x", "/home/cod4xserver/.callofduty4", liveMod: "/Mods/xi_mw2_old");
+
+        Assert.Equal("/home/cod4xserver/.callofduty4/Mods/xi_mw2_old/banlist_v2.dat", result.Path);
+        Assert.Equal("xi_mw2_old", result.ResolvedForMod);
+    }
 }

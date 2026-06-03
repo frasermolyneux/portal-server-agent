@@ -58,16 +58,38 @@ public sealed class BanFilePathResolver : IBanFilePathResolver
             };
         }
 
-        var trimmedMod = liveMod.Trim();
+        var trimmedMod = liveMod.Trim().Replace('\\', '/').Trim('/');
+        var modFolderToken = "mods";
 
-        // Strip a leading "mods/" prefix if the parser ever surfaces one — paths in the
-        // ban file are always relative to the mods/ directory.
-        if (trimmedMod.StartsWith("mods/", StringComparison.OrdinalIgnoreCase))
-            trimmedMod = trimmedMod[5..];
+        // Preserve the folder token exactly as reported by the server when fs_game is
+        // provided as "Mods/<mod>" (or any case variant). This keeps path casing
+        // accurate for Linux/SFTP targets while still normalising the mod segment.
+        var firstSlash = trimmedMod.IndexOf('/');
+        if (firstSlash > 0)
+        {
+            var maybeModsToken = trimmedMod[..firstSlash];
+            var remainder = trimmedMod[(firstSlash + 1)..].TrimStart('/');
+
+            if (maybeModsToken.Equals("mods", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(remainder))
+            {
+                modFolderToken = maybeModsToken;
+                trimmedMod = remainder;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(trimmedMod) ||
+            trimmedMod.Equals("mods", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ResolvedBanFilePath
+            {
+                Path = $"{normalisedRoot}main/{fileName}",
+                ResolvedForMod = "main"
+            };
+        }
 
         return new ResolvedBanFilePath
         {
-            Path = $"{normalisedRoot}mods/{trimmedMod}/{fileName}",
+            Path = $"{normalisedRoot}{modFolderToken}/{trimmedMod}/{fileName}",
             ResolvedForMod = trimmedMod
         };
     }
