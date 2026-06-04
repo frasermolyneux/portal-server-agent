@@ -210,6 +210,7 @@ public sealed class SftpLogTailer : ILogTailer
     {
         var hostname = _config!.Hostname;
         var port = _config.Port;
+        var resolvedAddresses = Array.Empty<IPAddress>();
 
         _logger.LogWarning(
             "SFTP connect timed out to {Hostname}:{Port} — running network path diagnostic",
@@ -218,9 +219,9 @@ public sealed class SftpLogTailer : ILogTailer
         // 1. DNS resolution
         try
         {
-            var addresses = await Dns.GetHostAddressesAsync(hostname, ct).ConfigureAwait(false);
-            var resolved = addresses.Length > 0
-                ? string.Join(", ", addresses.Select(static a => a.ToString()))
+            resolvedAddresses = await Dns.GetHostAddressesAsync(hostname, ct).ConfigureAwait(false);
+            var resolved = resolvedAddresses.Length > 0
+                ? string.Join(", ", resolvedAddresses.Select(static a => a.ToString()))
                 : "(no addresses returned)";
             _logger.LogWarning("Network diagnostic DNS: {Hostname} resolves to [{Resolved}]", hostname, resolved);
         }
@@ -287,36 +288,64 @@ public sealed class SftpLogTailer : ILogTailer
 
     traceComplete:
 
-        // 3. TCP connect probe — distinguishes "host alive but port filtered" from "no route"
-        try
-        {
-            using var diagCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            diagCts.CancelAfter(TimeSpan.FromSeconds(5));
+        // 3. TCP connect probes per resolved IP — reveals address-family-specific failures and socket error codes.
+        var probeTargets = resolvedAddresses.Length > 0
+            ? resolvedAddresses
+            : [IPAddress.TryParse(hostname, out var parsedAddress) ? parsedAddress : IPAddress.None];
 
-            using var tcp = new TcpClient();
-            await tcp.ConnectAsync(hostname, port, diagCts.Token).ConfigureAwait(false);
+        foreach (var ip in probeTargets.Where(static address => !IPAddress.None.Equals(address)))
+        {
+            if (ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("Network diagnostic TCP: probe canceled before testing remaining addresses");
+                break;
+            }
 
-            var local = tcp.Client.LocalEndPoint?.ToString() ?? "unknown";
-            var remote = tcp.Client.RemoteEndPoint?.ToString() ?? "unknown";
-            _logger.LogWarning(
-                "Network diagnostic TCP: connected to {Hostname}:{Port} — local={Local} remote={Remote}",
-                hostname, port, local, remote);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogWarning(
-                "Network diagnostic TCP: connect to {Hostname}:{Port} timed out (5s probe)",
-                hostname, port);
-        }
-        catch (SocketException ex)
-        {
-            _logger.LogWarning(
-                "Network diagnostic TCP: connect to {Hostname}:{Port} failed — SocketError={SocketError} ({ErrorCode})",
-                hostname, port, ex.SocketErrorCode, ex.ErrorCode);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Network diagnostic TCP: connect to {Hostname}:{Port} failed", hostname, port);
+            try
+            {
+                using var tcp = new TcpClient(ip.AddressFamily);
+                var connectTask = tcp.ConnectAsync(ip, port);
+                var timeoutTask = Task.Delay(TimeSpan.FromSeconds(5));
+                var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
+
+                if (completedTask == timeoutTask)
+                {
+                    _ = connectTask.ContinueWith(
+                        static t => { _ = t.Exception; },
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+
+                    _logger.LogWarning(
+                        "Network diagnostic TCP: connect to {Ip}:{Port} timed out (5s probe)",
+                        ip, port);
+                    continue;
+                }
+
+                await connectTask.ConfigureAwait(false);
+
+                var local = tcp.Client.LocalEndPoint?.ToString() ?? "unknown";
+                var remote = tcp.Client.RemoteEndPoint?.ToString() ?? "unknown";
+                _logger.LogWarning(
+                    "Network diagnostic TCP: connected to {Ip}:{Port} — local={Local} remote={Remote}",
+                    ip, port, local, remote);
+            }
+            catch (SocketException ex)
+            {
+                _logger.LogWarning(
+                    "Network diagnostic TCP: connect to {Ip}:{Port} failed — SocketError={SocketError} ({ErrorCode})",
+                    ip, port, ex.SocketErrorCode, ex.ErrorCode);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    "Network diagnostic TCP: connect probe canceled for {Ip}:{Port}",
+                    ip, port);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Network diagnostic TCP: connect to {Ip}:{Port} failed", ip, port);
+            }
         }
     }
 
