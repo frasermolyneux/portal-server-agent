@@ -1,4 +1,6 @@
 using System.Text;
+using System.Net;
+using System.Net.Sockets;
 
 using Microsoft.Extensions.Logging;
 
@@ -25,6 +27,7 @@ public sealed class SftpLogTailer : ILogTailer
 
     private bool _hostKeyValidated;
     private string? _actualHostKeyFingerprint;
+    private string _lastResolvedEndpoints = "unknown";
 
     public SftpLogTailer(ILogger<SftpLogTailer> logger)
     {
@@ -159,6 +162,8 @@ public sealed class SftpLogTailer : ILogTailer
         _hostKeyValidated = false;
         _actualHostKeyFingerprint = null;
 
+        await CaptureConnectivityDebugAsync(ct).ConfigureAwait(false);
+
         _client = new SftpClient(_config.Hostname, _config.Port, _config.Username, _config.Password);
         _client.HostKeyReceived += (_, args) =>
         {
@@ -193,6 +198,57 @@ public sealed class SftpLogTailer : ILogTailer
         await EstablishConnectionAsync(ct).ConfigureAwait(false);
 
         _logger.LogInformation("Reconnected to SFTP server, resuming from offset {Offset}", _lastFileSize);
+    }
+
+    private async Task CaptureConnectivityDebugAsync(CancellationToken ct)
+    {
+        try
+        {
+            var addresses = await Dns.GetHostAddressesAsync(_config!.Hostname, ct).ConfigureAwait(false);
+            _lastResolvedEndpoints = addresses.Length > 0
+                ? string.Join(", ", addresses.Select(static a => a.ToString()))
+                : "no addresses";
+        }
+        catch (Exception ex)
+        {
+            _lastResolvedEndpoints = $"dns-resolution-failed: {ex.GetType().Name}";
+        }
+
+        _logger.LogDebug(
+            "SFTP connect diagnostics for {Hostname}:{Port}: resolved endpoints [{ResolvedEndpoints}]",
+            _config!.Hostname,
+            _config.Port,
+            _lastResolvedEndpoints);
+
+        if (!_logger.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        try
+        {
+            using var tcpClient = new TcpClient();
+            await tcpClient.ConnectAsync(_config.Hostname, _config.Port, ct).ConfigureAwait(false);
+
+            var localEndPoint = tcpClient.Client.LocalEndPoint?.ToString() ?? "unknown";
+            var remoteEndPoint = tcpClient.Client.RemoteEndPoint?.ToString() ?? "unknown";
+
+            _logger.LogDebug(
+                "SFTP TCP probe for {Hostname}:{Port}: local endpoint {LocalEndPoint}, remote endpoint {RemoteEndPoint}",
+                _config.Hostname,
+                _config.Port,
+                localEndPoint,
+                remoteEndPoint);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "SFTP TCP probe failed for {Hostname}:{Port} (resolved: [{ResolvedEndpoints}])",
+                _config.Hostname,
+                _config.Port,
+                _lastResolvedEndpoints);
+        }
     }
 
     private async Task<long> GetFileSizeAsync(string path, CancellationToken ct)
