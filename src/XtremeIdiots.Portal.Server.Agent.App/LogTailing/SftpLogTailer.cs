@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 using Microsoft.Extensions.Logging;
@@ -55,7 +56,15 @@ public sealed class SftpLogTailer : ILogTailer
         _logger.LogInformation("Connecting to SFTP server {Hostname}:{Port} for file {FilePath}",
             config.Hostname, config.Port, config.FilePath);
 
-        await EstablishConnectionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await EstablishConnectionAsync(ct).ConfigureAwait(false);
+        }
+        catch (SshOperationTimeoutException)
+        {
+            await RunTracerouteAsync(ct).ConfigureAwait(false);
+            throw;
+        }
 
         var currentFileSize = await GetFileSizeAsync(config.FilePath, ct).ConfigureAwait(false);
 
@@ -193,6 +202,56 @@ public sealed class SftpLogTailer : ILogTailer
         await EstablishConnectionAsync(ct).ConfigureAwait(false);
 
         _logger.LogInformation("Reconnected to SFTP server, resuming from offset {Offset}", _lastFileSize);
+    }
+
+    private async Task RunTracerouteAsync(CancellationToken ct)
+    {
+        var hostname = _config!.Hostname;
+        var port = _config.Port;
+
+        _logger.LogWarning(
+            "SFTP connect timed out to {Hostname}:{Port} — running network path diagnostic (traceroute)",
+            hostname, port);
+
+        try
+        {
+            var isWindows = OperatingSystem.IsWindows();
+            var fileName = isWindows ? "tracert" : "traceroute";
+            var arguments = isWindows ? $"-d -w 1000 {hostname}" : $"-n -w 1 {hostname}";
+
+            using var traceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            traceCts.CancelAfter(TimeSpan.FromSeconds(60));
+
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            process.Start();
+            var output = await process.StandardOutput.ReadToEndAsync(traceCts.Token).ConfigureAwait(false);
+            var error = await process.StandardError.ReadToEndAsync(traceCts.Token).ConfigureAwait(false);
+            await process.WaitForExitAsync(traceCts.Token).ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(output))
+            {
+                _logger.LogWarning("Traceroute to {Hostname}:{Port}:\n{Output}", hostname, port, output.TrimEnd());
+            }
+
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                _logger.LogWarning("Traceroute stderr for {Hostname}:{Port}:\n{Error}", hostname, port, error.TrimEnd());
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to run traceroute to {Hostname}:{Port}", hostname, port);
+        }
     }
 
     private async Task<long> GetFileSizeAsync(string path, CancellationToken ct)
