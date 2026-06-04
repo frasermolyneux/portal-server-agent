@@ -207,6 +207,7 @@ public sealed class GameServerAgent
         catch (Exception ex)
         {
             _logger.LogError(ex, "[{Title}] Agent failed during startup or run loop initialization", _context.Title);
+            throw;
         }
         finally
         {
