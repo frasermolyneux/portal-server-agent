@@ -1,4 +1,6 @@
-using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text;
 
 using Microsoft.Extensions.Logging;
@@ -210,47 +212,111 @@ public sealed class SftpLogTailer : ILogTailer
         var port = _config.Port;
 
         _logger.LogWarning(
-            "SFTP connect timed out to {Hostname}:{Port} — running network path diagnostic (traceroute)",
+            "SFTP connect timed out to {Hostname}:{Port} — running network path diagnostic",
             hostname, port);
 
+        // 1. DNS resolution
         try
         {
-            var isWindows = OperatingSystem.IsWindows();
-            var fileName = isWindows ? "tracert" : "traceroute";
-            var arguments = isWindows ? $"-d -w 1000 {hostname}" : $"-n -w 1 {hostname}";
-
-            using var traceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            traceCts.CancelAfter(TimeSpan.FromSeconds(60));
-
-            using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync(traceCts.Token).ConfigureAwait(false);
-            var error = await process.StandardError.ReadToEndAsync(traceCts.Token).ConfigureAwait(false);
-            await process.WaitForExitAsync(traceCts.Token).ConfigureAwait(false);
-
-            if (!string.IsNullOrWhiteSpace(output))
-            {
-                _logger.LogWarning("Traceroute to {Hostname}:{Port}:\n{Output}", hostname, port, output.TrimEnd());
-            }
-
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                _logger.LogWarning("Traceroute stderr for {Hostname}:{Port}:\n{Error}", hostname, port, error.TrimEnd());
-            }
+            var addresses = await Dns.GetHostAddressesAsync(hostname, ct).ConfigureAwait(false);
+            var resolved = addresses.Length > 0
+                ? string.Join(", ", addresses.Select(static a => a.ToString()))
+                : "(no addresses returned)";
+            _logger.LogWarning("Network diagnostic DNS: {Hostname} resolves to [{Resolved}]", hostname, resolved);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Failed to run traceroute to {Hostname}:{Port}", hostname, port);
+            _logger.LogWarning(ex, "Network diagnostic DNS: resolution failed for {Hostname}", hostname);
+        }
+
+        // 2. Hop-by-hop trace (traceroute equivalent via ICMP TTL increment)
+        //    Each ping with TTL=n expires at the nth router, which replies with
+        //    ICMP Time Exceeded, revealing its address — exactly what traceroute does.
+        const int maxHops = 30;
+        const int hopTimeoutMs = 3000;
+
+        _logger.LogWarning(
+            "Network diagnostic trace: hop-by-hop path to {Hostname} (max {MaxHops} hops)",
+            hostname, maxHops);
+
+        for (var ttl = 1; ttl <= maxHops && !ct.IsCancellationRequested; ttl++)
+        {
+            try
+            {
+                using var ping = new Ping();
+                var options = new PingOptions(ttl, dontFragment: true);
+                var reply = await ping.SendPingAsync(hostname, hopTimeoutMs, new byte[32], options)
+                    .ConfigureAwait(false);
+
+                var hopAddress = reply.Address?.ToString() ?? "*";
+
+                switch (reply.Status)
+                {
+                    case IPStatus.TtlExpired:
+                        _logger.LogWarning(
+                            "Network diagnostic trace: hop {Ttl,2}  {HopAddress}",
+                            ttl, hopAddress);
+                        break;
+
+                    case IPStatus.Success:
+                        _logger.LogWarning(
+                            "Network diagnostic trace: hop {Ttl,2}  {HopAddress}  (destination reached, roundtrip={Roundtrip}ms)",
+                            ttl, hopAddress, reply.RoundtripTime);
+                        goto traceComplete;
+
+                    case IPStatus.TimedOut:
+                        _logger.LogWarning(
+                            "Network diagnostic trace: hop {Ttl,2}  * (no response)",
+                            ttl);
+                        break;
+
+                    default:
+                        _logger.LogWarning(
+                            "Network diagnostic trace: hop {Ttl,2}  {HopAddress}  status={Status}",
+                            ttl, hopAddress, reply.Status);
+                        goto traceComplete;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    "Network diagnostic trace: hop {Ttl,2}  error ({ExType})",
+                    ttl, ex.GetType().Name);
+            }
+        }
+
+    traceComplete:
+
+        // 3. TCP connect probe — distinguishes "host alive but port filtered" from "no route"
+        try
+        {
+            using var diagCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            diagCts.CancelAfter(TimeSpan.FromSeconds(5));
+
+            using var tcp = new TcpClient();
+            await tcp.ConnectAsync(hostname, port, diagCts.Token).ConfigureAwait(false);
+
+            var local = tcp.Client.LocalEndPoint?.ToString() ?? "unknown";
+            var remote = tcp.Client.RemoteEndPoint?.ToString() ?? "unknown";
+            _logger.LogWarning(
+                "Network diagnostic TCP: connected to {Hostname}:{Port} — local={Local} remote={Remote}",
+                hostname, port, local, remote);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning(
+                "Network diagnostic TCP: connect to {Hostname}:{Port} timed out (5s probe)",
+                hostname, port);
+        }
+        catch (SocketException ex)
+        {
+            _logger.LogWarning(
+                "Network diagnostic TCP: connect to {Hostname}:{Port} failed — SocketError={SocketError} ({ErrorCode})",
+                hostname, port, ex.SocketErrorCode, ex.ErrorCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Network diagnostic TCP: connect to {Hostname}:{Port} failed", hostname, port);
         }
     }
 
