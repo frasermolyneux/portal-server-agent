@@ -204,6 +204,10 @@ public sealed class GameServerAgent
         {
             // Graceful shutdown
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[{Title}] Agent failed during startup or run loop initialization", _context.Title);
+        }
         finally
         {
             // Save offset on shutdown with a 5-second timeout
