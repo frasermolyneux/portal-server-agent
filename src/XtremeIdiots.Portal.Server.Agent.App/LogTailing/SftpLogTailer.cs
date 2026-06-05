@@ -1,6 +1,3 @@
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
 using System.Text;
 
 using Microsoft.Extensions.Logging;
@@ -58,15 +55,7 @@ public sealed class SftpLogTailer : ILogTailer
         _logger.LogInformation("Connecting to SFTP server {Hostname}:{Port} for file {FilePath}",
             config.Hostname, config.Port, config.FilePath);
 
-        try
-        {
-            await EstablishConnectionAsync(ct).ConfigureAwait(false);
-        }
-        catch (SshOperationTimeoutException)
-        {
-            await RunTracerouteAsync(ct).ConfigureAwait(false);
-            throw;
-        }
+        await EstablishConnectionAsync(ct).ConfigureAwait(false);
 
         var currentFileSize = await GetFileSizeAsync(config.FilePath, ct).ConfigureAwait(false);
 
@@ -204,149 +193,6 @@ public sealed class SftpLogTailer : ILogTailer
         await EstablishConnectionAsync(ct).ConfigureAwait(false);
 
         _logger.LogInformation("Reconnected to SFTP server, resuming from offset {Offset}", _lastFileSize);
-    }
-
-    private async Task RunTracerouteAsync(CancellationToken ct)
-    {
-        var hostname = _config!.Hostname;
-        var port = _config.Port;
-        var resolvedAddresses = Array.Empty<IPAddress>();
-
-        _logger.LogWarning(
-            "SFTP connect timed out to {Hostname}:{Port} — running network path diagnostic",
-            hostname, port);
-
-        // 1. DNS resolution
-        try
-        {
-            resolvedAddresses = await Dns.GetHostAddressesAsync(hostname, ct).ConfigureAwait(false);
-            var resolved = resolvedAddresses.Length > 0
-                ? string.Join(", ", resolvedAddresses.Select(static a => a.ToString()))
-                : "(no addresses returned)";
-            _logger.LogWarning("Network diagnostic DNS: {Hostname} resolves to [{Resolved}]", hostname, resolved);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Network diagnostic DNS: resolution failed for {Hostname}", hostname);
-        }
-
-        // 2. Hop-by-hop trace (traceroute equivalent via ICMP TTL increment)
-        //    Each ping with TTL=n expires at the nth router, which replies with
-        //    ICMP Time Exceeded, revealing its address — exactly what traceroute does.
-        const int maxHops = 30;
-        const int hopTimeoutMs = 3000;
-
-        _logger.LogWarning(
-            "Network diagnostic trace: hop-by-hop path to {Hostname} (max {MaxHops} hops)",
-            hostname, maxHops);
-
-        for (var ttl = 1; ttl <= maxHops && !ct.IsCancellationRequested; ttl++)
-        {
-            try
-            {
-                using var ping = new Ping();
-                var options = new PingOptions(ttl, dontFragment: true);
-                var reply = await ping.SendPingAsync(hostname, hopTimeoutMs, new byte[32], options)
-                    .ConfigureAwait(false);
-
-                var hopAddress = reply.Address?.ToString() ?? "*";
-
-                switch (reply.Status)
-                {
-                    case IPStatus.TtlExpired:
-                        _logger.LogWarning(
-                            "Network diagnostic trace: hop {Ttl,2}  {HopAddress}",
-                            ttl, hopAddress);
-                        break;
-
-                    case IPStatus.Success:
-                        _logger.LogWarning(
-                            "Network diagnostic trace: hop {Ttl,2}  {HopAddress}  (destination reached, roundtrip={Roundtrip}ms)",
-                            ttl, hopAddress, reply.RoundtripTime);
-                        goto traceComplete;
-
-                    case IPStatus.TimedOut:
-                        _logger.LogWarning(
-                            "Network diagnostic trace: hop {Ttl,2}  * (no response)",
-                            ttl);
-                        break;
-
-                    default:
-                        _logger.LogWarning(
-                            "Network diagnostic trace: hop {Ttl,2}  {HopAddress}  status={Status}",
-                            ttl, hopAddress, reply.Status);
-                        goto traceComplete;
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogWarning(
-                    "Network diagnostic trace: hop {Ttl,2}  error ({ExType})",
-                    ttl, ex.GetType().Name);
-            }
-        }
-
-    traceComplete:
-
-        // 3. TCP connect probes per resolved IP — reveals address-family-specific failures and socket error codes.
-        var probeTargets = resolvedAddresses.Length > 0
-            ? resolvedAddresses
-            : [IPAddress.TryParse(hostname, out var parsedAddress) ? parsedAddress : IPAddress.None];
-
-        foreach (var ip in probeTargets.Where(static address => !IPAddress.None.Equals(address)))
-        {
-            if (ct.IsCancellationRequested)
-            {
-                _logger.LogWarning("Network diagnostic TCP: probe canceled before testing remaining addresses");
-                break;
-            }
-
-            try
-            {
-                using var tcp = new TcpClient(ip.AddressFamily);
-                var connectTask = tcp.ConnectAsync(ip, port);
-                var timeoutTask = Task.Delay(TimeSpan.FromSeconds(5));
-                var completedTask = await Task.WhenAny(connectTask, timeoutTask).ConfigureAwait(false);
-
-                if (completedTask == timeoutTask)
-                {
-                    _ = connectTask.ContinueWith(
-                        static t => { _ = t.Exception; },
-                        CancellationToken.None,
-                        TaskContinuationOptions.OnlyOnFaulted,
-                        TaskScheduler.Default);
-
-                    _logger.LogWarning(
-                        "Network diagnostic TCP: connect to {Ip}:{Port} timed out (5s probe)",
-                        ip, port);
-                    continue;
-                }
-
-                await connectTask.ConfigureAwait(false);
-
-                var local = tcp.Client.LocalEndPoint?.ToString() ?? "unknown";
-                var remote = tcp.Client.RemoteEndPoint?.ToString() ?? "unknown";
-                _logger.LogWarning(
-                    "Network diagnostic TCP: connected to {Ip}:{Port} — local={Local} remote={Remote}",
-                    ip, port, local, remote);
-            }
-            catch (SocketException ex)
-            {
-                _logger.LogWarning(
-                    "Network diagnostic TCP: connect to {Ip}:{Port} failed — SocketError={SocketError} ({ErrorCode})",
-                    ip, port, ex.SocketErrorCode, ex.ErrorCode);
-            }
-            catch (OperationCanceledException)
-            {
-                _logger.LogWarning(
-                    "Network diagnostic TCP: connect probe canceled for {Ip}:{Port}",
-                    ip, port);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Network diagnostic TCP: connect to {Ip}:{Port} failed", ip, port);
-            }
-        }
     }
 
     private async Task<long> GetFileSizeAsync(string path, CancellationToken ct)
