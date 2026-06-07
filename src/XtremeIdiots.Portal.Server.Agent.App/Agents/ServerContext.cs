@@ -38,6 +38,7 @@ public static class FileTransportTypes
 public sealed record ServerContext
 {
     public const int DefaultBroadcastIntervalSeconds = 500;
+    public const int DefaultBanFileCheckIntervalSeconds = 60;
     public const string DefaultAgentNamePrefix = "^4[^1>XI< BOT^4]^7";
     public const string DefaultScreenshotFilePattern = "*.jpg";
     public const int DefaultScreenshotPollIntervalSeconds = 60;
@@ -82,6 +83,12 @@ public sealed record ServerContext
     /// servers that have not yet had the root path set.
     /// </summary>
     public required string BanFileRootPath { get; init; }
+
+    /// <summary>
+    /// Ban file monitor cadence in seconds (from the "banfiles" namespace).
+    /// Defaults to the legacy 60-second cadence when unspecified.
+    /// </summary>
+    public int BanFileCheckIntervalSeconds { get; init; } = DefaultBanFileCheckIntervalSeconds;
 
     /// <summary>
     /// SHA256 hash of the server's configuration values.

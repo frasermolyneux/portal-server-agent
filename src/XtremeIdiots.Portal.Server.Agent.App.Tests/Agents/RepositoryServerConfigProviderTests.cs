@@ -848,6 +848,106 @@ public class RepositoryServerConfigProviderTests
         Assert.Empty(result);
     }
 
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_SkipsServer_WhenAgentSchemaVersionUnsupported()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Unsupported Agent Schema", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { schemaVersion = 99, logFilePath = "/logs/game.log", agentName = "^2[Unsupported]^7" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesBroadcastDefaults_WhenBroadcastSchemaVersionUnsupported()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Unsupported Broadcast Schema", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                schemaVersion = 99,
+                enabled = true,
+                intervalSeconds = 15,
+                messages = new object[] { new { message = "Should be ignored", enabled = true } }
+            })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
+        Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesTypedBanFileInterval_WhenProvided()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Typed Banfile Interval", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("banfiles", new { checkIntervalSeconds = 15 })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Equal(15, Assert.Single(result).BanFileCheckIntervalSeconds);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesDefaultBanFileInterval_WhenBanFileSchemaVersionUnsupported()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Unsupported Banfile Schema", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("banfiles", new { schemaVersion = 99, checkIntervalSeconds = 15 })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Equal(ServerContext.DefaultBanFileCheckIntervalSeconds, Assert.Single(result).BanFileCheckIntervalSeconds);
+    }
+
     private static ServerConfigFixture LoadFixture(string fixtureFileName)
     {
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Agents", "Fixtures", fixtureFileName);

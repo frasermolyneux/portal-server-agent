@@ -6,6 +6,10 @@ using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.GameServers;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Agent;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.BanFiles;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Broadcasts;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Shared;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
@@ -93,7 +97,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     continue;
                 }
 
-                if (!TryGetStringValue(configs, "agent", "logFilePath", out var logFilePath))
+                var agentSettings = ParseAgentSettings(configs);
+                if (agentSettings is null || string.IsNullOrWhiteSpace(agentSettings.LogFilePath))
                 {
                     _logger.LogWarning(
                         "Skipping server {ServerId} ({Title}) — missing agent configuration in config namespace",
@@ -102,13 +107,18 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 }
 
                 var broadcasts = ParseBroadcastSettings(configs);
+                var banFileSettings = ParseBanFileSettings(configs);
                 var screenshots = ParseScreenshotSettings(configs);
                 var agentNamePrefix = globalAgentNamePrefix;
-                if (TryGetStringValue(configs, "agent", "agentName", out var serverAgentName) &&
-                    !string.IsNullOrWhiteSpace(serverAgentName))
+                if (!string.IsNullOrWhiteSpace(agentSettings.AgentName))
                 {
-                    agentNamePrefix = serverAgentName;
+                    agentNamePrefix = agentSettings.AgentName;
                 }
+
+                var banFileCheckIntervalSeconds =
+                    banFileSettings?.CheckIntervalSeconds is > 0
+                        ? banFileSettings.CheckIntervalSeconds.Value
+                        : ServerContext.DefaultBanFileCheckIntervalSeconds;
 
                 var banFileRootPath = string.IsNullOrWhiteSpace(dto.BanFileRootPath) ? "/" : dto.BanFileRootPath;
 
@@ -152,7 +162,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     FileTransportUsername = transportUsername,
                     FileTransportPassword = transportPassword,
                     FileTransportHostKeyFingerprint = sftpHostKeyFingerprint,
-                    LogFilePath = logFilePath,
+                    LogFilePath = agentSettings.LogFilePath,
                     Hostname = dto.Hostname,
                     QueryPort = dto.QueryPort,
                     RconPassword = rconPassword,
@@ -160,6 +170,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     RconEnabled = dto.RconEnabled,
                     BanFileSyncEnabled = dto.BanFileSyncEnabled,
                     BanFileRootPath = banFileRootPath,
+                    BanFileCheckIntervalSeconds = banFileCheckIntervalSeconds,
                     AgentNamePrefix = agentNamePrefix,
                     Broadcasts = broadcasts,
                     Screenshots = screenshots,
@@ -188,30 +199,18 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             }
 
             var agentConfig = result.Result.Data.Items
-                .FirstOrDefault(x => string.Equals(x.Namespace, "agent", StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(x => string.Equals(x.Namespace, AgentSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
 
             if (agentConfig is null || string.IsNullOrWhiteSpace(agentConfig.Configuration))
             {
                 return ServerContext.DefaultAgentNamePrefix;
             }
 
-            try
+            var properties = ParseNamespaceProperties(agentConfig.Configuration);
+            var parsed = ParseAgentSettings(properties);
+            if (!string.IsNullOrWhiteSpace(parsed?.AgentName))
             {
-                var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(agentConfig.Configuration);
-                if (properties is not null &&
-                    properties.TryGetValue("agentName", out var agentNameElement) &&
-                    agentNameElement.ValueKind == JsonValueKind.String)
-                {
-                    var parsed = agentNameElement.GetString();
-                    if (!string.IsNullOrWhiteSpace(parsed))
-                    {
-                        return parsed;
-                    }
-                }
-            }
-            catch (JsonException)
-            {
-                // Invalid global config payload; fall back to default prefix.
+                return parsed.AgentName;
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -323,6 +322,23 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         return result;
     }
 
+    private static Dictionary<string, JsonElement>? ParseNamespaceProperties(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private static bool TryGetStringValue(
         Dictionary<string, Dictionary<string, JsonElement>> configs,
         string ns, string key, out string value)
@@ -358,26 +374,175 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         return false;
     }
 
+    private static bool TryGetStringValue(
+        Dictionary<string, JsonElement> namespaceConfig,
+        string key,
+        out string value)
+    {
+        value = string.Empty;
+        if (namespaceConfig.TryGetValue(key, out var element) &&
+            element.ValueKind == JsonValueKind.String)
+        {
+            var str = element.GetString();
+            if (!string.IsNullOrWhiteSpace(str))
+            {
+                value = str;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetIntValue(
+        Dictionary<string, JsonElement> namespaceConfig,
+        string key,
+        out int value)
+    {
+        value = 0;
+        if (!namespaceConfig.TryGetValue(key, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out value))
+        {
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.String && int.TryParse(element.GetString(), out value))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetBoolValue(
+        Dictionary<string, JsonElement> namespaceConfig,
+        string key,
+        out bool value)
+    {
+        value = false;
+        if (!namespaceConfig.TryGetValue(key, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            value = element.GetBoolean();
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.String && bool.TryParse(element.GetString(), out value))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static AgentSettingsDocument? ParseAgentSettings(
+        Dictionary<string, Dictionary<string, JsonElement>> configs)
+    {
+        return configs.TryGetValue(AgentSettingsConstants.Namespace, out var namespaceConfig)
+            ? ParseAgentSettings(namespaceConfig)
+            : null;
+    }
+
+    private static AgentSettingsDocument? ParseAgentSettings(
+        Dictionary<string, JsonElement>? namespaceConfig)
+    {
+        if (namespaceConfig is null)
+        {
+            return null;
+        }
+
+        var document = new AgentSettingsDocument();
+
+        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
+        {
+            document.SchemaVersion = schemaVersion;
+        }
+
+        if (TryGetStringValue(namespaceConfig, "agentName", out var agentName))
+        {
+            document.AgentName = agentName;
+        }
+
+        if (TryGetStringValue(namespaceConfig, "logFilePath", out var logFilePath))
+        {
+            document.LogFilePath = logFilePath;
+        }
+
+        if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
+        {
+            return null;
+        }
+
+        _ = new AgentSettingsValidator().Validate(document);
+
+        return document;
+    }
+
+    private static BanFileSettingsDocument? ParseBanFileSettings(
+        Dictionary<string, Dictionary<string, JsonElement>> configs)
+    {
+        if (!configs.TryGetValue(BanFileSettingsConstants.Namespace, out var namespaceConfig))
+        {
+            return null;
+        }
+
+        var document = new BanFileSettingsDocument();
+
+        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
+        {
+            document.SchemaVersion = schemaVersion;
+        }
+
+        if (TryGetIntValue(namespaceConfig, "checkIntervalSeconds", out var checkIntervalSeconds))
+        {
+            document.CheckIntervalSeconds = checkIntervalSeconds;
+        }
+
+        if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
+        {
+            return null;
+        }
+
+        _ = new BanFileSettingsValidator().Validate(document);
+
+        return document;
+    }
+
     private static BroadcastSettings ParseBroadcastSettings(
         Dictionary<string, Dictionary<string, JsonElement>> configs)
     {
-        if (!configs.TryGetValue("broadcasts", out var namespaceConfig))
+        if (!configs.TryGetValue(BroadcastSettingsConstants.Namespace, out var namespaceConfig))
         {
             return new BroadcastSettings();
         }
 
-        _ = TryGetBoolValue(configs, "broadcasts", "enabled", out var enabled);
-
-        var intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
-        if (TryGetIntValue(configs, "broadcasts", "intervalSeconds", out var parsedInterval) && parsedInterval > 0)
+        var document = new BroadcastSettingsDocument();
+        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
         {
-            intervalSeconds = parsedInterval;
+            document.SchemaVersion = schemaVersion;
         }
 
-        IReadOnlyList<BroadcastMessage> messages = Array.Empty<BroadcastMessage>();
+        if (TryGetBoolValue(namespaceConfig, "enabled", out var enabled))
+        {
+            document.Enabled = enabled;
+        }
+
+        if (TryGetIntValue(namespaceConfig, "intervalSeconds", out var parsedInterval) && parsedInterval > 0)
+        {
+            document.IntervalSeconds = parsedInterval;
+        }
+
+        var parsedMessages = new List<BroadcastSettingsMessage?>();
         if (namespaceConfig.TryGetValue("messages", out var messagesElement) && messagesElement.ValueKind == JsonValueKind.Array)
         {
-            var parsedMessages = new List<BroadcastMessage>();
             foreach (var item in messagesElement.EnumerateArray())
             {
                 if (item.ValueKind != JsonValueKind.Object ||
@@ -397,19 +562,41 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                                      (enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
                                       enabledElement.GetBoolean());
 
-                parsedMessages.Add(new BroadcastMessage
+                parsedMessages.Add(new BroadcastSettingsMessage
                 {
                     Message = messageText,
                     Enabled = messageEnabled
                 });
             }
-
-            messages = parsedMessages;
         }
+
+        document.Messages = parsedMessages;
+
+        if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
+        {
+            return new BroadcastSettings();
+        }
+
+        _ = new BroadcastSettingsValidator().Validate(document);
+
+        var intervalSeconds = document.IntervalSeconds.GetValueOrDefault(ServerContext.DefaultBroadcastIntervalSeconds);
+        if (intervalSeconds <= 0)
+        {
+            intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
+        }
+
+        var messages = (document.Messages ?? [])
+            .Where(message => message is not null && !string.IsNullOrWhiteSpace(message.Message))
+            .Select(message => new BroadcastMessage
+            {
+                Message = message!.Message!,
+                Enabled = message.Enabled
+            })
+            .ToArray();
 
         return new BroadcastSettings
         {
-            Enabled = enabled,
+            Enabled = document.Enabled ?? false,
             IntervalSeconds = intervalSeconds,
             Messages = messages
         };

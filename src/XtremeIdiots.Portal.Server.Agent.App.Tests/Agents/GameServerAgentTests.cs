@@ -433,6 +433,60 @@ public class GameServerAgentTests
     }
 
     [Fact]
+    public async Task RunAsync_BanFileIntervalOneSecond_ChecksMoreThanOnce()
+    {
+        var context = _testContext with
+        {
+            BanFileCheckIntervalSeconds = 1,
+            BanFileSyncEnabled = true
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2300));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+
+        await agent.RunAsync(cts.Token);
+
+        _mockBanFileWatcher.Verify(
+            b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
+            Times.AtLeast(2));
+    }
+
+    [Fact]
+    public async Task RunAsync_BanFileIntervalLong_ChecksOnlyOnceWithinShortRun()
+    {
+        var context = _testContext with
+        {
+            BanFileCheckIntervalSeconds = 120,
+            BanFileSyncEnabled = true
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2300));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+
+        await agent.RunAsync(cts.Token);
+
+        _mockBanFileWatcher.Verify(
+            b => b.CheckAsync(It.IsAny<ServerContext>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task RunAsync_PublishesBansThenAcknowledgesImport_WhenWatcherReturnsBans()
     {
         // Arrange — watcher returns one detected ban + acknowledgment payload.

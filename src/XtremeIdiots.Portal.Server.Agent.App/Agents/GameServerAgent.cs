@@ -44,7 +44,7 @@ public sealed class GameServerAgent
     internal static readonly TimeSpan StatusPublishInterval = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan LeaseRenewInterval = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan RconSyncInterval = TimeSpan.FromMinutes(5);
-    internal static readonly TimeSpan BanFileCheckInterval = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan BanFileCheckInterval = TimeSpan.FromSeconds(ServerContext.DefaultBanFileCheckIntervalSeconds);
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
     public GameServerAgent(
@@ -175,8 +175,9 @@ public sealed class GameServerAgent
                         _lastRconSync = DateTime.UtcNow;
                     }
 
-                    // Periodic ban file check (every 60 seconds)
-                    if (_context.BanFileSyncEnabled && DateTime.UtcNow - _lastBanFileCheck > BanFileCheckInterval)
+                    // Periodic ban file check (defaults to 60 seconds, overridable via typed settings)
+                    var banFileCheckInterval = TimeSpan.FromSeconds(Math.Max(_context.BanFileCheckIntervalSeconds, 1));
+                    if (_context.BanFileSyncEnabled && DateTime.UtcNow - _lastBanFileCheck > banFileCheckInterval)
                     {
                         await CheckBanFileAsync(ct);
                     }
