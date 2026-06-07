@@ -1,0 +1,51 @@
+{
+    "server": {
+        "id": "22222222-2222-2222-2222-222222222222",
+        "title": "Fixture Broadcast String Enabled Gap",
+        "gameType": "CallOfDuty4",
+        "hostname": "fixture.game.local",
+        "queryPort": 28960,
+        "banFileSyncEnabled": true,
+        "ftpEnabled": true,
+        "rconEnabled": true,
+        "fileTransportType": "ftp",
+        "fileTransportEnabled": true,
+        "banFileRootPath": "/"
+    },
+    "configurations": [
+        {
+            "namespace": "ftp",
+            "configuration": {
+                "hostname": "ftp.fixture.local",
+                "port": 21,
+                "username": "fixture-user",
+                "password": "fixture-pass"
+            }
+        },
+        {
+            "namespace": "rcon",
+            "configuration": {
+                "password": "fixture-rcon"
+            }
+        },
+        {
+            "namespace": "agent",
+            "configuration": {
+                "logFilePath": "/var/log/game_mp.log"
+            }
+        },
+        {
+            "namespace": "broadcasts",
+            "configuration": {
+                "enabled": true,
+                "intervalSeconds": 120,
+                "messages": [
+                    {
+                        "message": "This message uses a string bool",
+                        "enabled": "true"
+                    }
+                ]
+            }
+        }
+    ]
+}

@@ -729,6 +729,140 @@ public class RepositoryServerConfigProviderTests
         Assert.Equal(ServerContext.DefaultScreenshotFilePattern, server.Screenshots.FilePattern);
     }
 
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesFixture_AgentBroadcastBanfileInputs()
+    {
+        var fixture = LoadFixture("agent-broadcast-banfile-happy-path.json");
+        var dto = CreateGameServerDto(
+            fixture.Server.Id,
+            fixture.Server.Title,
+            Enum.Parse<GameType>(fixture.Server.GameType, ignoreCase: true),
+            hostname: fixture.Server.Hostname,
+            queryPort: fixture.Server.QueryPort,
+            banFileSyncEnabled: fixture.Server.BanFileSyncEnabled,
+            ftpEnabled: fixture.Server.FtpEnabled,
+            rconEnabled: fixture.Server.RconEnabled,
+            fileTransportType: fixture.Server.FileTransportType,
+            fileTransportEnabled: fixture.Server.FileTransportEnabled,
+            banFileRootPath: fixture.Server.BanFileRootPath);
+
+        SetupApiSuccess([dto]);
+        SetupGlobalConfigApi(fixture.GlobalConfigurations.Select(ToConfigurationDto).ToArray());
+        SetupConfigApi(fixture.Server.Id, fixture.Configurations.Select(ToConfigurationDto).ToArray());
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.Equal(fixture.Server.BanFileRootPath, server.BanFileRootPath);
+        Assert.True(server.BanFileSyncEnabled);
+        Assert.Equal("^6[Fixture Global]^7", server.AgentNamePrefix);
+        Assert.Equal("/var/log/game_mp.log", server.LogFilePath);
+        Assert.True(server.Broadcasts.Enabled);
+        Assert.Equal(180, server.Broadcasts.IntervalSeconds);
+        Assert.Equal(2, server.Broadcasts.Messages.Count);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_FixtureLock_BroadcastMessageStringEnabledIsTreatedAsFalse()
+    {
+        var fixture = LoadFixture("agent-broadcast-message-enabled-string-gap.json");
+        var dto = CreateGameServerDto(
+            fixture.Server.Id,
+            fixture.Server.Title,
+            Enum.Parse<GameType>(fixture.Server.GameType, ignoreCase: true),
+            hostname: fixture.Server.Hostname,
+            queryPort: fixture.Server.QueryPort,
+            banFileSyncEnabled: fixture.Server.BanFileSyncEnabled,
+            ftpEnabled: fixture.Server.FtpEnabled,
+            rconEnabled: fixture.Server.RconEnabled,
+            fileTransportType: fixture.Server.FileTransportType,
+            fileTransportEnabled: fixture.Server.FileTransportEnabled,
+            banFileRootPath: fixture.Server.BanFileRootPath);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(fixture.Server.Id, fixture.Configurations.Select(ToConfigurationDto).ToArray());
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var message = Assert.Single(Assert.Single(result).Broadcasts.Messages);
+        // Baseline lock for current behavior: string bool values are treated as disabled.
+        Assert.False(message.Enabled);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_FixtureLock_EmptyBanFileRootPathFallsBackToSlash()
+    {
+        var fixture = LoadFixture("agent-empty-banfile-rootpath.json");
+        var dto = CreateGameServerDto(
+            fixture.Server.Id,
+            fixture.Server.Title,
+            Enum.Parse<GameType>(fixture.Server.GameType, ignoreCase: true),
+            hostname: fixture.Server.Hostname,
+            queryPort: fixture.Server.QueryPort,
+            banFileSyncEnabled: fixture.Server.BanFileSyncEnabled,
+            ftpEnabled: fixture.Server.FtpEnabled,
+            rconEnabled: fixture.Server.RconEnabled,
+            fileTransportType: fixture.Server.FileTransportType,
+            fileTransportEnabled: fixture.Server.FileTransportEnabled,
+            banFileRootPath: fixture.Server.BanFileRootPath);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(fixture.Server.Id, fixture.Configurations.Select(ToConfigurationDto).ToArray());
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Equal("/", Assert.Single(result).BanFileRootPath);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_FixtureLock_MissingAgentLogFilePathSkipsServer()
+    {
+        var fixture = LoadFixture("agent-missing-logfilepath-gap.json");
+        var dto = CreateGameServerDto(
+            fixture.Server.Id,
+            fixture.Server.Title,
+            Enum.Parse<GameType>(fixture.Server.GameType, ignoreCase: true),
+            hostname: fixture.Server.Hostname,
+            queryPort: fixture.Server.QueryPort,
+            banFileSyncEnabled: fixture.Server.BanFileSyncEnabled,
+            ftpEnabled: fixture.Server.FtpEnabled,
+            rconEnabled: fixture.Server.RconEnabled,
+            fileTransportType: fixture.Server.FileTransportType,
+            fileTransportEnabled: fixture.Server.FileTransportEnabled,
+            banFileRootPath: fixture.Server.BanFileRootPath);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(fixture.Server.Id, fixture.Configurations.Select(ToConfigurationDto).ToArray());
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        // Baseline lock for current behavior gap: no fallback when agent.logFilePath is absent.
+        Assert.Empty(result);
+    }
+
+    private static ServerConfigFixture LoadFixture(string fixtureFileName)
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Agents", "Fixtures", fixtureFileName);
+        var json = File.ReadAllText(fixturePath);
+        var fixture = JsonSerializer.Deserialize<ServerConfigFixture>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+
+        return fixture ?? throw new InvalidOperationException($"Failed to deserialize fixture '{fixtureFileName}'.");
+    }
+
+    private static ConfigurationDto ToConfigurationDto(FixtureConfiguration configuration) =>
+        CreateConfigDto(configuration.Namespace, configuration.Configuration);
+
     private void SetupApiSuccess(GameServerDto[] dtos)
     {
         var collection = new CollectionModel<GameServerDto>(dtos);
@@ -770,6 +904,14 @@ public class RepositoryServerConfigProviderTests
         return dto;
     }
 
+    private static ConfigurationDto CreateConfigDto(string ns, JsonElement configJson)
+    {
+        var dto = new ConfigurationDto();
+        SetConfigProperty(dto, nameof(ConfigurationDto.Namespace), ns);
+        SetConfigProperty(dto, nameof(ConfigurationDto.Configuration), configJson.GetRawText());
+        return dto;
+    }
+
     private static void SetConfigProperty(ConfigurationDto dto, string propertyName, object? value) =>
         typeof(ConfigurationDto).GetProperty(propertyName)!.SetValue(dto, value);
 
@@ -780,7 +922,8 @@ public class RepositoryServerConfigProviderTests
         bool ftpEnabled = true,
         bool rconEnabled = true,
         string? fileTransportType = null,
-        bool? fileTransportEnabled = null)
+        bool? fileTransportEnabled = null,
+        string? banFileRootPath = null)
     {
         var dto = new GameServerDto();
         var type = typeof(GameServerDto);
@@ -796,6 +939,7 @@ public class RepositoryServerConfigProviderTests
         SetProperty(type, dto, nameof(GameServerDto.RconEnabled), rconEnabled);
         SetOptionalProperty(type, dto, "FileTransportType", fileTransportType);
         SetOptionalProperty(type, dto, "FileTransportEnabled", fileTransportEnabled);
+        SetOptionalProperty(type, dto, "BanFileRootPath", banFileRootPath);
 
         return dto;
     }
@@ -823,5 +967,33 @@ public class RepositoryServerConfigProviderTests
 
             property.SetValue(obj, value);
         }
+    }
+
+    private sealed class ServerConfigFixture
+    {
+        public required FixtureServer Server { get; set; }
+        public required List<FixtureConfiguration> Configurations { get; set; }
+        public List<FixtureConfiguration> GlobalConfigurations { get; set; } = [];
+    }
+
+    private sealed class FixtureServer
+    {
+        public required Guid Id { get; set; }
+        public required string Title { get; set; }
+        public required string GameType { get; set; }
+        public required string Hostname { get; set; }
+        public required int QueryPort { get; set; }
+        public bool BanFileSyncEnabled { get; set; }
+        public bool FtpEnabled { get; set; }
+        public bool RconEnabled { get; set; }
+        public string? FileTransportType { get; set; }
+        public bool? FileTransportEnabled { get; set; }
+        public string? BanFileRootPath { get; set; }
+    }
+
+    private sealed class FixtureConfiguration
+    {
+        public required string Namespace { get; set; }
+        public required JsonElement Configuration { get; set; }
     }
 }

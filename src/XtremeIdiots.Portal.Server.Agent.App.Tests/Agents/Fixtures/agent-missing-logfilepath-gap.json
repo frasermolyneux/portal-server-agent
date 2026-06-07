@@ -1,0 +1,51 @@
+{
+    "server": {
+        "id": "44444444-4444-4444-4444-444444444444",
+        "title": "Fixture Missing Agent Log Path",
+        "gameType": "CallOfDuty4",
+        "hostname": "fixture.game.local",
+        "queryPort": 28960,
+        "banFileSyncEnabled": true,
+        "ftpEnabled": true,
+        "rconEnabled": true,
+        "fileTransportType": "ftp",
+        "fileTransportEnabled": true,
+        "banFileRootPath": "/"
+    },
+    "configurations": [
+        {
+            "namespace": "ftp",
+            "configuration": {
+                "hostname": "ftp.fixture.local",
+                "port": 21,
+                "username": "fixture-user",
+                "password": "fixture-pass"
+            }
+        },
+        {
+            "namespace": "rcon",
+            "configuration": {
+                "password": "fixture-rcon"
+            }
+        },
+        {
+            "namespace": "agent",
+            "configuration": {
+                "agentName": "^2No Log Path Here^7"
+            }
+        },
+        {
+            "namespace": "broadcasts",
+            "configuration": {
+                "enabled": true,
+                "intervalSeconds": 90,
+                "messages": [
+                    {
+                        "message": "Configured but should still skip server",
+                        "enabled": true
+                    }
+                ]
+            }
+        }
+    ]
+}

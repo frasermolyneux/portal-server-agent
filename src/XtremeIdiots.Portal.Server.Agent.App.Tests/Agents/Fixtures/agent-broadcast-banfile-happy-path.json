@@ -1,0 +1,71 @@
+{
+    "server": {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "title": "Fixture Happy Path",
+        "gameType": "CallOfDuty4",
+        "hostname": "fixture.game.local",
+        "queryPort": 28960,
+        "banFileSyncEnabled": true,
+        "ftpEnabled": true,
+        "rconEnabled": true,
+        "fileTransportType": "ftp",
+        "fileTransportEnabled": true,
+        "banFileRootPath": "/fixtures/banfiles"
+    },
+    "globalConfigurations": [
+        {
+            "namespace": "agent",
+            "configuration": {
+                "agentName": "^6[Fixture Global]^7"
+            }
+        }
+    ],
+    "configurations": [
+        {
+            "namespace": "ftp",
+            "configuration": {
+                "hostname": "ftp.fixture.local",
+                "port": 21,
+                "username": "fixture-user",
+                "password": "fixture-pass"
+            }
+        },
+        {
+            "namespace": "rcon",
+            "configuration": {
+                "password": "fixture-rcon"
+            }
+        },
+        {
+            "namespace": "agent",
+            "configuration": {
+                "logFilePath": "/var/log/game_mp.log"
+            }
+        },
+        {
+            "namespace": "broadcasts",
+            "configuration": {
+                "enabled": true,
+                "intervalSeconds": 180,
+                "messages": [
+                    {
+                        "message": "Welcome to the server",
+                        "enabled": true
+                    },
+                    {
+                        "message": "Read the rules",
+                        "enabled": false
+                    }
+                ]
+            }
+        },
+        {
+            "namespace": "banfiles",
+            "configuration": {
+                "enabled": true,
+                "mode": "mirror",
+                "localPath": "ban.txt"
+            }
+        }
+    ]
+}
