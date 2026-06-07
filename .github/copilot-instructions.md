@@ -40,3 +40,9 @@ This repository contains the XtremeIdiots Portal server agent — a .NET 9 Worke
 - Use `data` sources for existing Azure resources (resource groups, client config, remote state).
 - Follow file-per-resource pattern.
 - Variables declared in `variables.tf` with environment-specific values in `terraform/tfvars/`.
+
+## Platform Settings Contracts
+
+- Agent settings consumption for namespaces such as `agent`, `banfiles`, and `broadcasts` should use typed contracts from `XtremeIdiots.Portal.Settings.Contracts.V1`.
+- Keep provider logic centralized in `IServerConfigProvider` implementations; avoid adding ad hoc controller/worker-level namespace-property JSON parsing.
+- Compatibility shims (including legacy schema tolerance) must remain until shim-removal gate criteria are met and evidenced.

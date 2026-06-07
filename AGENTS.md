@@ -35,6 +35,11 @@ The `copilot-setup-steps.yml` workflow checks out `frasermolyneux/.github-copilo
 - `patterns.nbgv-versioning`
 - `patterns.terraform-remote-state`
 
+### Platform settings contracts
+- Server configuration provider logic should consume typed contracts from `XtremeIdiots.Portal.Settings.Contracts.V1` for migrated namespaces.
+- Do not introduce new ad hoc namespace/property parsing paths for migrated settings.
+- Do not remove compatibility shims unless shim-removal gate criteria are met and evidenced.
+
 ### Platform consumption contracts
 - `platform.workloads`, `platform.monitoring`, `platform.registry` (ACR for the container image)
 
