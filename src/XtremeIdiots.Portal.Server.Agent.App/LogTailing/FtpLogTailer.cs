@@ -117,6 +117,9 @@ public sealed class FtpLogTailer : ILogTailer
                 _partialLine = string.Empty;
             }
 
+            // Stat succeeded - connection is healthy even if there is no new data.
+            _reconnectAttempts = 0;
+
             if (currentSize == _lastFileSize)
             {
                 return Array.Empty<string>();
@@ -130,7 +133,6 @@ public sealed class FtpLogTailer : ILogTailer
 
             var data = await DownloadBytesFromOffsetAsync(_config.FilePath, _lastFileSize, bytesToRead, ct);
             _lastFileSize += data.Length;
-            _reconnectAttempts = 0;
 
             var lines = SplitIntoLines(data, ref _partialLine);
 
@@ -141,6 +143,18 @@ public sealed class FtpLogTailer : ILogTailer
         catch (FtpException ex)
         {
             _logger.LogError(ex, "FTP error while polling {FilePath}, will attempt reconnect", _config.FilePath);
+            await ReconnectAsync(ct);
+            return Array.Empty<string>();
+        }
+        catch (IOException ex)
+        {
+            _logger.LogError(ex, "IO error while polling {FilePath}, will attempt reconnect", _config.FilePath);
+            await ReconnectAsync(ct);
+            return Array.Empty<string>();
+        }
+        catch (System.Net.Sockets.SocketException ex)
+        {
+            _logger.LogError(ex, "Socket error while polling {FilePath}, will attempt reconnect", _config.FilePath);
             await ReconnectAsync(ct);
             return Array.Empty<string>();
         }
@@ -207,6 +221,7 @@ public sealed class FtpLogTailer : ILogTailer
     {
         _client?.Dispose();
         _client = new AsyncFtpClient(_config!.Hostname, _config.Username, _config.Password, _config.Port);
+        _client.Config.SocketKeepAlive = true;
         await _client.Connect(ct);
     }
 
