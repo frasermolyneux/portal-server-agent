@@ -33,3 +33,9 @@ src/
 
 - `XtremeIdiots.Portal.Server.Events.Abstractions.V1` — Event contracts (NuGet)
 - `XtremeIdiots.Portal.Repository.Api.Client.V1` — Fetch server configurations (NuGet)
+
+## Platform Settings Contracts
+
+Settings consumed by the agent runtime are resolved through typed contracts from `XtremeIdiots.Portal.Settings.Contracts.V1`.
+
+See `docs/platform-settings-contracts.md` for migration and troubleshooting guidance.

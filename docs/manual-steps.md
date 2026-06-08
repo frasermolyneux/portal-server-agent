@@ -39,3 +39,4 @@ The agent's CoD4x log parser is built against the **modern** CoD4x log format. T
 - Log parser: `src/XtremeIdiots.Portal.Server.Agent.App/Parsing/Cod4xLogParser.cs` (Phase 1 — modern format only).
 - Ban-file dual-format push: `src/XtremeIdiots.Portal.Server.Agent.App/BanFiles/` (Phase 3 — pushes both `ban.txt` legacy and CoD4x simple formats).
 - Cvar probe service: `src/XtremeIdiots.Portal.Server.Agent.App/Agents/Cod4xCvarProbe.cs`.
+- Platform settings architecture and troubleshooting: [Platform Settings Contracts](/docs/platform-settings-contracts.md).

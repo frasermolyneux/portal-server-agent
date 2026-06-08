@@ -39,6 +39,7 @@ The `copilot-setup-steps.yml` workflow checks out `frasermolyneux/.github-copilo
 - Server configuration provider logic should consume typed contracts from `XtremeIdiots.Portal.Settings.Contracts.V1` for migrated namespaces.
 - Do not introduce new ad hoc namespace/property parsing paths for migrated settings.
 - Do not remove compatibility shims unless shim-removal gate criteria are met and evidenced.
+- Follow `docs/platform-settings-contracts.md` for migration and troubleshooting guidance.
 
 ### Platform consumption contracts
 - `platform.workloads`, `platform.monitoring`, `platform.registry` (ACR for the container image)
@@ -53,9 +54,9 @@ The `copilot-setup-steps.yml` workflow checks out `frasermolyneux/.github-copilo
 ## Build, test, format
 
 ```pwsh
-dotnet build src/XtremeIdiots.Portal.Server.Agent.sln
-dotnet test src/XtremeIdiots.Portal.Server.Agent.sln --filter "FullyQualifiedName!~IntegrationTests"
-dotnet format src/XtremeIdiots.Portal.Server.Agent.sln --verify-no-changes
+dotnet build src/XtremeIdiots.Portal.Server.Agent.slnx
+dotnet test src/XtremeIdiots.Portal.Server.Agent.slnx --filter "FullyQualifiedName!~IntegrationTests"
+dotnet format src/XtremeIdiots.Portal.Server.Agent.slnx --verify-no-changes
 
 docker build -t portal-server-agent -f src/Dockerfile src/
 

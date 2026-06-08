@@ -29,8 +29,8 @@ This repository contains the XtremeIdiots Portal server agent — a .NET 9 Worke
 
 ## Development Guidelines
 
-- Run `dotnet build src/XtremeIdiots.Portal.Server.Agent.sln` to build.
-- Run `dotnet test src/XtremeIdiots.Portal.Server.Agent.sln` to run tests.
+- Run `dotnet build src/XtremeIdiots.Portal.Server.Agent.slnx` to build.
+- Run `dotnet test src/XtremeIdiots.Portal.Server.Agent.slnx` to run tests.
 - Docker build: `docker build -t portal-server-agent -f src/Dockerfile src/`
 - Terraform: `terraform -chdir=terraform init -backend-config=backends/dev.backend.hcl` then `terraform -chdir=terraform plan -var-file=tfvars/dev.tfvars`.
 - Ensure `terraform fmt -recursive` before committing Terraform changes.
@@ -46,3 +46,4 @@ This repository contains the XtremeIdiots Portal server agent — a .NET 9 Worke
 - Agent settings consumption for namespaces such as `agent`, `banfiles`, and `broadcasts` should use typed contracts from `XtremeIdiots.Portal.Settings.Contracts.V1`.
 - Keep provider logic centralized in `IServerConfigProvider` implementations; avoid adding ad hoc controller/worker-level namespace-property JSON parsing.
 - Compatibility shims (including legacy schema tolerance) must remain until shim-removal gate criteria are met and evidenced.
+- Use `docs/platform-settings-contracts.md` for migration and troubleshooting guidance.
