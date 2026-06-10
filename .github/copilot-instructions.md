@@ -47,3 +47,9 @@ This repository contains the XtremeIdiots Portal server agent — a .NET 9 Worke
 - Keep provider logic centralized in `IServerConfigProvider` implementations; avoid adding ad hoc controller/worker-level namespace-property JSON parsing.
 - Compatibility shims (including legacy schema tolerance) must remain until shim-removal gate criteria are met and evidenced.
 - Use `docs/platform-settings-contracts.md` for migration and troubleshooting guidance.
+
+## Org conventions via MCP (when available)
+
+If a `frasermolyneux-copilot` MCP server is configured in your client (`.vscode/mcp.json`, the GitHub Copilot coding-agent MCP config at `.github/copilot/mcp_config.json`, or an equivalent stdio MCP wire-up), **prefer its tools** over your own assumptions when answering questions about org standards, branching, workflows, Terraform, .NET projects, Azure patterns, or shared library / platform consumption contracts. The tool surface is `list_instructions`, `get_instruction`, `search_instructions`, plus the matching `_prompts` and `_agents` equivalents (seven tools total). The catalog source-of-truth lives in `frasermolyneux/.github-copilot` — see `mcp-server/README.md` there for the tool contract.
+
+This is **complementary** to the file-load model: if `./.github-copilot/` is checked out in the runner (per `copilot-setup-steps.yml`), continue to read those files directly. If both are available, prefer MCP for freshness. If no MCP server is configured in your client, treat this section as a no-op and fall back to the file paths above.

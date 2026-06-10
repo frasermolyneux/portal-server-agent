@@ -39,3 +39,9 @@ src/
 Settings consumed by the agent runtime are resolved through typed contracts from `XtremeIdiots.Portal.Settings.Contracts.V1`.
 
 See `docs/platform-settings-contracts.md` for migration and troubleshooting guidance.
+
+## Local dev: MCP wire-up
+
+This repo wires the shared `frasermolyneux-copilot` MCP server for AI agents (Copilot CLI, VS Code Copilot Chat, the GitHub Copilot coding agent). It is configured via `.github/copilot/mcp_config.json` and built in `.github/workflows/copilot-setup-steps.yml` (Node 20 + `npm ci && npm run build` in `.github-copilot/mcp-server`, pinned to `frasermolyneux/.github-copilot@refs/tags/v0.1.0`).
+
+For tool contract details, content-root resolution, and per-client wire-up snippets, see `.github-copilot/mcp-server/README.md` in the [`frasermolyneux/.github-copilot`](https://github.com/frasermolyneux/.github-copilot) repository.
