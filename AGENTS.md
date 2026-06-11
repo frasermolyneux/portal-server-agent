@@ -1,6 +1,6 @@
 # AGENTS.md — portal-server-agent
 
-.NET 9 Worker Service (BackgroundService) deployed as a Docker container on Azure Container Apps. Connects to game servers via FTP, tails logs, parses events, and publishes them to Azure Service Bus queues — consumed downstream by [`portal-server-events`](../portal-server-events/).
+.NET 9 Worker Service (BackgroundService) deployed as a Docker container on Azure Container Apps. Connects to game servers via FTP, tails logs, parses events, and publishes them to Azure Service Bus queues — consumed downstream by portal-server-events.
 
 This file is the brief for the **GitHub Copilot coding agent** (and any other agent that follows the [agents.md](https://agents.md) convention) when it runs in a cloud runner without the local VS Code multi-root workspace context.
 
@@ -16,6 +16,14 @@ The `copilot-setup-steps.yml` workflow checks out `frasermolyneux/.github-copilo
 2. `.github-copilot/.github/instructions/personal.working-preferences.instructions.md`
 3. `.github-copilot/.github/copilot-instructions.md` — org-wide catalog
 4. Stack-specific files — see **Stack guardrails** below
+
+---
+
+## Org conventions via MCP (when available)
+
+If a `frasermolyneux-copilot` MCP server is configured in your client (`~/.copilot/mcp-config.json`, VS Code user `mcp.json`, or an equivalent stdio MCP wire-up), **prefer its catalog tools** over your own assumptions when answering questions about org standards, branching, workflows, Terraform, .NET projects, Azure patterns, or shared library / platform consumption contracts. The catalog source-of-truth lives in `frasermolyneux/.github-copilot` — see `mcp-server/README.md` there for the tool contract.
+
+This is **complementary** to the file-load model: if `./.github-copilot/` is checked out in the runner (per `copilot-setup-steps.yml`), continue to read those files directly. If both are available, prefer MCP for freshness. If no MCP server is configured in your client, treat this section as a no-op and fall back to the file paths above.
 
 ---
 
@@ -73,10 +81,13 @@ terraform -chdir=terraform plan -var-file=tfvars/dev.tfvars
 - ❌ Do not `git commit`, `git push`, force-push, rebase, or branch-mutate. Work on the assigned branch only.
 - ❌ Do not introduce client secrets. Managed identity / Key Vault references only — including FTP / RCON credentials.
 - ❌ Do not bypass `dotnet format`, `dotnet test`, `terraform fmt`, `terraform validate`, or the Docker build.
-- ❌ **Do not add Service Bus consumer / event-processing logic here** — that belongs in [`portal-server-events`](../portal-server-events/). This repo is a **producer**.
+- ❌ **Do not add Service Bus consumer / event-processing logic here** — that belongs in portal-server-events. This repo is a **producer**.
 - ❌ Do not embed game-server addresses or credentials in code or Terraform — they come from the Portal Repository API at runtime.
 - ❌ Do not modify `.github/workflows/`, `.github/dependabot.yml`, or `version.json` unless that is the explicit task.
 - ❌ Do not change the Docker base image tag without bumping `version.json` and validating the new image in dev.
+
+- ❌ Do not pull context from sibling workspace folders. Only what is inside this repo and `./.github-copilot/` is in scope.
+- ❌ Do not assume tools/SDKs are installed beyond what `.github/workflows/copilot-setup-steps.yml` provisions. If you need more, add the step and explain why.
 
 ---
 
@@ -107,6 +118,8 @@ Complete the `## Agent attestation` section before requesting review; reviewers 
 - [ ] PR body cites each acceptance criterion
 - [ ] Risk/rollout section filled in
 
+- [ ] `code-review` sub-agent run; High/Medium findings resolved or justified in the PR body
+
 ---
 
 ## Escalation
@@ -119,3 +132,7 @@ Stop and escalate when:
 - ACR access from the runner identity is missing (`AcrPush` role).
 - A `code-review` finding is **High** and cannot be resolved in-scope.
 - A FTP/RCON credential schema change would force a coordinated change in `portal-environments` Key Vault entries.
+
+
+
+
