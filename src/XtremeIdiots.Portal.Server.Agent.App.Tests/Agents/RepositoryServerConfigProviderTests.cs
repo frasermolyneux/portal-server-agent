@@ -925,6 +925,29 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesTypedBanFileInterval_WhenNumericFieldsAreStrings()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Typed Banfile Interval String Numbers", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("banfiles", new { schemaVersion = "1", checkIntervalSeconds = "15" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Equal(15, Assert.Single(result).BanFileCheckIntervalSeconds);
+    }
+
+    [Fact]
     public async Task GetAgentEnabledServersAsync_UsesDefaultBanFileInterval_WhenBanFileSchemaVersionUnsupported()
     {
         var serverId = Guid.NewGuid();
