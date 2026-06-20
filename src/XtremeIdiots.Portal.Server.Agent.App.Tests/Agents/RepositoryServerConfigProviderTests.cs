@@ -902,6 +902,38 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesBroadcastDefaults_WhenBroadcastSchemaVersionIsInvalidShape()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Invalid Broadcast Schema Shape", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                schemaVersion = new { value = 1 },
+                enabled = true,
+                intervalSeconds = 15,
+                messages = new object[] { new { message = "Should be ignored", enabled = true } }
+            })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
+        Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Fact]
     public async Task GetAgentEnabledServersAsync_UsesTypedBanFileInterval_WhenProvided()
     {
         var serverId = Guid.NewGuid();

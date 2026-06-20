@@ -532,10 +532,17 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         var enabled = false;
         _ = TryGetBoolValue(namespaceConfig, "enabled", out enabled);
 
-        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion) &&
-            !SchemaVersionSupport.IsSupported(schemaVersion))
+        if (namespaceConfig.ContainsKey("schemaVersion"))
         {
-            return new BroadcastSettings();
+            if (!TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
+            {
+                return new BroadcastSettings();
+            }
+
+            if (!SchemaVersionSupport.IsSupported(schemaVersion))
+            {
+                return new BroadcastSettings();
+            }
         }
 
         var intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
