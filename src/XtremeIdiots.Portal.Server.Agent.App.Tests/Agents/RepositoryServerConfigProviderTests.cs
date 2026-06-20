@@ -763,7 +763,7 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_FixtureLock_BroadcastMessageStringEnabledIsTreatedAsFalse()
+    public async Task GetAgentEnabledServersAsync_FixtureLock_BroadcastMessageStringEnabledSkipsMessageOnly()
     {
         var fixture = LoadFixture("agent-broadcast-message-enabled-string-gap.json");
         var dto = CreateGameServerDto(
@@ -787,8 +787,8 @@ public class RepositoryServerConfigProviderTests
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
         var server = Assert.Single(result);
-        Assert.False(server.Broadcasts.Enabled);
-        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
+        Assert.True(server.Broadcasts.Enabled);
+        Assert.Equal(120, server.Broadcasts.IntervalSeconds);
         Assert.Empty(server.Broadcasts.Messages);
     }
 

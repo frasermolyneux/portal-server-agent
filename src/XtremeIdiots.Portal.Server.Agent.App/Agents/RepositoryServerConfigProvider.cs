@@ -512,47 +512,71 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             return new BroadcastSettings();
         }
 
-        try
-        {
-            var document = DeserializeDocument<BroadcastSettingsDocument>(namespaceConfig);
-            if (document is null)
-            {
-                return new BroadcastSettings();
-            }
+        var enabled = false;
+        _ = TryGetBoolValue(namespaceConfig, "enabled", out enabled);
 
-            if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
-            {
-                return new BroadcastSettings();
-            }
-
-            _ = new BroadcastSettingsValidator().Validate(document);
-
-            var intervalSeconds = document.IntervalSeconds.GetValueOrDefault(ServerContext.DefaultBroadcastIntervalSeconds);
-            if (intervalSeconds <= 0)
-            {
-                intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
-            }
-
-            var messages = (document.Messages ?? [])
-                .Where(message => message is not null && !string.IsNullOrWhiteSpace(message.Message))
-                .Select(message => new BroadcastMessage
-                {
-                    Message = message!.Message!,
-                    Enabled = message.Enabled
-                })
-                .ToArray();
-
-            return new BroadcastSettings
-            {
-                Enabled = document.Enabled ?? false,
-                IntervalSeconds = intervalSeconds,
-                Messages = messages
-            };
-        }
-        catch
+        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion) &&
+            !SchemaVersionSupport.IsSupported(schemaVersion))
         {
             return new BroadcastSettings();
         }
+
+        var intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
+        if (TryGetIntValue(namespaceConfig, "intervalSeconds", out var configuredInterval) && configuredInterval > 0)
+        {
+            intervalSeconds = configuredInterval;
+        }
+
+        var messages = new List<BroadcastMessage>();
+        if (namespaceConfig.TryGetValue("messages", out var messagesElement) &&
+            messagesElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var messageElement in messagesElement.EnumerateArray())
+            {
+                if (messageElement.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (!messageElement.TryGetProperty("message", out var textElement) ||
+                    textElement.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var messageText = textElement.GetString();
+                if (string.IsNullOrWhiteSpace(messageText))
+                {
+                    continue;
+                }
+
+                var messageEnabled = true;
+                if (messageElement.TryGetProperty("enabled", out var enabledElement))
+                {
+                    if (enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    {
+                        messageEnabled = enabledElement.GetBoolean();
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+
+                messages.Add(new BroadcastMessage
+                {
+                    Message = messageText,
+                    Enabled = messageEnabled
+                });
+            }
+        }
+
+        return new BroadcastSettings
+        {
+            Enabled = enabled,
+            IntervalSeconds = intervalSeconds,
+            Messages = messages.ToArray()
+        };
     }
 
     private static T? DeserializeDocument<T>(Dictionary<string, JsonElement> namespaceConfig)
