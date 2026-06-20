@@ -466,7 +466,9 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             return null;
         }
 
-        var document = DeserializeDocument<AgentSettingsDocument>(namespaceConfig);
+        var document = DeserializeDocument<AgentSettingsDocument>(namespaceConfig)
+            ?? TryBuildAgentSettingsFallback(namespaceConfig);
+
         if (document is null)
         {
             return null;
@@ -512,6 +514,19 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         if (!configs.TryGetValue(BroadcastSettingsConstants.Namespace, out var namespaceConfig))
         {
             return new BroadcastSettings();
+        }
+
+        // Prefer typed-contract parsing/validation for migrated namespaces, then keep
+        // legacy-tolerant field parsing for compatibility with historical payloads.
+        var typedDocument = DeserializeDocument<BroadcastSettingsDocument>(namespaceConfig);
+        if (typedDocument is not null)
+        {
+            if (!SchemaVersionSupport.IsSupported(typedDocument.SchemaVersion))
+            {
+                return new BroadcastSettings();
+            }
+
+            _ = new BroadcastSettingsValidator().Validate(typedDocument);
         }
 
         var enabled = false;
@@ -585,13 +600,39 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
     {
         try
         {
-            var json = JsonSerializer.Serialize(namespaceConfig);
-            return JsonSerializer.Deserialize<T>(json, JsonOptions);
+            var element = JsonSerializer.SerializeToElement(namespaceConfig, JsonOptions);
+            return element.Deserialize<T>(JsonOptions);
         }
         catch (JsonException)
         {
             return default;
         }
+    }
+
+    private static AgentSettingsDocument? TryBuildAgentSettingsFallback(
+        Dictionary<string, JsonElement> namespaceConfig)
+    {
+        if (!TryGetStringValue(namespaceConfig, "logFilePath", out var logFilePath))
+        {
+            return null;
+        }
+
+        var fallback = new AgentSettingsDocument
+        {
+            LogFilePath = logFilePath
+        };
+
+        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
+        {
+            fallback.SchemaVersion = schemaVersion;
+        }
+
+        if (TryGetStringValue(namespaceConfig, "agentName", out var agentName))
+        {
+            fallback.AgentName = agentName;
+        }
+
+        return fallback;
     }
 
     private static bool TryGetBoolValue(

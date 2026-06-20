@@ -948,6 +948,30 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
+    public async Task GetAgentEnabledServersAsync_DoesNotSkipServer_WhenOptionalAgentFieldTypeIsInvalid()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Agent Optional Type Mismatch", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log", agentName = 123 })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.Equal("/logs/game.log", server.LogFilePath);
+        Assert.Equal(ServerContext.DefaultAgentNamePrefix, server.AgentNamePrefix);
+    }
+
+    [Fact]
     public async Task GetAgentEnabledServersAsync_UsesDefaultBanFileInterval_WhenBanFileSchemaVersionUnsupported()
     {
         var serverId = Guid.NewGuid();
