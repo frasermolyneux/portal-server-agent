@@ -19,6 +19,11 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 /// </summary>
 public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly IRepositoryApiClient _repositoryClient;
     private readonly ILogger<RepositoryServerConfigProvider> _logger;
 
@@ -459,21 +464,10 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             return null;
         }
 
-        var document = new AgentSettingsDocument();
-
-        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
+        var document = DeserializeDocument<AgentSettingsDocument>(namespaceConfig);
+        if (document is null)
         {
-            document.SchemaVersion = schemaVersion;
-        }
-
-        if (TryGetStringValue(namespaceConfig, "agentName", out var agentName))
-        {
-            document.AgentName = agentName;
-        }
-
-        if (TryGetStringValue(namespaceConfig, "logFilePath", out var logFilePath))
-        {
-            document.LogFilePath = logFilePath;
+            return null;
         }
 
         if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
@@ -494,16 +488,10 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             return null;
         }
 
-        var document = new BanFileSettingsDocument();
-
-        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
+        var document = DeserializeDocument<BanFileSettingsDocument>(namespaceConfig);
+        if (document is null)
         {
-            document.SchemaVersion = schemaVersion;
-        }
-
-        if (TryGetIntValue(namespaceConfig, "checkIntervalSeconds", out var checkIntervalSeconds))
-        {
-            document.CheckIntervalSeconds = checkIntervalSeconds;
+            return null;
         }
 
         if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
@@ -524,82 +512,60 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             return new BroadcastSettings();
         }
 
-        var document = new BroadcastSettingsDocument();
-        if (TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
+        try
         {
-            document.SchemaVersion = schemaVersion;
-        }
-
-        if (TryGetBoolValue(namespaceConfig, "enabled", out var enabled))
-        {
-            document.Enabled = enabled;
-        }
-
-        if (TryGetIntValue(namespaceConfig, "intervalSeconds", out var parsedInterval) && parsedInterval > 0)
-        {
-            document.IntervalSeconds = parsedInterval;
-        }
-
-        var parsedMessages = new List<BroadcastSettingsMessage?>();
-        if (namespaceConfig.TryGetValue("messages", out var messagesElement) && messagesElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in messagesElement.EnumerateArray())
+            var document = DeserializeDocument<BroadcastSettingsDocument>(namespaceConfig);
+            if (document is null)
             {
-                if (item.ValueKind != JsonValueKind.Object ||
-                    !item.TryGetProperty("message", out var messageElement) ||
-                    messageElement.ValueKind != JsonValueKind.String)
-                {
-                    continue;
-                }
-
-                var messageText = messageElement.GetString();
-                if (string.IsNullOrWhiteSpace(messageText))
-                {
-                    continue;
-                }
-
-                var messageEnabled = !item.TryGetProperty("enabled", out var enabledElement) ||
-                                     (enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
-                                      enabledElement.GetBoolean());
-
-                parsedMessages.Add(new BroadcastSettingsMessage
-                {
-                    Message = messageText,
-                    Enabled = messageEnabled
-                });
+                return new BroadcastSettings();
             }
+
+            if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
+            {
+                return new BroadcastSettings();
+            }
+
+            _ = new BroadcastSettingsValidator().Validate(document);
+
+            var intervalSeconds = document.IntervalSeconds.GetValueOrDefault(ServerContext.DefaultBroadcastIntervalSeconds);
+            if (intervalSeconds <= 0)
+            {
+                intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
+            }
+
+            var messages = (document.Messages ?? [])
+                .Where(message => message is not null && !string.IsNullOrWhiteSpace(message.Message))
+                .Select(message => new BroadcastMessage
+                {
+                    Message = message!.Message!,
+                    Enabled = message.Enabled
+                })
+                .ToArray();
+
+            return new BroadcastSettings
+            {
+                Enabled = document.Enabled ?? false,
+                IntervalSeconds = intervalSeconds,
+                Messages = messages
+            };
         }
-
-        document.Messages = parsedMessages;
-
-        if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
+        catch
         {
             return new BroadcastSettings();
         }
+    }
 
-        _ = new BroadcastSettingsValidator().Validate(document);
-
-        var intervalSeconds = document.IntervalSeconds.GetValueOrDefault(ServerContext.DefaultBroadcastIntervalSeconds);
-        if (intervalSeconds <= 0)
+    private static T? DeserializeDocument<T>(Dictionary<string, JsonElement> namespaceConfig)
+    {
+        try
         {
-            intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
+            var json = JsonSerializer.Serialize(namespaceConfig);
+            return JsonSerializer.Deserialize<T>(json, JsonOptions);
         }
-
-        var messages = (document.Messages ?? [])
-            .Where(message => message is not null && !string.IsNullOrWhiteSpace(message.Message))
-            .Select(message => new BroadcastMessage
-            {
-                Message = message!.Message!,
-                Enabled = message.Enabled
-            })
-            .ToArray();
-
-        return new BroadcastSettings
+        catch (JsonException)
         {
-            Enabled = document.Enabled ?? false,
-            IntervalSeconds = intervalSeconds,
-            Messages = messages
-        };
+            return default;
+        }
     }
 
     private static bool TryGetBoolValue(

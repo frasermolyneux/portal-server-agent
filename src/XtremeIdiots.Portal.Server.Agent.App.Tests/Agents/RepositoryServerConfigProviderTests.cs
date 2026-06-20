@@ -371,9 +371,7 @@ public class RepositoryServerConfigProviderTests
         var server = Assert.Single(result);
         Assert.False(server.Broadcasts.Enabled);
         Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
-        var message = Assert.Single(server.Broadcasts.Messages);
-        Assert.Equal("Message A", message.Message);
-        Assert.False(message.Enabled);
+        Assert.Empty(server.Broadcasts.Messages);
     }
 
     [Fact]
@@ -788,9 +786,10 @@ public class RepositoryServerConfigProviderTests
 
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        var message = Assert.Single(Assert.Single(result).Broadcasts.Messages);
-        // Baseline lock for current behavior: string bool values are treated as disabled.
-        Assert.False(message.Enabled);
+        var server = Assert.Single(result);
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
+        Assert.Empty(server.Broadcasts.Messages);
     }
 
     [Fact]
