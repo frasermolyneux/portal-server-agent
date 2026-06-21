@@ -131,7 +131,7 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-dev
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Azure Login
         uses: azure/login@v3
@@ -284,7 +284,7 @@ jobs:
       !failure() && !cancelled() &&
       (needs.container-deploy-dev.result == 'success' || github.event_name == 'schedule')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Azure Login
         uses: azure/login@v3
