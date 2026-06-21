@@ -581,6 +581,11 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     {
                         messageEnabled = enabledElement.GetBoolean();
                     }
+                    else if (enabledElement.ValueKind == JsonValueKind.String &&
+                             bool.TryParse(enabledElement.GetString(), out var parsedEnabled))
+                    {
+                        messageEnabled = parsedEnabled;
+                    }
                     else
                     {
                         continue;
@@ -611,6 +616,10 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             return element.Deserialize<T>(JsonOptions);
         }
         catch (JsonException)
+        {
+            return default;
+        }
+        catch (NotSupportedException)
         {
             return default;
         }

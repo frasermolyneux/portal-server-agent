@@ -763,7 +763,7 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_FixtureLock_BroadcastMessageStringEnabledSkipsMessageOnly()
+    public async Task GetAgentEnabledServersAsync_FixtureLock_BroadcastMessageStringEnabledParsesMessage()
     {
         var fixture = LoadFixture("agent-broadcast-message-enabled-string-gap.json");
         var dto = CreateGameServerDto(
@@ -789,7 +789,9 @@ public class RepositoryServerConfigProviderTests
         var server = Assert.Single(result);
         Assert.True(server.Broadcasts.Enabled);
         Assert.Equal(120, server.Broadcasts.IntervalSeconds);
-        Assert.Empty(server.Broadcasts.Messages);
+        var message = Assert.Single(server.Broadcasts.Messages);
+        Assert.Equal("This message uses a string bool", message.Message);
+        Assert.True(message.Enabled);
     }
 
     [Fact]
