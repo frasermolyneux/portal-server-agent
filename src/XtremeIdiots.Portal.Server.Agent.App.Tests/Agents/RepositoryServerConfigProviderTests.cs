@@ -371,9 +371,7 @@ public class RepositoryServerConfigProviderTests
         var server = Assert.Single(result);
         Assert.False(server.Broadcasts.Enabled);
         Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
-        var message = Assert.Single(server.Broadcasts.Messages);
-        Assert.Equal("Message A", message.Message);
-        Assert.False(message.Enabled);
+        Assert.Empty(server.Broadcasts.Messages);
     }
 
     [Fact]
@@ -765,7 +763,7 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_FixtureLock_BroadcastMessageStringEnabledIsTreatedAsFalse()
+    public async Task GetAgentEnabledServersAsync_FixtureLock_BroadcastMessageStringEnabledParsesMessage()
     {
         var fixture = LoadFixture("agent-broadcast-message-enabled-string-gap.json");
         var dto = CreateGameServerDto(
@@ -788,9 +786,12 @@ public class RepositoryServerConfigProviderTests
 
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        var message = Assert.Single(Assert.Single(result).Broadcasts.Messages);
-        // Baseline lock for current behavior: string bool values are treated as disabled.
-        Assert.False(message.Enabled);
+        var server = Assert.Single(result);
+        Assert.True(server.Broadcasts.Enabled);
+        Assert.Equal(120, server.Broadcasts.IntervalSeconds);
+        var message = Assert.Single(server.Broadcasts.Messages);
+        Assert.Equal("This message uses a string bool", message.Message);
+        Assert.True(message.Enabled);
     }
 
     [Fact]
@@ -903,6 +904,38 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesBroadcastDefaults_WhenBroadcastSchemaVersionIsInvalidShape()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Invalid Broadcast Schema Shape", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                schemaVersion = new { value = 1 },
+                enabled = true,
+                intervalSeconds = 15,
+                messages = new object[] { new { message = "Should be ignored", enabled = true } }
+            })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
+        Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Fact]
     public async Task GetAgentEnabledServersAsync_UsesTypedBanFileInterval_WhenProvided()
     {
         var serverId = Guid.NewGuid();
@@ -923,6 +956,53 @@ public class RepositoryServerConfigProviderTests
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
         Assert.Equal(15, Assert.Single(result).BanFileCheckIntervalSeconds);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_UsesTypedBanFileInterval_WhenNumericFieldsAreStrings()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Typed Banfile Interval String Numbers", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("banfiles", new { schemaVersion = "1", checkIntervalSeconds = "15" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.Equal(15, Assert.Single(result).BanFileCheckIntervalSeconds);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_DoesNotSkipServer_WhenOptionalAgentFieldTypeIsInvalid()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Agent Optional Type Mismatch", GameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log", agentName = 123 })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.Equal("/logs/game.log", server.LogFilePath);
+        Assert.Equal(ServerContext.DefaultAgentNamePrefix, server.AgentNamePrefix);
     }
 
     [Fact]

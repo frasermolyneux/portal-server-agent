@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -16,6 +18,20 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Observability;
 
 public class AgentHealthCheckTests
 {
+    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (stopwatch.Elapsed > timeout)
+            {
+                throw new TimeoutException("Timed out waiting for condition to become true.");
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
     private static AgentOrchestrator CreateOrchestrator() =>
         new(
             new Mock<IServerConfigProvider>().Object,
@@ -75,27 +91,31 @@ public class AgentHealthCheckTests
             NullLogger<AgentOrchestrator>.Instance);
 
         using var cts = new CancellationTokenSource();
-        await orchestrator.StartAsync(cts.Token);
+        try
+        {
+            await orchestrator.StartAsync(cts.Token);
 
-        // Give the orchestrator a moment to start executing
-        await Task.Delay(100);
+            // Wait until the background ExecuteAsync loop has set IsRunning.
+            await WaitForConditionAsync(() => orchestrator.IsRunning, TimeSpan.FromSeconds(5));
 
-        var healthCheck = new AgentHealthCheck(orchestrator);
+            var healthCheck = new AgentHealthCheck(orchestrator);
 
-        // Act
-        var result = await healthCheck.CheckHealthAsync(
-            new HealthCheckContext
-            {
-                Registration = new HealthCheckRegistration("agent-status", healthCheck, null, null)
-            });
+            // Act
+            var result = await healthCheck.CheckHealthAsync(
+                new HealthCheckContext
+                {
+                    Registration = new HealthCheckRegistration("agent-status", healthCheck, null, null)
+                });
 
-        // Assert
-        Assert.Equal(HealthStatus.Healthy, result.Status);
-        Assert.Contains("0 active agent(s)", result.Description);
-
-        // Cleanup
-        cts.Cancel();
-        await orchestrator.StopAsync(CancellationToken.None);
+            // Assert
+            Assert.Equal(HealthStatus.Healthy, result.Status);
+            Assert.Contains("0 active agent(s)", result.Description);
+        }
+        finally
+        {
+            cts.Cancel();
+            await orchestrator.StopAsync(CancellationToken.None);
+        }
     }
 
     [Fact]
@@ -171,26 +191,30 @@ public class AgentHealthCheckTests
             NullLogger<AgentOrchestrator>.Instance);
 
         using var cts = new CancellationTokenSource();
-        await orchestrator.StartAsync(cts.Token);
+        try
+        {
+            await orchestrator.StartAsync(cts.Token);
 
-        // Give orchestrator time to start and spawn agents
-        await Task.Delay(200);
+            // Wait for orchestrator startup.
+            await WaitForConditionAsync(() => orchestrator.IsRunning, TimeSpan.FromSeconds(5));
 
-        var healthCheck = new AgentHealthCheck(orchestrator);
+            var healthCheck = new AgentHealthCheck(orchestrator);
 
-        // Act
-        var result = await healthCheck.CheckHealthAsync(
-            new HealthCheckContext
-            {
-                Registration = new HealthCheckRegistration("agent-status", healthCheck, null, null)
-            });
+            // Act
+            var result = await healthCheck.CheckHealthAsync(
+                new HealthCheckContext
+                {
+                    Registration = new HealthCheckRegistration("agent-status", healthCheck, null, null)
+                });
 
-        // Assert
-        Assert.Equal(HealthStatus.Healthy, result.Status);
-        Assert.Contains("active agent", result.Description);
-
-        // Cleanup
-        cts.Cancel();
-        await orchestrator.StopAsync(CancellationToken.None);
+            // Assert
+            Assert.Equal(HealthStatus.Healthy, result.Status);
+            Assert.Contains("active agent", result.Description);
+        }
+        finally
+        {
+            cts.Cancel();
+            await orchestrator.StopAsync(CancellationToken.None);
+        }
     }
 }
