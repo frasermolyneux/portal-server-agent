@@ -8,12 +8,13 @@ using Moq;
 
 using MX.Api.Abstractions;
 
-using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.GameServers;
 using XtremeIdiots.Portal.Repository.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using RepositoryGameServerFilter = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameServerFilter;
+using RepositoryGameType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameType;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
 
@@ -61,7 +62,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Test Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Test Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -105,7 +106,7 @@ public class RepositoryServerConfigProviderTests
         var dto = CreateGameServerDto(
             serverId,
             "SFTP Server",
-            GameType.CallOfDuty4,
+            RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com",
             queryPort: 28960,
             fileTransportType: "sftp",
@@ -140,7 +141,7 @@ public class RepositoryServerConfigProviderTests
         var dto = CreateGameServerDto(
             serverId,
             "SFTP Namespace Missing",
-            GameType.CallOfDuty4,
+            RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com",
             queryPort: 28960,
             fileTransportType: "sftp",
@@ -168,7 +169,7 @@ public class RepositoryServerConfigProviderTests
         var dto = CreateGameServerDto(
             serverId,
             "Invalid transport metadata",
-            GameType.CallOfDuty4,
+            RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com",
             queryPort: 28960,
             fileTransportType: "smtp",
@@ -193,7 +194,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_UsesGlobalAgentNamePrefix_WhenServerOverrideMissing()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Global Prefix Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Global Prefix Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -219,7 +220,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_UsesServerAgentNamePrefixOverride_WhenPresent()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Server Prefix Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Server Prefix Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -245,7 +246,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_UsesDefaultAgentNamePrefix_WhenGlobalPrefixWhitespace()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Whitespace Prefix Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Whitespace Prefix Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -271,7 +272,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_ParsesBroadcastSettings()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Broadcast Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Broadcast Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -310,7 +311,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_BroadcastMessageEnabledDefaultsToTrue_WhenMissing()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Broadcast Missing Enabled", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Broadcast Missing Enabled", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -342,7 +343,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_InvalidBroadcastSettings_DefaultsSafely()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Broadcast Defaults", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Broadcast Defaults", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -378,7 +379,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_BroadcastChanges_ChangeConfigHash()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Broadcast Hash", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Broadcast Hash", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -424,7 +425,7 @@ public class RepositoryServerConfigProviderTests
         var apiResult = new ApiResult<CollectionModel<GameServerDto>>(HttpStatusCode.InternalServerError);
 
         _mockGameServersApi
-            .Setup(a => a.GetGameServers(null, null, GameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
+            .Setup(a => a.GetGameServers(null, null, RepositoryGameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(apiResult);
 
         var provider = CreateProvider();
@@ -441,7 +442,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange — config has rcon + agent but no file transport namespace
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "No File Transport Config", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "No File Transport Config", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -465,7 +466,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange — config has file transport + agent but no rcon namespace
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "No RCON Config", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "No RCON Config", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -489,7 +490,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange — config has file transport + rcon but no agent namespace
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "No Agent Config", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "No Agent Config", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -513,7 +514,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange
         _mockGameServersApi
-            .Setup(a => a.GetGameServers(null, null, GameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
+            .Setup(a => a.GetGameServers(null, null, RepositoryGameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Network error"));
 
         var provider = CreateProvider();
@@ -530,7 +531,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange — config API returns empty (default mock behavior), server should be skipped
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Empty Config Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Empty Config Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -549,7 +550,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange — config API throws for this server
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Error Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Error Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -572,7 +573,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange — file transport config has malformed JSON, so the namespace is missing
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Bad JSON Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Bad JSON Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -602,7 +603,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "BanSync Server", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "BanSync Server", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960,
             banFileSyncEnabled: false);
 
@@ -629,7 +630,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange — config has port as a string value
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "String Port", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "String Port", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -655,7 +656,7 @@ public class RepositoryServerConfigProviderTests
     {
         // Arrange — file transport namespace exists but is missing required keys
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Incomplete File Transport", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Incomplete File Transport", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess(new[] { dto });
@@ -679,7 +680,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_ParsesScreenshotSettings()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Screenshot Config", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Screenshot Config", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -706,7 +707,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_ScreenshotPollInterval_IsBounded()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Screenshot Interval", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Screenshot Interval", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -734,7 +735,7 @@ public class RepositoryServerConfigProviderTests
         var dto = CreateGameServerDto(
             fixture.Server.Id,
             fixture.Server.Title,
-            Enum.Parse<GameType>(fixture.Server.GameType, ignoreCase: true),
+            Enum.Parse<RepositoryGameType>(fixture.Server.GameType, ignoreCase: true),
             hostname: fixture.Server.Hostname,
             queryPort: fixture.Server.QueryPort,
             banFileSyncEnabled: fixture.Server.BanFileSyncEnabled,
@@ -769,7 +770,7 @@ public class RepositoryServerConfigProviderTests
         var dto = CreateGameServerDto(
             fixture.Server.Id,
             fixture.Server.Title,
-            Enum.Parse<GameType>(fixture.Server.GameType, ignoreCase: true),
+            Enum.Parse<RepositoryGameType>(fixture.Server.GameType, ignoreCase: true),
             hostname: fixture.Server.Hostname,
             queryPort: fixture.Server.QueryPort,
             banFileSyncEnabled: fixture.Server.BanFileSyncEnabled,
@@ -801,7 +802,7 @@ public class RepositoryServerConfigProviderTests
         var dto = CreateGameServerDto(
             fixture.Server.Id,
             fixture.Server.Title,
-            Enum.Parse<GameType>(fixture.Server.GameType, ignoreCase: true),
+            Enum.Parse<RepositoryGameType>(fixture.Server.GameType, ignoreCase: true),
             hostname: fixture.Server.Hostname,
             queryPort: fixture.Server.QueryPort,
             banFileSyncEnabled: fixture.Server.BanFileSyncEnabled,
@@ -828,7 +829,7 @@ public class RepositoryServerConfigProviderTests
         var dto = CreateGameServerDto(
             fixture.Server.Id,
             fixture.Server.Title,
-            Enum.Parse<GameType>(fixture.Server.GameType, ignoreCase: true),
+            Enum.Parse<RepositoryGameType>(fixture.Server.GameType, ignoreCase: true),
             hostname: fixture.Server.Hostname,
             queryPort: fixture.Server.QueryPort,
             banFileSyncEnabled: fixture.Server.BanFileSyncEnabled,
@@ -853,7 +854,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_SkipsServer_WhenAgentSchemaVersionUnsupported()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Unsupported Agent Schema", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Unsupported Agent Schema", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -875,7 +876,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_UsesBroadcastDefaults_WhenBroadcastSchemaVersionUnsupported()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Unsupported Broadcast Schema", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Unsupported Broadcast Schema", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -907,7 +908,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_UsesBroadcastDefaults_WhenBroadcastSchemaVersionIsInvalidShape()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Invalid Broadcast Schema Shape", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Invalid Broadcast Schema Shape", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -939,7 +940,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_UsesTypedBanFileInterval_WhenProvided()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Typed Banfile Interval", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Typed Banfile Interval", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -962,7 +963,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_UsesTypedBanFileInterval_WhenNumericFieldsAreStrings()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Typed Banfile Interval String Numbers", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Typed Banfile Interval String Numbers", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -985,7 +986,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_DoesNotSkipServer_WhenOptionalAgentFieldTypeIsInvalid()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Agent Optional Type Mismatch", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Agent Optional Type Mismatch", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -1009,7 +1010,7 @@ public class RepositoryServerConfigProviderTests
     public async Task GetAgentEnabledServersAsync_UsesDefaultBanFileInterval_WhenBanFileSchemaVersionUnsupported()
     {
         var serverId = Guid.NewGuid();
-        var dto = CreateGameServerDto(serverId, "Unsupported Banfile Schema", GameType.CallOfDuty4,
+        var dto = CreateGameServerDto(serverId, "Unsupported Banfile Schema", RepositoryGameType.CallOfDuty4,
             hostname: "game.example.com", queryPort: 28960);
 
         SetupApiSuccess([dto]);
@@ -1050,7 +1051,7 @@ public class RepositoryServerConfigProviderTests
         var apiResult = new ApiResult<CollectionModel<GameServerDto>>(HttpStatusCode.OK, apiResponse);
 
         _mockGameServersApi
-            .Setup(a => a.GetGameServers(null, null, GameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
+            .Setup(a => a.GetGameServers(null, null, RepositoryGameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(apiResult);
     }
 
@@ -1096,7 +1097,7 @@ public class RepositoryServerConfigProviderTests
         typeof(ConfigurationDto).GetProperty(propertyName)!.SetValue(dto, value);
 
     private static GameServerDto CreateGameServerDto(
-        Guid serverId, string title, GameType gameType,
+        Guid serverId, string title, RepositoryGameType gameType,
         string hostname = "localhost", int queryPort = 28960,
         bool banFileSyncEnabled = true,
         bool ftpEnabled = true,

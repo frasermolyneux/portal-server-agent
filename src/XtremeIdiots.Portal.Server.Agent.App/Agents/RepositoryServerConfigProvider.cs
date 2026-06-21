@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.GameServers;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
@@ -11,6 +10,8 @@ using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Agent;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.BanFiles;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Broadcasts;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Shared;
+using RepositoryFileTransportType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.FileTransportType;
+using RepositoryGameServerFilter = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameServerFilter;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
@@ -46,7 +47,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             var result = await _repositoryClient.GameServers.V1.GetGameServers(
                 gameTypes: null,
                 gameServerIds: null,
-                filter: GameServerFilter.AgentEnabled,
+                filter: RepositoryGameServerFilter.AgentEnabled,
                 skipEntries: 0,
                 takeEntries: 50,
                 order: null,
@@ -231,7 +232,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
     private static TransportTypeResolution ResolveTransportType(GameServerDto dto)
     {
         var value = dto.FileTransportType;
-        if (value == FileTransportType.Unknown)
+        if (value == RepositoryFileTransportType.Unknown)
         {
             return new TransportTypeResolution
             {
