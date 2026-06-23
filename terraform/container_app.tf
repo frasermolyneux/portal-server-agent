@@ -82,13 +82,13 @@ resource "azurerm_container_app" "app" {
 
       liveness_probe {
         transport = "HTTP"
-        path      = "/healthz"
+        path      = "/health/live"
         port      = 8080
       }
 
       startup_probe {
         transport = "HTTP"
-        path      = "/healthz"
+        path      = "/health/live"
         port      = 8080
       }
     }

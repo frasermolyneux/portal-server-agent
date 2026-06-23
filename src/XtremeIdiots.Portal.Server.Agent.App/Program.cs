@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Configuration.AzureAppConfiguration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 using MX.Observability.ApplicationInsights.AspNetCore;
 using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
@@ -138,7 +139,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentOrchestrator>
 
 // Health checks
 builder.Services.AddHealthChecks()
-    .AddCheck<AgentHealthCheck>("agent-status");
+    .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"])
+    .AddCheck<AgentHealthCheck>("agent-status", tags: ["dependency"]);
 
 var app = builder.Build();
 
@@ -146,6 +148,10 @@ app.Logger.LogInformation("SFTP host key fingerprint verification is enforced. S
 
 app.UseAzureAppConfiguration();
 
-app.MapHealthChecks("/healthz");
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("live"),
+});
+app.MapHealthChecks("/health/ready");
 
 app.Run();
