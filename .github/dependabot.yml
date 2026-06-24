@@ -6,10 +6,10 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "02:00"
+      time: "02:45"
       timezone: "Etc/UTC"
     groups:
-      nuget:
+      all-updates:
         patterns:
           - "*"
     ignore:
@@ -24,10 +24,10 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "02:00"
+      time: "02:45"
       timezone: "Etc/UTC"
     groups:
-      terraform:
+      all-updates:
         patterns:
           - "*"
 
@@ -37,10 +37,10 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "02:00"
+      time: "02:45"
       timezone: "Etc/UTC"
     groups:
-      github-actions:
+      all-updates:
         patterns:
           - "*"
 
@@ -50,10 +50,10 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "02:00"
+      time: "02:45"
       timezone: "Etc/UTC"
     groups:
-      docker:
+      all-updates:
         patterns:
           - "*"
 
@@ -63,9 +63,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "02:00"
+      time: "02:45"
       timezone: "Etc/UTC"
     groups:
-      devcontainers:
+      all-updates:
         patterns:
           - "*"
