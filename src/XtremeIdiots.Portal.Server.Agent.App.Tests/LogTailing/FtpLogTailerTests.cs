@@ -206,7 +206,7 @@ public class FtpLogTailerTests
 
         var factory = new LogTailerFactory(loggerFactory.Object);
 
-        var context = new XtremeIdiots.Portal.Server.Agent.App.Agents.ServerContext
+        var context = new App.Agents.ServerContext
         {
             ServerId = Guid.NewGuid(),
             GameType = "CallOfDuty4",
@@ -248,7 +248,7 @@ public class FtpLogTailerTests
             .Returns(new Mock<ILogger<SftpLogTailer>>().Object);
 
         var factory = new LogTailerFactory(loggerFactory.Object);
-        var context = new XtremeIdiots.Portal.Server.Agent.App.Agents.ServerContext
+        var context = new App.Agents.ServerContext
         {
             ServerId = Guid.NewGuid(),
             GameType = "CallOfDuty4",

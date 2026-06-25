@@ -379,7 +379,7 @@ public sealed class GameServerAgent
         }
     }
 
-    private async Task PublishIpResolvedEventsAsync(IReadOnlyList<Parsing.PlayerIpResolvedEvent>? events, CancellationToken ct)
+    private async Task PublishIpResolvedEventsAsync(IReadOnlyList<PlayerIpResolvedEvent>? events, CancellationToken ct)
     {
         if (events is null or { Count: 0 })
             return;

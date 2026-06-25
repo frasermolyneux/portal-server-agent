@@ -60,7 +60,7 @@ jobs:
     if: "!failure() && !cancelled() && (needs.detect-changes.outputs.src == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true')"
     runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-ci@dotnet-ci/v1.4
+      - uses: frasermolyneux/actions/dotnet-ci@dotnet-ci/v2
         with:
           dotnet-version: 10.0.x
           src-folder: "src"

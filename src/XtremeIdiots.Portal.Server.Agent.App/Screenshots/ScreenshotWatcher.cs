@@ -95,7 +95,7 @@ public sealed class ScreenshotWatcher : IScreenshotWatcher
                     try
                     {
                         await using (var content = await remoteClient.OpenReadAsync(file.Path, 0, ct).ConfigureAwait(false))
-                        await using (var fileStream = System.IO.File.Create(temporaryFilePath))
+                        await using (var fileStream = File.Create(temporaryFilePath))
                         {
                             await content.CopyToAsync(fileStream, ct).ConfigureAwait(false);
                         }
@@ -214,14 +214,14 @@ public sealed class ScreenshotWatcher : IScreenshotWatcher
 
     private void TryDeleteTemporaryFile(ServerContext context, string temporaryFilePath)
     {
-        if (!System.IO.File.Exists(temporaryFilePath))
+        if (!File.Exists(temporaryFilePath))
         {
             return;
         }
 
         try
         {
-            System.IO.File.Delete(temporaryFilePath);
+            File.Delete(temporaryFilePath);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

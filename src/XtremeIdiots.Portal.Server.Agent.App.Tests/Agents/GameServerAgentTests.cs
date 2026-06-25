@@ -65,7 +65,7 @@ public class GameServerAgentTests
 
         // Default: RCON sync returns no IP-resolved events
         _mockSyncService.Setup(s => s.SyncAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<XtremeIdiots.Portal.Server.Agent.App.Parsing.PlayerIpResolvedEvent>)Array.Empty<XtremeIdiots.Portal.Server.Agent.App.Parsing.PlayerIpResolvedEvent>());
+            .ReturnsAsync((IReadOnlyList<PlayerIpResolvedEvent>)Array.Empty<PlayerIpResolvedEvent>());
         _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
     }

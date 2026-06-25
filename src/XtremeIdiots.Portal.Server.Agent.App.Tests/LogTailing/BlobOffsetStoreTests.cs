@@ -72,7 +72,7 @@ public class BlobOffsetStoreTests
     public async Task GetOffsetAsync_WhenBlobExists_ReturnsSavedOffset()
     {
         var serverId = Guid.NewGuid();
-        var savedJson = """{"offset":123456,"filePath":"/logs/game.log","savedAtUtc":"2026-04-05T10:00:00Z"}""";
+        var savedJson = /*lang=json,strict*/ """{"offset":123456,"filePath":"/logs/game.log","savedAtUtc":"2026-04-05T10:00:00Z"}""";
         var binaryData = new BinaryData(Encoding.UTF8.GetBytes(savedJson));
 
         var mockResponse = new Mock<Response>();
