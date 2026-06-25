@@ -18,12 +18,16 @@ public sealed class Cod5LogParser : CodLogParserBase
     protected override bool IsValidGuid(string guid)
     {
         if (guid.Length < MinCod5GuidLength)
+        {
             return false;
+        }
 
         for (var i = 0; i < guid.Length; i++)
         {
             if (!char.IsDigit(guid[i]))
+            {
                 return false;
+            }
         }
 
         return true;
@@ -40,10 +44,14 @@ public sealed class Cod5LogParser : CodLogParserBase
         var name = match.Groups["name"].Value;
 
         if (!int.TryParse(cidStr, out var cid))
+        {
             return null;
+        }
 
         if (!IsValidGuid(guid))
+        {
             return null;
+        }
 
         if (!HasPlayerInSlot(cid))
         {

@@ -25,11 +25,16 @@ public sealed class BlobBanFileSource : IBanFileSource
 
         var opts = options.Value;
         if (string.IsNullOrWhiteSpace(opts.BlobEndpoint))
+        {
             throw new InvalidOperationException(
                 $"{BanFileStorageOptions.SectionName}:BlobEndpoint is not configured");
+        }
+
         if (string.IsNullOrWhiteSpace(opts.ContainerName))
+        {
             throw new InvalidOperationException(
                 $"{BanFileStorageOptions.SectionName}:ContainerName is not configured");
+        }
 
         // The ban-files container lives on portal-core's shared app-data storage account,
         // separate from the agent's own offset/lock storage, so build a dedicated
@@ -47,7 +52,9 @@ public sealed class BlobBanFileSource : IBanFileSource
     public async Task<CentralBanFile?> GetAsync(string gameType, bool legacyLane = false, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(gameType))
+        {
             throw new ArgumentException("Game type is required", nameof(gameType));
+        }
 
         var blobKey = legacyLane && string.Equals(gameType, "CallOfDuty4x", StringComparison.OrdinalIgnoreCase)
             ? $"{gameType}-legacy-bans.txt"

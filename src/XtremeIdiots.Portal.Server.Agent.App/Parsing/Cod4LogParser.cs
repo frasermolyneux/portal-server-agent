@@ -12,13 +12,17 @@ public sealed class Cod4LogParser : CodLogParserBase
     protected override bool IsValidGuid(string guid)
     {
         if (guid.Length != Cod4GuidLength)
+        {
             return false;
+        }
 
         for (var i = 0; i < guid.Length; i++)
         {
             var c = guid[i];
             if (!char.IsAsciiHexDigit(c))
+            {
                 return false;
+            }
         }
 
         return true;

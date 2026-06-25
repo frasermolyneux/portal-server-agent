@@ -77,12 +77,16 @@ public abstract class CodLogParserBase : ILogParser
     public GameEvent? ParseLine(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
+        {
             return null;
+        }
 
         // Strip timestamp prefix (e.g. "  3:42 " or "123:45 ")
         var cleaned = TimestampRegex.Replace(line, string.Empty);
         if (string.IsNullOrEmpty(cleaned))
+        {
             return null;
+        }
 
         var timestamp = DateTime.UtcNow;
 
@@ -120,7 +124,9 @@ public abstract class CodLogParserBase : ILogParser
     public void SetCurrentMap(string? mapName)
     {
         if (_currentMap is null && !string.IsNullOrWhiteSpace(mapName))
+        {
             _currentMap = mapName;
+        }
     }
 
     /// <inheritdoc />
@@ -167,25 +173,40 @@ public abstract class CodLogParserBase : ILogParser
             var value = kv.Groups[2].Value;
 
             if (string.Equals(key, "mapname", StringComparison.OrdinalIgnoreCase))
+            {
                 mapName = value;
+            }
             else if (string.Equals(key, "g_gametype", StringComparison.OrdinalIgnoreCase))
+            {
                 gameType = value;
+            }
             else if (string.Equals(key, "sv_hostname", StringComparison.OrdinalIgnoreCase))
+            {
                 _serverTitle = value;
+            }
             else if (string.Equals(key, "fs_game", StringComparison.OrdinalIgnoreCase))
+            {
                 _serverMod = value;
+            }
             else if (string.Equals(key, "sv_maxclients", StringComparison.OrdinalIgnoreCase) &&
                      int.TryParse(value, out var maxClients))
+            {
                 _maxPlayers = maxClients;
+            }
         }
 
         // Clear the slot map — all players will re-join after a map change
         _slotMap.Clear();
 
         if (mapName is not null)
+        {
             _currentMap = mapName;
+        }
+
         if (gameType is not null)
+        {
             _currentGameType = gameType;
+        }
 
         if (mapName is not null && gameType is not null)
         {
@@ -249,15 +270,21 @@ public abstract class CodLogParserBase : ILogParser
         var name = match.Groups["name"].Value;
 
         if (!int.TryParse(cidStr, out var cid))
+        {
             return null;
+        }
 
         if (!IsValidGuid(guid))
+        {
             return null;
+        }
 
         // Preserve RCON-provided IP when the same player reconnects to this slot
         string? existingIp = null;
         if (_slotMap.TryGetValue(cid, out var previous) && previous.Guid == guid)
+        {
             existingIp = previous.IpAddress;
+        }
 
         var playerInfo = new PlayerInfo
         {
@@ -290,10 +317,14 @@ public abstract class CodLogParserBase : ILogParser
         var name = match.Groups["name"].Value;
 
         if (!int.TryParse(cidStr, out var cid))
+        {
             return null;
+        }
 
         if (!IsValidGuid(guid))
+        {
             return null;
+        }
 
         _slotMap.Remove(cid);
 
@@ -319,16 +350,22 @@ public abstract class CodLogParserBase : ILogParser
         var text = match.Groups["text"].Value;
 
         if (!int.TryParse(cidStr, out var cid))
+        {
             return null;
+        }
 
         if (!IsValidGuid(guid))
+        {
             return null;
+        }
 
         var isTeamChat = string.Equals(action, "sayteam", StringComparison.OrdinalIgnoreCase);
 
         // Strip the control character (char 21 / NAK) from start of message if present
         if (text.Length > 0 && text[0] == '\x15')
+        {
             text = text[1..];
+        }
 
         return new ChatMessageEvent
         {

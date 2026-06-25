@@ -97,7 +97,9 @@ public sealed class GameServerAgent
                 : null;
 
             if (startOffset.HasValue)
+            {
                 _logger.LogInformation("[{Title}] Resuming from offset {Offset}", _context.Title, startOffset.Value);
+            }
 
             // 2. Connect file transport tailer
             var tailerConfig = new FileTransportTailerConfig
@@ -382,7 +384,9 @@ public sealed class GameServerAgent
     private async Task PublishIpResolvedEventsAsync(IReadOnlyList<PlayerIpResolvedEvent>? events, CancellationToken ct)
     {
         if (events is null or { Count: 0 })
+        {
             return;
+        }
 
         foreach (var evt in events)
         {

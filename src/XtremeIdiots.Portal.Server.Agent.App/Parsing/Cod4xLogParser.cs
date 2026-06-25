@@ -14,16 +14,23 @@ public sealed class Cod4xLogParser : CodLogParserBase
     protected override bool IsValidGuid(string guid)
     {
         if (guid.Length != Cod4xPlayerIdLength)
+        {
             return false;
+        }
 
         var allZeros = true;
         for (var i = 0; i < guid.Length; i++)
         {
             var c = guid[i];
             if (c < '0' || c > '9')
+            {
                 return false;
+            }
+
             if (c != '0')
+            {
                 allZeros = false;
+            }
         }
 
         return !allZeros;

@@ -92,7 +92,9 @@ public sealed class FtpLogTailer : ILogTailer
     public async Task<IReadOnlyList<string>> PollAsync(CancellationToken ct = default)
     {
         if (_config is null)
+        {
             throw new InvalidOperationException("ConnectAsync must be called before PollAsync.");
+        }
 
         try
         {
@@ -189,7 +191,9 @@ public sealed class FtpLogTailer : ILogTailer
     internal static IReadOnlyList<string> SplitIntoLines(byte[] data, ref string partialLine)
     {
         if (data.Length == 0)
+        {
             return Array.Empty<string>();
+        }
 
         var text = partialLine + Encoding.UTF8.GetString(data);
         var lines = new List<string>();
@@ -254,7 +258,9 @@ public sealed class FtpLogTailer : ILogTailer
             var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, toRead), ct);
 
             if (bytesRead == 0)
+            {
                 break;
+            }
 
             memoryStream.Write(buffer, 0, bytesRead);
             totalRead += bytesRead;

@@ -311,7 +311,9 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         foreach (var config in configs)
         {
             if (string.IsNullOrWhiteSpace(config.Namespace) || string.IsNullOrWhiteSpace(config.Configuration))
+            {
                 continue;
+            }
 
             try
             {
@@ -375,9 +377,14 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             nsConfig.TryGetValue(key, out var element))
         {
             if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out value))
+            {
                 return true;
+            }
+
             if (element.ValueKind == JsonValueKind.String && int.TryParse(element.GetString(), out value))
+            {
                 return true;
+            }
         }
         return false;
     }

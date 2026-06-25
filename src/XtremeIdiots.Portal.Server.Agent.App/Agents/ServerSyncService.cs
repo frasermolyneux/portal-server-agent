@@ -140,7 +140,10 @@ public sealed class ServerSyncService : IServerSyncService
             // Merge Score from Query players (Query has Score, RCON doesn't)
             foreach (var queryPlayer in query.Players)
             {
-                if (queryPlayer.Name is null) continue;
+                if (queryPlayer.Name is null)
+                {
+                    continue;
+                }
 
                 // Match by name (Query doesn't have GUID)
                 var slotEntry = parser.ConnectedPlayers.Values

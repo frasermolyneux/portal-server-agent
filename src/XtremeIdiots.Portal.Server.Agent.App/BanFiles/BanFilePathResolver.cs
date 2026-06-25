@@ -101,11 +101,16 @@ public sealed class BanFilePathResolver : IBanFilePathResolver
     private static string NormaliseRoot(string rootPath)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
+        {
             return "/";
+        }
 
         var trimmed = rootPath.Replace('\\', '/').Trim();
         if (!trimmed.EndsWith('/'))
+        {
             trimmed += "/";
+        }
+
         return trimmed;
     }
 }

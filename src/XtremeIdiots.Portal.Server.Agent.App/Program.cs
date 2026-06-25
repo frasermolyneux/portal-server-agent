@@ -91,7 +91,9 @@ builder.Services.AddSingleton(sp =>
 {
     var fqns = builder.Configuration["ServiceBusConnection:fullyQualifiedNamespace"];
     if (string.IsNullOrEmpty(fqns))
+    {
         throw new InvalidOperationException("ServiceBusConnection:fullyQualifiedNamespace is not configured");
+    }
 
     var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
     {
@@ -105,7 +107,9 @@ builder.Services.AddSingleton(sp =>
 {
     var endpoint = builder.Configuration["AgentStorage:BlobEndpoint"];
     if (string.IsNullOrEmpty(endpoint))
+    {
         throw new InvalidOperationException("AgentStorage:BlobEndpoint is not configured");
+    }
 
     var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
     {

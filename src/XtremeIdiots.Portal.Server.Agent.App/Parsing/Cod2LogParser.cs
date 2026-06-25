@@ -12,12 +12,16 @@ public sealed class Cod2LogParser : CodLogParserBase
     protected override bool IsValidGuid(string guid)
     {
         if (guid.Length < MinCod2GuidLength)
+        {
             return false;
+        }
 
         for (var i = 0; i < guid.Length; i++)
         {
             if (!char.IsDigit(guid[i]))
+            {
                 return false;
+            }
         }
 
         return true;

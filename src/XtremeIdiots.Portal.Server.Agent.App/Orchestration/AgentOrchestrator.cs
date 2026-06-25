@@ -209,7 +209,9 @@ public class AgentOrchestrator : BackgroundService
         foreach (var server in servers)
         {
             if (_agents.ContainsKey(server.ServerId))
+            {
                 continue;
+            }
 
             if (!server.EffectiveFileTransportEnabled || !server.RconEnabled)
             {

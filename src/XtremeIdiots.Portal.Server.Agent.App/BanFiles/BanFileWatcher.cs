@@ -245,7 +245,9 @@ public sealed class BanFileWatcher : IBanFileWatcher
             ? 0
             : _consecutiveFailures.AddOrUpdate(laneKey, 1, (_, prev) => prev + 1);
         if (checkResult == "Success")
+        {
             _consecutiveFailures[laneKey] = 0;
+        }
 
         // Re-count per-tag totals from the remote size — cached to avoid re-reading
         // the full file on every cycle when nothing has changed.
@@ -300,7 +302,9 @@ public sealed class BanFileWatcher : IBanFileWatcher
         await UpsertStatusAsync(statusDto, context, ct).ConfigureAwait(false);
 
         if (detectedBans.Count == 0)
+        {
             return BanFileCheckResult.Empty;
+        }
 
         var sampleNames = JsonSerializer.Serialize(
             detectedBans.Take(5).Select(b => b.PlayerName).ToArray());
@@ -376,7 +380,9 @@ public sealed class BanFileWatcher : IBanFileWatcher
         }
 
         if (central is null)
+        {
             return PushOutcome.NoPush(centralEtag: null, centralEtagSeenAt: null);
+        }
 
         await using (central)
         {
@@ -518,12 +524,16 @@ public sealed class BanFileWatcher : IBanFileWatcher
         CancellationToken ct)
     {
         if (!remoteSize.HasValue)
+        {
             return null;
+        }
 
         var laneKey = new LaneKey(context.ServerId, legacyLane);
 
         if (_countCache.TryGetValue(laneKey, out var cached) && cached.RemoteFileSize == remoteSize.Value)
+        {
             return cached.Counts;
+        }
 
         try
         {
@@ -648,7 +658,9 @@ public sealed class BanFileWatcher : IBanFileWatcher
             ? 0
             : _consecutiveFailures.AddOrUpdate(laneKey, 1, (_, prev) => prev + 1);
         if (checkResult == "Success")
+        {
             _consecutiveFailures[laneKey] = 0;
+        }
 
         var counts = await GetOrRecountAsync(context, resolvedPath.Path, finalSize, legacyLane, ct).ConfigureAwait(false);
 
@@ -688,7 +700,9 @@ public sealed class BanFileWatcher : IBanFileWatcher
         {
             var trimmed = rawLine.Trim();
             if (string.IsNullOrEmpty(trimmed))
+            {
                 continue;
+            }
 
             total++;
 
@@ -697,9 +711,18 @@ public sealed class BanFileWatcher : IBanFileWatcher
                               || trimmed.Contains("[B3BAN]", StringComparison.OrdinalIgnoreCase)
                               || trimmed.Contains("[EXTERNAL]", StringComparison.OrdinalIgnoreCase);
 
-            if (hasBanSync) bansync++;
-            else if (hasExternal) external++;
-            else untagged++;
+            if (hasBanSync)
+            {
+                bansync++;
+            }
+            else if (hasExternal)
+            {
+                external++;
+            }
+            else
+            {
+                untagged++;
+            }
         }
 
         return new TagCounts(total, untagged, bansync, external);
@@ -719,7 +742,9 @@ public sealed class BanFileWatcher : IBanFileWatcher
                 cancellationToken: ct).ConfigureAwait(false);
 
             if (!response.IsSuccess || response.Result?.Data?.Items is null)
+            {
                 return null;
+            }
 
             return response.Result.Data.Items.FirstOrDefault();
         }
@@ -768,23 +793,31 @@ public sealed class BanFileWatcher : IBanFileWatcher
         {
             var trimmed = line.Trim();
             if (string.IsNullOrEmpty(trimmed))
+            {
                 continue;
+            }
 
             // Skip lines with known system tags
             if (SkipTags.Any(tag => trimmed.Contains(tag, StringComparison.OrdinalIgnoreCase)))
+            {
                 continue;
+            }
 
             // Ban file format: "GUID PLAYERNAME"
             var spaceIndex = trimmed.IndexOf(' ');
             if (spaceIndex <= 0)
+            {
                 continue;
+            }
 
             var guid = trimmed[..spaceIndex].Trim().ToLowerInvariant();
             var name = trimmed[(spaceIndex + 1)..].Trim();
 
             // Basic GUID validation — skip obviously malformed entries
             if (guid.Length < 2 || string.IsNullOrWhiteSpace(name))
+            {
                 continue;
+            }
 
             bans.Add(new DetectedBanEntry { PlayerGuid = guid, PlayerName = name });
         }

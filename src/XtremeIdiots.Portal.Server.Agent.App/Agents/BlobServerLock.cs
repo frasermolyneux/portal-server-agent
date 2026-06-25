@@ -57,7 +57,9 @@ public class BlobServerLock : IServerLock
     public async Task<bool> RenewAsync(Guid serverId, CancellationToken ct = default)
     {
         if (!_leaseIds.TryGetValue(serverId, out var leaseId))
+        {
             return false;
+        }
 
         try
         {
@@ -82,7 +84,9 @@ public class BlobServerLock : IServerLock
     public async Task ReleaseAsync(Guid serverId, CancellationToken ct = default)
     {
         if (!_leaseIds.TryRemove(serverId, out var leaseId))
+        {
             return;
+        }
 
         try
         {

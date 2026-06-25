@@ -43,15 +43,21 @@ public sealed class Cod4xCvarProbe : ICod4xCvarProbe
         ArgumentNullException.ThrowIfNull(context);
 
         if (!string.Equals(context.GameType, Cod4xGameType, StringComparison.Ordinal))
+        {
             return;
+        }
 
         if (!context.RconEnabled)
+        {
             return;
+        }
 
         // Probe at most once per process per server. Concurrent invocations race
         // safely — TryAdd returns false on the loser without running the probe.
         if (!_probed.TryAdd(context.ServerId, 0))
+        {
             return;
+        }
 
         try
         {
@@ -61,7 +67,9 @@ public sealed class Cod4xCvarProbe : ICod4xCvarProbe
             foreach (var cvar in ProbedCvars)
             {
                 if (ct.IsCancellationRequested)
+                {
                     return;
+                }
 
                 await ProbeOneAsync(rconApi, context, cvar, ct);
             }
