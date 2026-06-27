@@ -956,7 +956,7 @@ public class RepositoryServerConfigProviderTests
 
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        Assert.Equal(15, Assert.Single(result).BanFileCheckIntervalSeconds);
+        Assert.Equal(ServerContext.MinBanFileCheckIntervalSeconds, Assert.Single(result).BanFileCheckIntervalSeconds);
     }
 
     [Fact]
@@ -979,7 +979,7 @@ public class RepositoryServerConfigProviderTests
 
         var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
 
-        Assert.Equal(15, Assert.Single(result).BanFileCheckIntervalSeconds);
+        Assert.Equal(ServerContext.MinBanFileCheckIntervalSeconds, Assert.Single(result).BanFileCheckIntervalSeconds);
     }
 
     [Fact]

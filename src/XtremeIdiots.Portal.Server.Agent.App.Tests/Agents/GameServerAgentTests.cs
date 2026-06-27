@@ -82,7 +82,7 @@ public class GameServerAgentTests
 
     private GameServerAgent CreateAgent() =>
         new(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
 
     [Fact]
     public async Task RunAsync_PublishesServerConnectedOnStart()
@@ -393,7 +393,7 @@ public class GameServerAgentTests
             .ReturnsAsync((SavedOffset?)null);
 
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 
@@ -460,7 +460,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2300));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -487,7 +487,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2300));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -676,7 +676,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2600));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -707,7 +707,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -751,7 +751,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2500));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger);
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 

@@ -27,6 +27,7 @@ public class AgentOrchestratorTests
     private readonly Mock<ICod4xCvarProbe> _mockCvarProbe = new();
     private readonly Mock<IBanFileWatcher> _mockBanFileWatcher = new();
     private readonly Mock<IScreenshotWatcher> _mockScreenshotWatcher = new();
+    private readonly Mock<IRemoteOpsSessionCoordinator> _mockOpsSessionCoordinator = new();
     private readonly ILoggerFactory _loggerFactory = NullLoggerFactory.Instance;
     private readonly ILogger<AgentOrchestrator> _logger = NullLogger<AgentOrchestrator>.Instance;
 
@@ -41,7 +42,7 @@ public class AgentOrchestratorTests
     private AgentOrchestrator CreateOrchestrator() =>
         new(_mockConfigProvider.Object, _mockTailerFactory.Object, _mockParserFactory.Object,
             _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object,
-            _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _loggerFactory, _logger);
+            _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _mockOpsSessionCoordinator.Object, _loggerFactory, _logger);
 
     [Fact]
     public async Task RefreshAgents_WithNoServers_StartsNoAgents()

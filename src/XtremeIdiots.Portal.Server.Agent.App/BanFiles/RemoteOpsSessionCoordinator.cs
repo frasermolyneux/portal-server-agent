@@ -140,7 +140,7 @@ public sealed class RemoteOpsSessionCoordinator : IRemoteOpsSessionCoordinator, 
 
     private async Task ConnectAsync(ServerContext context, SessionState state, CancellationToken ct)
     {
-        await using var lease = await _connectLimiter.AcquireAsync(1, ct).ConfigureAwait(false);
+        using var lease = await _connectLimiter.AcquireAsync(1, ct).ConfigureAwait(false);
 
         await _policies.ConnectPipeline.ExecuteAsync(async token =>
         {

@@ -112,7 +112,15 @@ public sealed class GameServerAgent
 
     public async Task RunAsync(CancellationToken ct)
     {
-        await ApplyStartupJitterAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await ApplyStartupJitterAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogDebug("[{Title}] Startup jitter cancelled before run loop started", _context.Title);
+            return;
+        }
 
         _logger.LogInformation("[{GameType}:{Title}] Agent starting for server {ServerId}",
             _context.GameType, _context.Title, _context.ServerId);
