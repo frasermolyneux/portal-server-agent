@@ -49,16 +49,14 @@ public sealed class BlobBanFileSource : IBanFileSource
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<CentralBanFile?> GetAsync(string gameType, bool legacyLane = false, CancellationToken ct = default)
+    public async Task<CentralBanFile?> GetAsync(string gameType, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(gameType))
         {
             throw new ArgumentException("Game type is required", nameof(gameType));
         }
 
-        var blobKey = legacyLane && string.Equals(gameType, "CallOfDuty4x", StringComparison.OrdinalIgnoreCase)
-            ? $"{gameType}-legacy-bans.txt"
-            : $"{gameType}-bans.txt";
+        var blobKey = $"{gameType}-bans.txt";
         var blob = _container.GetBlobClient(blobKey);
 
         try

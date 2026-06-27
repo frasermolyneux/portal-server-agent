@@ -110,10 +110,6 @@ public class Cod4xCvarProbeTests
                 Times.Once,
                 $"Expected probe to read {cvar} exactly once");
         }
-
-        _mockRconApi.Verify(
-            r => r.GetDvar(_serverId, "sv_legacymode", It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     [Fact]
