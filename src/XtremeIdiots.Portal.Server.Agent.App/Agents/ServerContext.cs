@@ -39,11 +39,16 @@ public sealed record ServerContext
 {
     public const int DefaultBroadcastIntervalSeconds = 500;
     public const int DefaultBanFileCheckIntervalSeconds = 60;
+    public const int MinBanFileCheckIntervalSeconds = 30;
+    public const int MaxBanFileCheckIntervalSeconds = 300;
     public const string DefaultAgentNamePrefix = "^4[^1>XI< BOT^4]^7";
     public const string DefaultScreenshotFilePattern = "*.jpg";
     public const int DefaultScreenshotPollIntervalSeconds = 60;
     public const int MinScreenshotPollIntervalSeconds = 10;
     public const int MaxScreenshotPollIntervalSeconds = 300;
+    public static readonly TimeSpan DefaultOpsConnectTimeout = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan DefaultOpsSessionIdleTimeout = TimeSpan.FromMinutes(2);
+    public static readonly TimeSpan DefaultOpsSessionMaxLifetime = TimeSpan.FromMinutes(30);
 
     public required Guid ServerId { get; init; }
     public required string GameType { get; init; }

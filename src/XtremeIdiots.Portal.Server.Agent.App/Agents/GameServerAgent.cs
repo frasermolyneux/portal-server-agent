@@ -17,6 +17,8 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 /// </summary>
 public sealed class GameServerAgent
 {
+    internal static readonly TimeSpan StartupJitterMax = TimeSpan.FromSeconds(60);
+
     private readonly ServerContext _context;
     private readonly ILogTailer _tailer;
     private readonly ILogParser _parser;
@@ -29,6 +31,7 @@ public sealed class GameServerAgent
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly IScreenshotWatcher _screenshotWatcher;
     private readonly ILogger _logger;
+    private readonly Random _startupJitterRandom;
 
     private long _sequenceId;
     private DateTime _lastOffsetSave = DateTime.MinValue;
@@ -60,6 +63,37 @@ public sealed class GameServerAgent
         IBanFileWatcher banFileWatcher,
         IScreenshotWatcher screenshotWatcher,
         ILogger logger)
+        : this(
+            context,
+            tailer,
+            parser,
+            publisher,
+            offsetStore,
+            serverLock,
+            syncService,
+            broadcastService,
+            cvarProbe,
+            banFileWatcher,
+            screenshotWatcher,
+            logger,
+            new Random())
+    {
+    }
+
+    internal GameServerAgent(
+        ServerContext context,
+        ILogTailer tailer,
+        ILogParser parser,
+        IEventPublisher publisher,
+        IOffsetStore offsetStore,
+        IServerLock serverLock,
+        IServerSyncService syncService,
+        IRconBroadcastService broadcastService,
+        ICod4xCvarProbe cvarProbe,
+        IBanFileWatcher banFileWatcher,
+        IScreenshotWatcher screenshotWatcher,
+        ILogger logger,
+        Random startupJitterRandom)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _tailer = tailer ?? throw new ArgumentNullException(nameof(tailer));
@@ -73,10 +107,13 @@ public sealed class GameServerAgent
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _screenshotWatcher = screenshotWatcher ?? throw new ArgumentNullException(nameof(screenshotWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _startupJitterRandom = startupJitterRandom ?? throw new ArgumentNullException(nameof(startupJitterRandom));
     }
 
     public async Task RunAsync(CancellationToken ct)
     {
+        await ApplyStartupJitterAsync(ct).ConfigureAwait(false);
+
         _logger.LogInformation("[{GameType}:{Title}] Agent starting for server {ServerId}",
             _context.GameType, _context.Title, _context.ServerId);
 
@@ -316,6 +353,19 @@ public sealed class GameServerAgent
     }
 
     private long NextSequenceId() => Interlocked.Increment(ref _sequenceId);
+
+    private async Task ApplyStartupJitterAsync(CancellationToken ct)
+    {
+        var delayMs = _startupJitterRandom.NextInt64(0, (long)StartupJitterMax.TotalMilliseconds + 1);
+        if (delayMs <= 0)
+        {
+            return;
+        }
+
+        var delay = TimeSpan.FromMilliseconds(delayMs);
+        _logger.LogDebug("[{Title}] Applying startup jitter delay of {Delay}", _context.Title, delay);
+        await Task.Delay(delay, ct).ConfigureAwait(false);
+    }
 
     private async Task SaveOffsetAsync(CancellationToken ct)
     {

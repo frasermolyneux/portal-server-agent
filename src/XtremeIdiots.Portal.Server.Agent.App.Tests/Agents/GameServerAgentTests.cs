@@ -19,6 +19,16 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
 
 public class GameServerAgentTests
 {
+    private sealed class ZeroRandom : Random
+    {
+        public override long NextInt64(long minValue, long maxValue) => minValue;
+    }
+
+    private sealed class MaxRandom : Random
+    {
+        public override long NextInt64(long minValue, long maxValue) => maxValue - 1;
+    }
+
     private readonly ServerContext _testContext = new()
     {
         ServerId = Guid.NewGuid(),
@@ -747,6 +757,76 @@ public class GameServerAgentTests
 
         _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "^3[RetryAgent]^7 message-1", It.IsAny<CancellationToken>()), Times.AtLeast(2));
         _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, "^3[RetryAgent]^7 message-2", It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_StartupJitterZeroRandom_StartsPromptly()
+    {
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var agent = new GameServerAgent(
+            _testContext,
+            _mockTailer.Object,
+            _mockParser.Object,
+            _mockPublisher.Object,
+            _mockOffsetStore.Object,
+            _mockServerLock.Object,
+            _mockSyncService.Object,
+            _mockBroadcastService.Object,
+            _mockCvarProbe.Object,
+            _mockBanFileWatcher.Object,
+            _mockScreenshotWatcher.Object,
+            _logger,
+            new ZeroRandom());
+
+        await agent.RunAsync(cts.Token);
+
+        _mockPublisher.Verify(
+            p => p.PublishServerConnectedAsync(
+                _testContext.ServerId,
+                _testContext.GameType,
+                It.IsAny<long>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_StartupJitterMaxRandom_DelaysStartup()
+    {
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        var agent = new GameServerAgent(
+            _testContext,
+            _mockTailer.Object,
+            _mockParser.Object,
+            _mockPublisher.Object,
+            _mockOffsetStore.Object,
+            _mockServerLock.Object,
+            _mockSyncService.Object,
+            _mockBroadcastService.Object,
+            _mockCvarProbe.Object,
+            _mockBanFileWatcher.Object,
+            _mockScreenshotWatcher.Object,
+            _logger,
+            new MaxRandom());
+
+        await agent.RunAsync(cts.Token);
+
+        _mockTailer.Verify(
+            t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }
 

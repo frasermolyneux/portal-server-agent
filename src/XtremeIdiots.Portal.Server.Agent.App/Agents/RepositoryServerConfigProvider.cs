@@ -125,7 +125,10 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
                 var banFileCheckIntervalSeconds =
                     banFileSettings?.CheckIntervalSeconds is > 0
-                        ? banFileSettings.CheckIntervalSeconds.Value
+                        ? Math.Clamp(
+                            banFileSettings.CheckIntervalSeconds.Value,
+                            ServerContext.MinBanFileCheckIntervalSeconds,
+                            ServerContext.MaxBanFileCheckIntervalSeconds)
                         : ServerContext.DefaultBanFileCheckIntervalSeconds;
 
                 var banFileRootPath = string.IsNullOrWhiteSpace(dto.BanFileRootPath) ? "/" : dto.BanFileRootPath;

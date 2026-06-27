@@ -41,7 +41,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
     private readonly IRepositoryApiClient _repositoryClient;
     private readonly IBanFileSource _banFileSource;
     private readonly IBanFilePathResolver _pathResolver;
-    private readonly IRemoteFileClientFactory _remoteFileClientFactory;
+    private readonly IRemoteOpsSessionCoordinator _opsSessionCoordinator;
     private readonly IAuditLogger _auditLogger;
     private readonly ILogger<BanFileWatcher> _logger;
     private readonly Random _jitterRng;
@@ -82,14 +82,14 @@ public sealed class BanFileWatcher : IBanFileWatcher
         IRepositoryApiClient repositoryClient,
         IBanFileSource banFileSource,
         IBanFilePathResolver pathResolver,
-        IRemoteFileClientFactory remoteFileClientFactory,
+        IRemoteOpsSessionCoordinator opsSessionCoordinator,
         IAuditLogger auditLogger,
         ILogger<BanFileWatcher> logger)
     {
         _repositoryClient = repositoryClient ?? throw new ArgumentNullException(nameof(repositoryClient));
         _banFileSource = banFileSource ?? throw new ArgumentNullException(nameof(banFileSource));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
-        _remoteFileClientFactory = remoteFileClientFactory ?? throw new ArgumentNullException(nameof(remoteFileClientFactory));
+        _opsSessionCoordinator = opsSessionCoordinator ?? throw new ArgumentNullException(nameof(opsSessionCoordinator));
         _auditLogger = auditLogger ?? throw new ArgumentNullException(nameof(auditLogger));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _jitterRng = new Random();
@@ -100,11 +100,11 @@ public sealed class BanFileWatcher : IBanFileWatcher
         IRepositoryApiClient repositoryClient,
         IBanFileSource banFileSource,
         IBanFilePathResolver pathResolver,
-        IRemoteFileClientFactory remoteFileClientFactory,
+        IRemoteOpsSessionCoordinator opsSessionCoordinator,
         IAuditLogger auditLogger,
         ILogger<BanFileWatcher> logger,
         Random jitterRng)
-        : this(repositoryClient, banFileSource, pathResolver, remoteFileClientFactory, auditLogger, logger)
+        : this(repositoryClient, banFileSource, pathResolver, opsSessionCoordinator, auditLogger, logger)
     {
         _jitterRng = jitterRng ?? throw new ArgumentNullException(nameof(jitterRng));
     }
@@ -135,91 +135,120 @@ public sealed class BanFileWatcher : IBanFileWatcher
 
         try
         {
-            await using var remoteClient = _remoteFileClientFactory.Create(context);
-            await remoteClient.ConnectAsync(ct).ConfigureAwait(false);
+            var opsResult = await _opsSessionCoordinator.ExecuteAsync(
+                context,
+                async (remoteClient, token) =>
+                {
+                    long? localFinalSize = null;
+                    long? localPushedSize = null;
+                    string? localPushedEtag = null;
+                    DateTime? localPushedAt = null;
+                    string? localCentralEtag = null;
+                    DateTime? localCentralEtagSeenAt = null;
+                    string? localCheckErrorMessage = null;
+                    var localCheckResult = "Success";
+                    IReadOnlyList<DetectedBanEntry> localDetectedBans = [];
 
-            try
-            {
-                long currentSize;
-                try
-                {
-                    currentSize = await remoteClient.GetFileSizeAsync(resolvedPath.Path, ct).ConfigureAwait(false);
-                }
-                catch (RemoteFileNotFoundException ex)
-                {
-                    // Path resolution may have raced with a mod change, or the server has
-                    // never had a ban.txt at the resolved path. Surface as a clean
-                    // FileNotFound rather than crashing the whole cycle.
-                    checkResult = "FileNotFound";
-                    checkErrorMessage = ex.Message;
-                    currentSize = -1;
-                }
-
-                if (currentSize >= 0)
-                {
-                    var truncated = currentSize < lastKnownSize;
-                    if (truncated)
+                    long currentSize;
+                    try
                     {
-                        _logger.LogInformation(
-                            "[{Title}] Ban file {Path} truncated ({OldSize} -> {NewSize}); re-processing from start",
-                            context.Title, resolvedPath.Path, lastKnownSize, currentSize);
-                        lastKnownSize = 0;
-                        // Truncation invalidates count cache.
-                        _countCache.TryRemove(laneKey, out _);
+                        currentSize = await remoteClient.GetFileSizeAsync(resolvedPath.Path, token).ConfigureAwait(false);
+                    }
+                    catch (RemoteFileNotFoundException ex)
+                    {
+                        // Path resolution may have raced with a mod change, or the server has
+                        // never had a ban.txt at the resolved path. Surface as a clean
+                        // FileNotFound rather than crashing the whole cycle.
+                        localCheckResult = "FileNotFound";
+                        localCheckErrorMessage = ex.Message;
+                        currentSize = -1;
                     }
 
-                    if (currentSize != lastKnownSize)
+                    if (currentSize >= 0)
                     {
-                        // Append-only download: only the new tail.
-                        string newContent;
-                        await using (var stream = await remoteClient.OpenReadAsync(resolvedPath.Path, lastKnownSize, ct).ConfigureAwait(false))
-                        using (var reader = new StreamReader(stream))
+                        var truncated = currentSize < lastKnownSize;
+                        if (truncated)
                         {
-                            newContent = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+                            _logger.LogInformation(
+                                "[{Title}] Ban file {Path} truncated ({OldSize} -> {NewSize}); re-processing from start",
+                                context.Title, resolvedPath.Path, lastKnownSize, currentSize);
+                            lastKnownSize = 0;
+                            // Truncation invalidates count cache.
+                            _countCache.TryRemove(laneKey, out _);
                         }
 
-                        // CoD4x uses the cod4x simplebanlist v2 wire format
-                        // (\playerid\…\asteamid\…\rsn\…) which the legacy "GUID NAME"
-                        // ParseBanLines can't decode. Sync-pushed lines already carry the
-                        // [BANSYNC] tag in the reason field so SkipTags would drop them
-                        // anyway — gating here also protects against manual edits surfacing
-                        // garbage GUIDs to the manual-ingest path. Admins should use RCON
-                        // for ad-hoc CoD4x bans.
-                        detectedBans = string.Equals(context.GameType, "CallOfDuty4x", StringComparison.OrdinalIgnoreCase)
-                            ? []
-                            : ParseBanLines(newContent);
-
-                        _logger.LogInformation(
-                            "[{Title}] Ban file {Path}: {NewSize} bytes (was {OldSize}), found {BanCount} new untagged ban(s)",
-                            context.Title, resolvedPath.Path, currentSize, lastKnownSize, detectedBans.Count);
-                    }
-
-                    finalSize = currentSize;
-
-                    // Outbound push only when no manual additions detected this cycle.
-                    // Mirrors the legacy "remote == lastKnown" guard that prevents
-                    // overwriting a freshly-detected manual ban before it's been ingested.
-                    if (detectedBans.Count == 0)
-                    {
-                        var pushOutcome = await TryPushCentralBanFileAsync(
-                            remoteClient, context, existingMonitor, resolvedPath, currentSize, laneKey, ct).ConfigureAwait(false);
-
-                        centralEtag = pushOutcome.CentralEtag;
-                        centralEtagSeenAt = pushOutcome.CentralEtagSeenAt;
-                        if (pushOutcome.Pushed)
+                        if (currentSize != lastKnownSize)
                         {
-                            finalSize = pushOutcome.NewSize;
-                            pushedSize = pushOutcome.NewSize;
-                            pushedEtag = pushOutcome.CentralEtag;
-                            pushedAt = DateTime.UtcNow;
+                            // Append-only download: only the new tail.
+                            string newContent;
+                            await using (var stream = await remoteClient.OpenReadAsync(resolvedPath.Path, lastKnownSize, token).ConfigureAwait(false))
+                            using (var reader = new StreamReader(stream))
+                            {
+                                newContent = await reader.ReadToEndAsync(token).ConfigureAwait(false);
+                            }
+
+                            // CoD4x uses the cod4x simplebanlist v2 wire format
+                            // (\playerid\…\asteamid\…\rsn\…) which the legacy "GUID NAME"
+                            // ParseBanLines can't decode. Sync-pushed lines already carry the
+                            // [BANSYNC] tag in the reason field so SkipTags would drop them
+                            // anyway — gating here also protects against manual edits surfacing
+                            // garbage GUIDs to the manual-ingest path. Admins should use RCON
+                            // for ad-hoc CoD4x bans.
+                            localDetectedBans = string.Equals(context.GameType, "CallOfDuty4x", StringComparison.OrdinalIgnoreCase)
+                                ? []
+                                : ParseBanLines(newContent);
+
+                            _logger.LogInformation(
+                                "[{Title}] Ban file {Path}: {NewSize} bytes (was {OldSize}), found {BanCount} new untagged ban(s)",
+                                context.Title, resolvedPath.Path, currentSize, lastKnownSize, localDetectedBans.Count);
+                        }
+
+                        localFinalSize = currentSize;
+
+                        // Outbound push only when no manual additions detected this cycle.
+                        // Mirrors the legacy "remote == lastKnown" guard that prevents
+                        // overwriting a freshly-detected manual ban before it's been ingested.
+                        if (localDetectedBans.Count == 0)
+                        {
+                            var pushOutcome = await TryPushCentralBanFileAsync(
+                                remoteClient, context, existingMonitor, resolvedPath, currentSize, laneKey, token).ConfigureAwait(false);
+
+                            localCentralEtag = pushOutcome.CentralEtag;
+                            localCentralEtagSeenAt = pushOutcome.CentralEtagSeenAt;
+                            if (pushOutcome.Pushed)
+                            {
+                                localFinalSize = pushOutcome.NewSize;
+                                localPushedSize = pushOutcome.NewSize;
+                                localPushedEtag = pushOutcome.CentralEtag;
+                                localPushedAt = DateTime.UtcNow;
+                            }
                         }
                     }
-                }
-            }
-            finally
-            {
-                await remoteClient.DisconnectAsync(ct).ConfigureAwait(false);
-            }
+
+                    return new
+                    {
+                        FinalSize = localFinalSize,
+                        PushedSize = localPushedSize,
+                        PushedEtag = localPushedEtag,
+                        PushedAt = localPushedAt,
+                        CentralEtag = localCentralEtag,
+                        CentralEtagSeenAt = localCentralEtagSeenAt,
+                        CheckErrorMessage = localCheckErrorMessage,
+                        CheckResult = localCheckResult,
+                        DetectedBans = localDetectedBans
+                    };
+                },
+                ct).ConfigureAwait(false);
+
+            finalSize = opsResult.FinalSize;
+            pushedSize = opsResult.PushedSize;
+            pushedEtag = opsResult.PushedEtag;
+            pushedAt = opsResult.PushedAt;
+            centralEtag = opsResult.CentralEtag;
+            centralEtagSeenAt = opsResult.CentralEtagSeenAt;
+            checkErrorMessage = opsResult.CheckErrorMessage;
+            checkResult = opsResult.CheckResult;
+            detectedBans = opsResult.DetectedBans;
         }
         catch (RemoteFileNotFoundException ex)
         {
@@ -515,25 +544,22 @@ public sealed class BanFileWatcher : IBanFileWatcher
 
         try
         {
-            await using var remoteClient = _remoteFileClientFactory.Create(context);
-            await remoteClient.ConnectAsync(ct).ConfigureAwait(false);
-            try
-            {
-                string content;
-                await using (var stream = await remoteClient.OpenReadAsync(remoteFilePath, 0, ct).ConfigureAwait(false))
-                using (var reader = new StreamReader(stream))
+            return await _opsSessionCoordinator.ExecuteAsync(
+                context,
+                async (remoteClient, token) =>
                 {
-                    content = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
-                }
+                    string content;
+                    await using (var stream = await remoteClient.OpenReadAsync(remoteFilePath, 0, token).ConfigureAwait(false))
+                    using (var reader = new StreamReader(stream))
+                    {
+                        content = await reader.ReadToEndAsync(token).ConfigureAwait(false);
+                    }
 
-                var counts = CountTags(content);
-                _countCache[laneKey] = new CachedCounts(remoteSize.Value, counts);
-                return counts;
-            }
-            finally
-            {
-                await remoteClient.DisconnectAsync(ct).ConfigureAwait(false);
-            }
+                    var counts = CountTags(content);
+                    _countCache[laneKey] = new CachedCounts(remoteSize.Value, counts);
+                    return counts;
+                },
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

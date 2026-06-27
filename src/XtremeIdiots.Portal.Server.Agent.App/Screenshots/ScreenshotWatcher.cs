@@ -15,17 +15,17 @@ public sealed class ScreenshotWatcher : IScreenshotWatcher
     private const string SourceName = "agent-monitor";
     private const int MaxProcessedFingerprintsPerServer = 10_000;
 
-    private readonly IRemoteFileClientFactory _remoteFileClientFactory;
+    private readonly IRemoteOpsSessionCoordinator _opsSessionCoordinator;
     private readonly IRepositoryScreenshotsClient _repositoryScreenshotsClient;
     private readonly ILogger<ScreenshotWatcher> _logger;
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _processedFingerprints = new();
 
     public ScreenshotWatcher(
-        IRemoteFileClientFactory remoteFileClientFactory,
+        IRemoteOpsSessionCoordinator opsSessionCoordinator,
         IRepositoryScreenshotsClient repositoryScreenshotsClient,
         ILogger<ScreenshotWatcher> logger)
     {
-        _remoteFileClientFactory = remoteFileClientFactory ?? throw new ArgumentNullException(nameof(remoteFileClientFactory));
+        _opsSessionCoordinator = opsSessionCoordinator ?? throw new ArgumentNullException(nameof(opsSessionCoordinator));
         _repositoryScreenshotsClient = repositoryScreenshotsClient ?? throw new ArgumentNullException(nameof(repositoryScreenshotsClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -55,101 +55,104 @@ public sealed class ScreenshotWatcher : IScreenshotWatcher
 
         try
         {
-            await using var remoteClient = _remoteFileClientFactory.Create(context);
-            await remoteClient.ConnectAsync(ct).ConfigureAwait(false);
-
-            IReadOnlyList<RemoteFileEntry> remoteFiles;
-            try
-            {
-                remoteFiles = await remoteClient.ListFilesAsync(context.Screenshots.DirectoryPath, ct).ConfigureAwait(false);
-            }
-            catch (RemoteFileNotFoundException)
-            {
-                _logger.LogWarning("[{Title}] Screenshot directory {DirectoryPath} not found", context.Title, context.Screenshots.DirectoryPath);
-                return;
-            }
-
-            var matchingFiles = remoteFiles
-                .Where(file => FileSystemName.MatchesSimpleExpression(context.Screenshots.FilePattern, file.Name, ignoreCase: true))
-                .OrderBy(file => file.LastWriteUtc)
-                .ToList();
-
-            foreach (var file in matchingFiles)
-            {
-                scanned++;
-
-                EnsureFingerprintCacheWithinLimit(context, processed);
-
-                var fingerprint = ComputeFingerprint(context.ServerId, file.Name, file.Size, file.LastWriteUtc);
-                if (processed.ContainsKey(fingerprint))
+            await _opsSessionCoordinator.ExecuteAsync(
+                context,
+                async (remoteClient, token) =>
                 {
-                    duplicatesSkipped++;
-                    continue;
-                }
-
-                try
-                {
-                    var playerIdentifier = ResolvePlayerIdentifier(file.Name);
-                    var temporaryFilePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-
+                    IReadOnlyList<RemoteFileEntry> remoteFiles;
                     try
                     {
-                        await using (var content = await remoteClient.OpenReadAsync(file.Path, 0, ct).ConfigureAwait(false))
-                        await using (var fileStream = File.Create(temporaryFilePath))
+                        remoteFiles = await remoteClient.ListFilesAsync(context.Screenshots.DirectoryPath, token).ConfigureAwait(false);
+                    }
+                    catch (RemoteFileNotFoundException)
+                    {
+                        _logger.LogWarning("[{Title}] Screenshot directory {DirectoryPath} not found", context.Title, context.Screenshots.DirectoryPath);
+                        return;
+                    }
+
+                    var matchingFiles = remoteFiles
+                        .Where(file => FileSystemName.MatchesSimpleExpression(context.Screenshots.FilePattern, file.Name, ignoreCase: true))
+                        .OrderBy(file => file.LastWriteUtc)
+                        .ToList();
+
+                    foreach (var file in matchingFiles)
+                    {
+                        scanned++;
+
+                        EnsureFingerprintCacheWithinLimit(context, processed);
+
+                        var fingerprint = ComputeFingerprint(context.ServerId, file.Name, file.Size, file.LastWriteUtc);
+                        if (processed.ContainsKey(fingerprint))
                         {
-                            await content.CopyToAsync(fileStream, ct).ConfigureAwait(false);
-                        }
-
-                        var uploadResult = await _repositoryScreenshotsClient.UploadScreenshotAsync(
-                            new UploadScreenshotDto
-                            {
-                                GameServerId = context.ServerId,
-                                GameType = context.GameType,
-                                PlayerIdentifier = playerIdentifier,
-                                PlayerName = null,
-                                CapturedUtc = file.LastWriteUtc,
-                                Source = SourceName,
-                                Fingerprint = fingerprint,
-                                SourceFileName = file.Name,
-                                SourceSizeBytes = file.Size,
-                                SourceLastWriteUtc = file.LastWriteUtc
-                            },
-                            temporaryFilePath,
-                            ct).ConfigureAwait(false);
-
-                        if (uploadResult != RepositoryScreenshotUploadResult.Success)
-                        {
-                            failures++;
-
-                            if (uploadResult == RepositoryScreenshotUploadResult.PermanentFailure)
-                            {
-                                processed.TryAdd(fingerprint, 0);
-                            }
-
-                            _logger.LogWarning(
-                                "[{Title}] Screenshot upload failed for remote file {RemotePath} ({GameServerId}) with outcome {UploadOutcome}",
-                                context.Title,
-                                file.Path,
-                                context.ServerId,
-                                uploadResult);
+                            duplicatesSkipped++;
                             continue;
                         }
 
-                        uploaded++;
-                        metadataWritten++;
-                        processed.TryAdd(fingerprint, 0);
+                        try
+                        {
+                            var playerIdentifier = ResolvePlayerIdentifier(file.Name);
+                            var temporaryFilePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+                            try
+                            {
+                                await using (var content = await remoteClient.OpenReadAsync(file.Path, 0, token).ConfigureAwait(false))
+                                await using (var fileStream = File.Create(temporaryFilePath))
+                                {
+                                    await content.CopyToAsync(fileStream, token).ConfigureAwait(false);
+                                }
+
+                                var uploadResult = await _repositoryScreenshotsClient.UploadScreenshotAsync(
+                                    new UploadScreenshotDto
+                                    {
+                                        GameServerId = context.ServerId,
+                                        GameType = context.GameType,
+                                        PlayerIdentifier = playerIdentifier,
+                                        PlayerName = null,
+                                        CapturedUtc = file.LastWriteUtc,
+                                        Source = SourceName,
+                                        Fingerprint = fingerprint,
+                                        SourceFileName = file.Name,
+                                        SourceSizeBytes = file.Size,
+                                        SourceLastWriteUtc = file.LastWriteUtc
+                                    },
+                                    temporaryFilePath,
+                                    token).ConfigureAwait(false);
+
+                                if (uploadResult != RepositoryScreenshotUploadResult.Success)
+                                {
+                                    failures++;
+
+                                    if (uploadResult == RepositoryScreenshotUploadResult.PermanentFailure)
+                                    {
+                                        processed.TryAdd(fingerprint, 0);
+                                    }
+
+                                    _logger.LogWarning(
+                                        "[{Title}] Screenshot upload failed for remote file {RemotePath} ({GameServerId}) with outcome {UploadOutcome}",
+                                        context.Title,
+                                        file.Path,
+                                        context.ServerId,
+                                        uploadResult);
+                                    continue;
+                                }
+
+                                uploaded++;
+                                metadataWritten++;
+                                processed.TryAdd(fingerprint, 0);
+                            }
+                            finally
+                            {
+                                TryDeleteTemporaryFile(context, temporaryFilePath);
+                            }
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            failures++;
+                            _logger.LogWarning(ex, "[{Title}] Failed processing screenshot file {RemotePath}", context.Title, file.Path);
+                        }
                     }
-                    finally
-                    {
-                        TryDeleteTemporaryFile(context, temporaryFilePath);
-                    }
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    failures++;
-                    _logger.LogWarning(ex, "[{Title}] Failed processing screenshot file {RemotePath}", context.Title, file.Path);
-                }
-            }
+                },
+                ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

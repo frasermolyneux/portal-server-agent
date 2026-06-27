@@ -26,6 +26,7 @@ public class AgentOrchestrator : BackgroundService
     private readonly ICod4xCvarProbe _cvarProbe;
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly IScreenshotWatcher _screenshotWatcher;
+    private readonly IRemoteOpsSessionCoordinator _opsSessionCoordinator;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AgentOrchestrator> _logger;
 
@@ -47,6 +48,7 @@ public class AgentOrchestrator : BackgroundService
         ICod4xCvarProbe cvarProbe,
         IBanFileWatcher banFileWatcher,
         IScreenshotWatcher screenshotWatcher,
+        IRemoteOpsSessionCoordinator opsSessionCoordinator,
         ILoggerFactory loggerFactory,
         ILogger<AgentOrchestrator> logger)
     {
@@ -61,6 +63,7 @@ public class AgentOrchestrator : BackgroundService
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _screenshotWatcher = screenshotWatcher ?? throw new ArgumentNullException(nameof(screenshotWatcher));
+        _opsSessionCoordinator = opsSessionCoordinator ?? throw new ArgumentNullException(nameof(opsSessionCoordinator));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -167,6 +170,7 @@ public class AgentOrchestrator : BackgroundService
                 entry.Cts.Cancel();
                 if (_agents.TryRemove(serverId, out _))
                 {
+                    await _opsSessionCoordinator.CloseServerSessionAsync(serverId, ct).ConfigureAwait(false);
                     entry.Cts.Dispose();
                 }
             }
@@ -185,6 +189,7 @@ public class AgentOrchestrator : BackgroundService
                     existing.Cts.Cancel();
                     if (_agents.TryRemove(server.ServerId, out _))
                     {
+                        await _opsSessionCoordinator.CloseServerSessionAsync(server.ServerId, ct).ConfigureAwait(false);
                         existing.Cts.Dispose();
                     }
                 }
@@ -200,6 +205,7 @@ public class AgentOrchestrator : BackgroundService
                     serverId, entry.Task.Status);
                 if (_agents.TryRemove(serverId, out _))
                 {
+                    await _opsSessionCoordinator.CloseServerSessionAsync(serverId, ct).ConfigureAwait(false);
                     entry.Cts.Dispose();
                 }
             }

@@ -45,6 +45,7 @@ public class AgentHealthCheckTests
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             new Mock<IScreenshotWatcher>().Object,
+            new Mock<IRemoteOpsSessionCoordinator>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -87,6 +88,7 @@ public class AgentHealthCheckTests
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             new Mock<IScreenshotWatcher>().Object,
+            new Mock<IRemoteOpsSessionCoordinator>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
@@ -187,6 +189,7 @@ public class AgentHealthCheckTests
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<IBanFileWatcher>().Object,
             new Mock<IScreenshotWatcher>().Object,
+            new Mock<IRemoteOpsSessionCoordinator>().Object,
             NullLoggerFactory.Instance,
             NullLogger<AgentOrchestrator>.Instance);
 
