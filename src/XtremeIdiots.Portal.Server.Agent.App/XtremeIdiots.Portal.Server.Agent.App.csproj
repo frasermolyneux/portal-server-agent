@@ -26,14 +26,14 @@
     <PackageReference Include="Microsoft.Azure.AppConfiguration.AspNetCore" Version="8.5.0" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
-    <PackageReference Include="MX.Observability.ApplicationInsights.AspNetCore" Version="1.1.16" />
+    <PackageReference Include="MX.Observability.ApplicationInsights.AspNetCore" Version="1.1.24" />
     <PackageReference Include="Polly.Core" Version="8.7.0" />
     <PackageReference Include="SSH.NET" Version="2025.1.0" />
-    <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1" Version="2.1.209" />
-    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.V1" Version="3.0.6" />
-    <PackageReference Include="XtremeIdiots.Portal.Repository.Abstractions.V1" Version="3.0.6" />
-    <PackageReference Include="XtremeIdiots.Portal.Settings.Contracts.V1" Version="2.1.284" />
-    <PackageReference Include="XtremeIdiots.Portal.Server.Events.Abstractions.V1" Version="1.1.108" />
+    <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1" Version="2.1.222" />
+    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.V1" Version="3.0.10" />
+    <PackageReference Include="XtremeIdiots.Portal.Repository.Abstractions.V1" Version="3.0.10" />
+    <PackageReference Include="XtremeIdiots.Portal.Settings.Contracts.V1" Version="3.0.10" />
+    <PackageReference Include="XtremeIdiots.Portal.Server.Events.Abstractions.V1" Version="1.1.118" />
   </ItemGroup>
 
   <ItemGroup>
