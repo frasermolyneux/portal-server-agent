@@ -6,8 +6,8 @@ namespace XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 /// CoD2: <c>{root}/ban.txt</c> (ban file lives at the server root, never under <c>mods/</c>).
 /// CoD4 / CoD5: <c>{root}/mods/{liveMod}/ban.txt</c> when a mod is running, otherwise
 /// <c>{root}/main/ban.txt</c>. All comparisons are case-insensitive.
-/// CoD4x: <c>{root}/mods/{liveMod}/banlist_v2.dat</c> (cod4x simplebanlist v2 format),
-/// falling back to <c>{root}/main/banlist_v2.dat</c> when no mod is reported.
+/// CoD4x: <c>{root}/banlist_v2.dat</c> (cod4x simplebanlist v2 format) at the
+/// configured ban-file root path (never under <c>mods/</c>).
 ///
 /// Unknown game types fall back to <c>{root}/ban.txt</c> (the safest assumption).
 /// Add new rules here as new game types are onboarded — keep the implementation
@@ -31,9 +31,13 @@ public sealed class BanFilePathResolver : IBanFilePathResolver
             // CoD4 / CoD5: under mods/<mod>/ when a mod is active, else main/.
             "CallOfDuty4" or "CallOfDuty5" => ResolveCodModPath(normalisedRoot, liveMod, "ban.txt"),
 
-            // CoD4x: same mod-folder layout as CoD4/5 but emits the cod4x simplebanlist
-            // v2 format (banlist_v2.dat) instead of the legacy ban.txt.
-            "CallOfDuty4x" => ResolveCodModPath(normalisedRoot, liveMod, "banlist_v2.dat"),
+            // CoD4x: banlist_v2.dat is stored directly at the configured ban-file
+            // root path, not under mods/<mod>/.
+            "CallOfDuty4x" => new ResolvedBanFilePath
+            {
+                Path = $"{normalisedRoot}banlist_v2.dat",
+                ResolvedForMod = null
+            },
 
             // Default: server root. Keeps newly-onboarded game types working until
             // a specific rule is added.

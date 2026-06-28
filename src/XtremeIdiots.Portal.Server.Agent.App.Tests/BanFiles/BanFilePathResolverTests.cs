@@ -93,41 +93,41 @@ public class BanFilePathResolverTests
     }
 
     [Fact]
-    public void Resolve_Cod4x_WithMod_PutsBanlistV2UnderModsFolder()
+    public void Resolve_Cod4x_WithMod_UsesRootBanlistV2Path()
     {
-        // CoD4x mirrors the CoD4/5 mod-folder layout but emits the cod4x simplebanlist
-        // v2 format (banlist_v2.dat) instead of the legacy ban.txt.
+        // CoD4x banlist_v2.dat is configured relative to the server's ban-file root
+        // path, not under mods/<mod>/.
         var result = _sut.Resolve("CallOfDuty4x", "/cod4x/", liveMod: "xi_promod");
 
-        Assert.Equal("/cod4x/mods/xi_promod/banlist_v2.dat", result.Path);
-        Assert.Equal("xi_promod", result.ResolvedForMod);
+        Assert.Equal("/cod4x/banlist_v2.dat", result.Path);
+        Assert.Null(result.ResolvedForMod);
     }
 
     [Fact]
-    public void Resolve_Cod4x_WithoutMod_FallsBackToMainBanlistV2()
+    public void Resolve_Cod4x_WithoutMod_UsesRootBanlistV2Path()
     {
         var result = _sut.Resolve("CallOfDuty4x", "/", liveMod: null);
 
-        Assert.Equal("/main/banlist_v2.dat", result.Path);
-        Assert.Equal("main", result.ResolvedForMod);
+        Assert.Equal("/banlist_v2.dat", result.Path);
+        Assert.Null(result.ResolvedForMod);
     }
 
     [Fact]
-    public void Resolve_Cod4x_StripsLeadingModsPrefix()
+    public void Resolve_Cod4x_IgnoresLeadingModsPrefixWhenResolvingPath()
     {
         var result = _sut.Resolve("CallOfDuty4x", "/", liveMod: "mods/xi_promod");
 
-        Assert.Equal("/mods/xi_promod/banlist_v2.dat", result.Path);
-        Assert.Equal("xi_promod", result.ResolvedForMod);
+        Assert.Equal("/banlist_v2.dat", result.Path);
+        Assert.Null(result.ResolvedForMod);
     }
 
     [Fact]
-    public void Resolve_PreservesServerReportedModsTokenCase()
+    public void Resolve_Cod4x_DoesNotDependOnServerReportedModsTokenCase()
     {
         var result = _sut.Resolve("CallOfDuty4x", "/home/cod4xserver/.callofduty4", liveMod: "Mods/xi_mw2_old");
 
-        Assert.Equal("/home/cod4xserver/.callofduty4/Mods/xi_mw2_old/banlist_v2.dat", result.Path);
-        Assert.Equal("xi_mw2_old", result.ResolvedForMod);
+        Assert.Equal("/home/cod4xserver/.callofduty4/banlist_v2.dat", result.Path);
+        Assert.Null(result.ResolvedForMod);
     }
 
     [Fact]
@@ -144,16 +144,16 @@ public class BanFilePathResolverTests
     {
         var result = _sut.Resolve("CallOfDuty4x", "/home/cod4xserver/.callofduty4", liveMod: "mods/");
 
-        Assert.Equal("/home/cod4xserver/.callofduty4/main/banlist_v2.dat", result.Path);
-        Assert.Equal("main", result.ResolvedForMod);
+        Assert.Equal("/home/cod4xserver/.callofduty4/banlist_v2.dat", result.Path);
+        Assert.Null(result.ResolvedForMod);
     }
 
     [Fact]
-    public void Resolve_LeadingSlashBeforeModsToken_PreservesServerReportedTokenCase()
+    public void Resolve_Cod4x_LeadingSlashBeforeModsToken_DoesNotAffectPath()
     {
         var result = _sut.Resolve("CallOfDuty4x", "/home/cod4xserver/.callofduty4", liveMod: "/Mods/xi_mw2_old");
 
-        Assert.Equal("/home/cod4xserver/.callofduty4/Mods/xi_mw2_old/banlist_v2.dat", result.Path);
-        Assert.Equal("xi_mw2_old", result.ResolvedForMod);
+        Assert.Equal("/home/cod4xserver/.callofduty4/banlist_v2.dat", result.Path);
+        Assert.Null(result.ResolvedForMod);
     }
 }
