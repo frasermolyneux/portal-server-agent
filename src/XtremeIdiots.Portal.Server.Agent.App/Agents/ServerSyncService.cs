@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
+using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
@@ -31,9 +32,20 @@ public sealed class ServerSyncService : IServerSyncService
         try
         {
             using var scope = _scopeFactory.CreateScope();
-            var rconApi = scope.ServiceProvider.GetRequiredService<IRconApi>();
+            var serversApiClient = scope.ServiceProvider.GetRequiredService<IServersApiClient>();
 
-            var result = await rconApi.GetServerStatus(serverId);
+            if (!string.IsNullOrWhiteSpace(gameType) && !string.Equals(gameType, Cod4xCvarProbe.Cod4xGameType, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogDebug(
+                    "Skipping CoD4x RCON sync for server {ServerId} because game type is {GameType}",
+                    serverId,
+                    gameType);
+
+                await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
+                return ipResolvedEvents;
+            }
+
+            var result = await serversApiClient.CoD4xRcon.V1.Status(serverId, ct).ConfigureAwait(false);
 
             if (!result.IsSuccess || result.Result?.Data?.Players is null)
             {
@@ -54,20 +66,20 @@ public sealed class ServerSyncService : IServerSyncService
                 if (existingPlayers.TryGetValue(slotId, out var existing))
                 {
                     // Update mutable RCON fields on existing player
-                    existing.Ping = rconPlayer.Ping;
-                    existing.Rate = rconPlayer.Rate;
+                    existing.Ping = rconPlayer.Ping is int ping ? ping : 0;
+                    existing.Rate = rconPlayer.Rate is int rate ? rate : 0;
 
                     // Emit event when RCON provides an IP that differs from what we had
                     // (includes null→value first discovery and value→value IP changes)
-                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress) &&
-                        existing.IpAddress != rconPlayer.IpAddress)
+                    if (!string.IsNullOrWhiteSpace(rconPlayer.Address) &&
+                        existing.IpAddress != rconPlayer.Address)
                     {
-                        existing.IpAddress = rconPlayer.IpAddress;
+                        existing.IpAddress = rconPlayer.Address;
                         ipResolvedEvents.Add(new PlayerIpResolvedEvent
                         {
                             Timestamp = now,
                             PlayerGuid = existing.Guid,
-                            IpAddress = rconPlayer.IpAddress
+                            IpAddress = rconPlayer.Address
                         });
                     }
 
@@ -77,25 +89,25 @@ public sealed class ServerSyncService : IServerSyncService
                 {
                     parser.SetPlayer(slotId, new PlayerInfo
                     {
-                        Guid = rconPlayer.Guid ?? string.Empty,
+                        Guid = rconPlayer.PlayerIdentifier ?? string.Empty,
                         Name = rconPlayer.Name ?? string.Empty,
                         SlotId = slotId,
-                        IpAddress = rconPlayer.IpAddress,
+                        IpAddress = rconPlayer.Address,
                         ConnectedAt = now,
-                        Ping = rconPlayer.Ping,
-                        Rate = rconPlayer.Rate
+                        Ping = rconPlayer.Ping is int ping ? ping : 0,
+                        Rate = rconPlayer.Rate is int rate ? rate : 0
                     });
                     added++;
 
                     // New player discovered via RCON with IP — emit resolved event
-                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress) &&
-                        !string.IsNullOrWhiteSpace(rconPlayer.Guid))
+                    if (!string.IsNullOrWhiteSpace(rconPlayer.Address) &&
+                        !string.IsNullOrWhiteSpace(rconPlayer.PlayerIdentifier))
                     {
                         ipResolvedEvents.Add(new PlayerIpResolvedEvent
                         {
                             Timestamp = now,
-                            PlayerGuid = rconPlayer.Guid,
-                            IpAddress = rconPlayer.IpAddress
+                            PlayerGuid = rconPlayer.PlayerIdentifier,
+                            IpAddress = rconPlayer.Address
                         });
                     }
                 }

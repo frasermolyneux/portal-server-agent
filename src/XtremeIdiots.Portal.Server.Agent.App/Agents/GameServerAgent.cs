@@ -261,6 +261,11 @@ public sealed class GameServerAgent
 
     private async Task SendScheduledBroadcastAsync(CancellationToken ct)
     {
+        if (!string.Equals(_context.GameType, Cod4xCvarProbe.Cod4xGameType, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         var broadcastSettings = _context.Broadcasts;
         if (!broadcastSettings.Enabled)
         {
@@ -315,6 +320,11 @@ public sealed class GameServerAgent
 
     private async Task SendStartupOnlineBroadcastAsync(CancellationToken ct)
     {
+        if (!string.Equals(_context.GameType, Cod4xCvarProbe.Cod4xGameType, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         var version = typeof(GameServerAgent).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion

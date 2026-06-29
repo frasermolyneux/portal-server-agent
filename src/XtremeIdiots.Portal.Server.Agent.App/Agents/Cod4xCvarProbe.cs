@@ -3,12 +3,13 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
+using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
 /// <summary>
 /// Default <see cref="ICod4xCvarProbe"/> implementation. Reads three cvars via
-/// <see cref="IRconApi.GetDvar"/> and emits structured log entries:
+/// <see cref="ICoD4xRconApi.CvarList"/> and emits structured log entries:
 /// <list type="bullet">
 ///   <item><c>g_logSync</c> / <c>g_logTimeStampInSeconds</c> / <c>logfile</c> — probe
 ///     and record only. The parser tolerates common value combinations, so these
@@ -62,7 +63,20 @@ public sealed class Cod4xCvarProbe : ICod4xCvarProbe
         try
         {
             using var scope = _scopeFactory.CreateScope();
-            var rconApi = scope.ServiceProvider.GetRequiredService<IRconApi>();
+            var serversApiClient = scope.ServiceProvider.GetRequiredService<IServersApiClient>();
+            var rconApi = serversApiClient.CoD4xRcon.V1;
+
+            var cvarListResult = await rconApi.CvarList(context.ServerId, ct).ConfigureAwait(false);
+            if (!cvarListResult.IsSuccess || string.IsNullOrWhiteSpace(cvarListResult.Result?.Data))
+            {
+                _logger.LogWarning(
+                    "CoD4x cvar probe could not read cvarlist for server {ServerId} ({Title}): API returned non-success",
+                    context.ServerId,
+                    context.Title);
+                return;
+            }
+
+            var cvarListOutput = cvarListResult.Result.Data;
 
             foreach (var cvar in ProbedCvars)
             {
@@ -71,7 +85,7 @@ public sealed class Cod4xCvarProbe : ICod4xCvarProbe
                     return;
                 }
 
-                await ProbeOneAsync(rconApi, context, cvar, ct);
+                ProbeOne(context, cvar, cvarListOutput);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -91,35 +105,62 @@ public sealed class Cod4xCvarProbe : ICod4xCvarProbe
         }
     }
 
-    private async Task ProbeOneAsync(IRconApi rconApi, ServerContext context, string cvar, CancellationToken ct)
+    private void ProbeOne(ServerContext context, string cvar, string cvarListOutput)
     {
-        try
+        if (TryExtractCvarValue(cvarListOutput, cvar, out var value))
         {
-            var result = await rconApi.GetDvar(context.ServerId, cvar, ct);
-
-            if (!result.IsSuccess || result.Result?.Data is null)
-            {
-                _logger.LogWarning(
-                    "CoD4x cvar probe could not read {Cvar} for server {ServerId} ({Title}): API returned non-success",
-                    cvar, context.ServerId, context.Title);
-                return;
-            }
-
-            var value = result.Result.Data.Value ?? string.Empty;
-
             _logger.LogInformation(
                 "CoD4x cvar probe: server {ServerId} ({Title}) {Cvar}={Value}",
                 context.ServerId, context.Title, cvar, value);
+            return;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+
+        _logger.LogWarning(
+            "CoD4x cvar probe could not read {Cvar} for server {ServerId} ({Title}) from cvarlist output",
+            cvar,
+            context.ServerId,
+            context.Title);
+    }
+
+    private static bool TryExtractCvarValue(string cvarListOutput, string cvarName, out string value)
+    {
+        value = string.Empty;
+
+        foreach (var line in cvarListOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            throw;
+            if (!line.Contains(cvarName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var cvarIndex = line.IndexOf(cvarName, StringComparison.OrdinalIgnoreCase);
+            if (cvarIndex < 0)
+            {
+                continue;
+            }
+
+            var afterName = line[(cvarIndex + cvarName.Length)..].Trim();
+            if (afterName.Length == 0)
+            {
+                value = string.Empty;
+                return true;
+            }
+
+            var quoteStart = afterName.IndexOf('"');
+            if (quoteStart >= 0)
+            {
+                var quoteEnd = afterName.IndexOf('"', quoteStart + 1);
+                if (quoteEnd > quoteStart)
+                {
+                    value = afterName.Substring(quoteStart + 1, quoteEnd - quoteStart - 1);
+                    return true;
+                }
+            }
+
+            value = afterName.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? string.Empty;
+            return true;
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "CoD4x cvar probe failed reading {Cvar} for server {ServerId} ({Title})",
-                cvar, context.ServerId, context.Title);
-        }
+
+        return false;
     }
 }
