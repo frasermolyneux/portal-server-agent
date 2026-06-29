@@ -5,7 +5,6 @@ using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
-using XtremeIdiots.Portal.Server.Agent.App.Screenshots;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Orchestration;
 
@@ -25,7 +24,6 @@ public class AgentOrchestrator : BackgroundService
     private readonly IRconBroadcastService _broadcastService;
     private readonly ICod4xCvarProbe _cvarProbe;
     private readonly IBanFileWatcher _banFileWatcher;
-    private readonly IScreenshotWatcher _screenshotWatcher;
     private readonly IRemoteOpsSessionCoordinator _opsSessionCoordinator;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AgentOrchestrator> _logger;
@@ -47,7 +45,6 @@ public class AgentOrchestrator : BackgroundService
         IRconBroadcastService broadcastService,
         ICod4xCvarProbe cvarProbe,
         IBanFileWatcher banFileWatcher,
-        IScreenshotWatcher screenshotWatcher,
         IRemoteOpsSessionCoordinator opsSessionCoordinator,
         ILoggerFactory loggerFactory,
         ILogger<AgentOrchestrator> logger)
@@ -62,7 +59,6 @@ public class AgentOrchestrator : BackgroundService
         _broadcastService = broadcastService ?? throw new ArgumentNullException(nameof(broadcastService));
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
-        _screenshotWatcher = screenshotWatcher ?? throw new ArgumentNullException(nameof(screenshotWatcher));
         _opsSessionCoordinator = opsSessionCoordinator ?? throw new ArgumentNullException(nameof(opsSessionCoordinator));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -257,7 +253,7 @@ public class AgentOrchestrator : BackgroundService
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 
-            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _banFileWatcher, _screenshotWatcher, agentLogger);
+            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _banFileWatcher, agentLogger);
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
             _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash));

@@ -116,7 +116,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
                 var broadcasts = ParseBroadcastSettings(configs);
                 var banFileSettings = ParseBanFileSettings(configs);
-                var screenshots = ParseScreenshotSettings(configs);
                 var agentNamePrefix = globalAgentNamePrefix;
                 if (!string.IsNullOrWhiteSpace(agentSettings.AgentName))
                 {
@@ -154,7 +153,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 }
                 configHashInputs["agent.agentNamePrefix"] = agentNamePrefix;
                 AppendBroadcastHashFields(configHashInputs, broadcasts);
-                AppendScreenshotHashFields(configHashInputs, screenshots);
                 var configHash = ComputeConfigHash(configs, configHashInputs);
 
                 servers.Add(new ServerContext
@@ -184,7 +182,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     BanFileCheckIntervalSeconds = banFileCheckIntervalSeconds,
                     AgentNamePrefix = agentNamePrefix,
                     Broadcasts = broadcasts,
-                    Screenshots = screenshots,
                     ConfigHash = configHash
                 });
             }
@@ -662,66 +659,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         return fallback;
     }
 
-    private static bool TryGetBoolValue(
-        Dictionary<string, Dictionary<string, JsonElement>> configs,
-        string ns, string key, out bool value)
-    {
-        value = false;
-        if (configs.TryGetValue(ns, out var nsConfig) &&
-            nsConfig.TryGetValue(key, out var element))
-        {
-            if (element.ValueKind is JsonValueKind.True or JsonValueKind.False)
-            {
-                value = element.GetBoolean();
-                return true;
-            }
-
-            if (element.ValueKind == JsonValueKind.String && bool.TryParse(element.GetString(), out value))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static ScreenshotSettings ParseScreenshotSettings(
-        Dictionary<string, Dictionary<string, JsonElement>> configs)
-    {
-        if (!configs.TryGetValue("screenshots", out _))
-        {
-            return new ScreenshotSettings();
-        }
-
-        _ = TryGetBoolValue(configs, "screenshots", "enabled", out var enabled);
-
-        var directoryPath = string.Empty;
-        _ = TryGetStringValue(configs, "screenshots", "directoryPath", out directoryPath);
-
-        var filePattern = ServerContext.DefaultScreenshotFilePattern;
-        if (TryGetStringValue(configs, "screenshots", "filePattern", out var configuredPattern) &&
-            !string.IsNullOrWhiteSpace(configuredPattern))
-        {
-            filePattern = configuredPattern.Trim();
-        }
-
-        var pollIntervalSeconds = ServerContext.DefaultScreenshotPollIntervalSeconds;
-        if (TryGetIntValue(configs, "screenshots", "pollIntervalSeconds", out var configuredInterval))
-        {
-            pollIntervalSeconds = Math.Clamp(
-                configuredInterval,
-                ServerContext.MinScreenshotPollIntervalSeconds,
-                ServerContext.MaxScreenshotPollIntervalSeconds);
-        }
-
-        return new ScreenshotSettings
-        {
-            Enabled = enabled,
-            DirectoryPath = directoryPath,
-            FilePattern = filePattern,
-            PollIntervalSeconds = pollIntervalSeconds
-        };
-    }
 
     private static void AppendBroadcastHashFields(
         SortedDictionary<string, string>? configHashInputs,
@@ -741,21 +678,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             configHashInputs[$"broadcasts.messages[{index}].message"] = message.Message;
             configHashInputs[$"broadcasts.messages[{index}].enabled"] = message.Enabled.ToString();
         }
-    }
-
-    private static void AppendScreenshotHashFields(
-        SortedDictionary<string, string>? configHashInputs,
-        ScreenshotSettings screenshots)
-    {
-        if (configHashInputs is null)
-        {
-            return;
-        }
-
-        configHashInputs["screenshots.enabled"] = screenshots.Enabled.ToString();
-        configHashInputs["screenshots.directoryPath"] = screenshots.DirectoryPath;
-        configHashInputs["screenshots.filePattern"] = screenshots.FilePattern;
-        configHashInputs["screenshots.pollIntervalSeconds"] = screenshots.PollIntervalSeconds.ToString();
     }
 
     /// <summary>

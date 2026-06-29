@@ -13,7 +13,6 @@ using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
-using XtremeIdiots.Portal.Server.Agent.App.Screenshots;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
 
@@ -58,7 +57,6 @@ public class GameServerAgentTests
     private readonly Mock<IRconBroadcastService> _mockBroadcastService = new();
     private readonly Mock<ICod4xCvarProbe> _mockCvarProbe = new();
     private readonly Mock<IBanFileWatcher> _mockBanFileWatcher = new();
-    private readonly Mock<IScreenshotWatcher> _mockScreenshotWatcher = new();
     private readonly ILogger _logger = NullLogger.Instance;
 
     public GameServerAgentTests()
@@ -82,7 +80,7 @@ public class GameServerAgentTests
 
     private GameServerAgent CreateAgent() =>
         new(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
     [Fact]
     public async Task RunAsync_PublishesServerConnectedOnStart()
@@ -393,7 +391,7 @@ public class GameServerAgentTests
             .ReturnsAsync((SavedOffset?)null);
 
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object,
-            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
+            _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
 
@@ -460,7 +458,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2300));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -487,7 +485,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2300));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -676,7 +674,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2600));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -707,7 +705,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -751,7 +749,7 @@ public class GameServerAgentTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(2500));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
-            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _mockScreenshotWatcher.Object, _logger, new ZeroRandom());
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
         await agent.RunAsync(cts.Token);
 
@@ -781,7 +779,6 @@ public class GameServerAgentTests
             _mockBroadcastService.Object,
             _mockCvarProbe.Object,
             _mockBanFileWatcher.Object,
-            _mockScreenshotWatcher.Object,
             _logger,
             new ZeroRandom());
 
@@ -818,7 +815,6 @@ public class GameServerAgentTests
             _mockBroadcastService.Object,
             _mockCvarProbe.Object,
             _mockBanFileWatcher.Object,
-            _mockScreenshotWatcher.Object,
             _logger,
             new MaxRandom());
 

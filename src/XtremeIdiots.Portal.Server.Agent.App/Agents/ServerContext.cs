@@ -42,10 +42,6 @@ public sealed record ServerContext
     public const int MinBanFileCheckIntervalSeconds = 30;
     public const int MaxBanFileCheckIntervalSeconds = 300;
     public const string DefaultAgentNamePrefix = "^4[^1>XI< BOT^4]^7";
-    public const string DefaultScreenshotFilePattern = "*.jpg";
-    public const int DefaultScreenshotPollIntervalSeconds = 60;
-    public const int MinScreenshotPollIntervalSeconds = 10;
-    public const int MaxScreenshotPollIntervalSeconds = 300;
     public static readonly TimeSpan DefaultOpsConnectTimeout = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan DefaultOpsSessionIdleTimeout = TimeSpan.FromMinutes(2);
     public static readonly TimeSpan DefaultOpsSessionMaxLifetime = TimeSpan.FromMinutes(30);
@@ -136,11 +132,6 @@ public sealed record ServerContext
     /// Broadcast message scheduling configuration (from "broadcasts" namespace).
     /// </summary>
     public BroadcastSettings Broadcasts { get; init; } = new();
-
-    /// <summary>
-    /// Screenshot monitoring configuration (from "screenshots" namespace).
-    /// </summary>
-    public ScreenshotSettings Screenshots { get; init; } = new();
 }
 
 public sealed record BroadcastSettings
@@ -154,14 +145,4 @@ public sealed record BroadcastMessage
 {
     public required string Message { get; init; }
     public bool Enabled { get; init; }
-}
-
-public sealed record ScreenshotSettings
-{
-    public bool Enabled { get; init; }
-    public string DirectoryPath { get; init; } = string.Empty;
-    public string FilePattern { get; init; } = ServerContext.DefaultScreenshotFilePattern;
-    public int PollIntervalSeconds { get; init; } = ServerContext.DefaultScreenshotPollIntervalSeconds;
-
-    public TimeSpan PollInterval => TimeSpan.FromSeconds(PollIntervalSeconds);
 }
