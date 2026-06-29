@@ -19,15 +19,22 @@ public class ServerSyncServiceTests
 {
     private readonly Mock<IRconApi> _mockRconApi = new();
     private readonly Mock<IQueryApi> _mockQueryApi = new();
+    private readonly Mock<ICoD4xBanReconciliationService> _mockCoD4xReconciliationService = new();
     private readonly Mock<ILogParser> _mockParser = new();
     private readonly ILogger<ServerSyncService> _logger = NullLogger<ServerSyncService>.Instance;
     private readonly Guid _serverId = Guid.NewGuid();
 
-    private ServerSyncService CreateService()
+    private ServerSyncService CreateService(bool includeCoD4xReconciliationService = true)
     {
         var services = new ServiceCollection();
         services.AddSingleton(_mockRconApi.Object);
         services.AddSingleton(_mockQueryApi.Object);
+
+        if (includeCoD4xReconciliationService)
+        {
+            services.AddScoped(_ => _mockCoD4xReconciliationService.Object);
+        }
+
         var sp = services.BuildServiceProvider();
 
         var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
@@ -361,5 +368,47 @@ public class ServerSyncServiceTests
 
         // Assert — SetCurrentMap should still be called (parser handles null/whitespace filtering)
         _mockParser.Verify(p => p.SetCurrentMap(null), Times.Once);
+    }
+
+    [Fact]
+    public async Task SyncAsync_CallsCoD4xReconciliationService_WhenRegistered()
+    {
+        // Arrange
+        var rconStatus = new ServerRconStatusResponseDto { Players = [] };
+        _mockRconApi.Setup(r => r.GetServerStatus(_serverId))
+            .ReturnsAsync(new ApiResult<ServerRconStatusResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<ServerRconStatusResponseDto>(rconStatus)));
+
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var service = CreateService(includeCoD4xReconciliationService: true);
+
+        // Act
+        await service.SyncAsync(_serverId, _mockParser.Object, "CallOfDuty4x");
+
+        // Assert
+        _mockCoD4xReconciliationService.Verify(x => x.ReconcileAsync(
+            _serverId,
+            "CallOfDuty4x",
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SyncAsync_DoesNotThrow_WhenCoD4xReconciliationServiceIsNotRegistered()
+    {
+        // Arrange
+        var rconStatus = new ServerRconStatusResponseDto { Players = [] };
+        _mockRconApi.Setup(r => r.GetServerStatus(_serverId))
+            .ReturnsAsync(new ApiResult<ServerRconStatusResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<ServerRconStatusResponseDto>(rconStatus)));
+
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var service = CreateService(includeCoD4xReconciliationService: false);
+
+        // Act / Assert
+        await service.SyncAsync(_serverId, _mockParser.Object, "CallOfDuty4x");
     }
 }

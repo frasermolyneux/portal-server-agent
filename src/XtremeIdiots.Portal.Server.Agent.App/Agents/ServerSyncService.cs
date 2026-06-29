@@ -21,7 +21,10 @@ public sealed class ServerSyncService : IServerSyncService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, CancellationToken ct = default)
+    public Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, CancellationToken ct = default)
+        => SyncAsync(serverId, parser, null, ct);
+
+    public async Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, string? gameType, CancellationToken ct = default)
     {
         var ipResolvedEvents = new List<PlayerIpResolvedEvent>();
 
@@ -111,6 +114,12 @@ public sealed class ServerSyncService : IServerSyncService
 
             // Query protocol for server metadata and player scores
             await SyncQueryAsync(scope, serverId, parser, ct);
+
+            var reconciliationService = scope.ServiceProvider.GetService<ICoD4xBanReconciliationService>();
+            if (reconciliationService is not null)
+            {
+                await reconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {

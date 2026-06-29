@@ -167,7 +167,7 @@ public sealed class GameServerAgent
             await _publisher.PublishServerConnectedAsync(_context.ServerId, _context.GameType, NextSequenceId(), ct);
 
             // 4. Initial RCON sync — populate slot map with current players
-            var initialIpEvents = await _syncService.SyncAsync(_context.ServerId, _parser, ct);
+            var initialIpEvents = await _syncService.SyncAsync(_context.ServerId, _parser, _context.GameType, ct);
             await PublishIpResolvedEventsAsync(initialIpEvents, ct);
             _lastRconSync = DateTime.UtcNow;
 
@@ -217,7 +217,7 @@ public sealed class GameServerAgent
                     // Periodic RCON sync (every 5 minutes)
                     if (DateTime.UtcNow - _lastRconSync > RconSyncInterval)
                     {
-                        var ipEvents = await _syncService.SyncAsync(_context.ServerId, _parser, ct);
+                        var ipEvents = await _syncService.SyncAsync(_context.ServerId, _parser, _context.GameType, ct);
                         await PublishIpResolvedEventsAsync(ipEvents, ct);
                         _lastRconSync = DateTime.UtcNow;
                     }

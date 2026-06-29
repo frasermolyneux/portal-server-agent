@@ -133,6 +133,7 @@ builder.Services.AddSingleton(_ => new RemoteOpsSessionOptions());
 builder.Services.AddSingleton<IRemoteOpsSessionPolicies, RemoteOpsSessionPolicies>();
 builder.Services.AddSingleton<IRemoteOpsSessionCoordinator, RemoteOpsSessionCoordinator>();
 builder.Services.AddSingleton<IBanFileWatcher, BanFileWatcher>();
+builder.Services.AddScoped<ICoD4xBanReconciliationService, CoD4xBanReconciliationService>();
 builder.Services.AddSingleton<IRepositoryScreenshotsClient, RepositoryScreenshotsClient>();
 builder.Services.AddSingleton<IScreenshotWatcher, ScreenshotWatcher>();
 
