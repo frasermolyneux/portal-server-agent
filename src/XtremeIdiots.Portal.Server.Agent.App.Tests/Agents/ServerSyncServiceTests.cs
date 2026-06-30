@@ -65,8 +65,8 @@ public class ServerSyncServiceTests
     {
         var rconPlayers = new List<CoD4xStatusPlayerDto>
         {
-            new() { Num = 0, PlayerIdentifier = "guid-a", Name = "Alice", Address = "1.2.3.4", Ping = 30, Rate = 25000 },
-            new() { Num = 1, PlayerIdentifier = "guid-b", Name = "Bob", Address = "5.6.7.8", Ping = 50, Rate = 20000 }
+            new() { Num = 0, PlayerIdentifier = "guid-a", Name = "Alice", IpAddress = "1.2.3.4", Ping = 30, Rate = 25000 },
+            new() { Num = 1, PlayerIdentifier = "guid-b", Name = "Bob", IpAddress = "5.6.7.8", Ping = 50, Rate = 20000 }
         };
 
         var statusDto = new CoD4xStatusResponseDto { Players = rconPlayers };
@@ -84,9 +84,9 @@ public class ServerSyncServiceTests
         await service.SyncAsync(_serverId, _mockParser.Object);
 
         _mockParser.Verify(p => p.SetPlayer(0, It.Is<PlayerInfo>(pi =>
-            pi.Guid == "guid-a" && pi.Name == "Alice" && pi.Ping == 30 && pi.Rate == 25000)), Times.Once);
+            pi.Guid == "guid-a" && pi.Name == "Alice" && pi.IpAddress == "1.2.3.4" && pi.Ping == 30 && pi.Rate == 25000)), Times.Once);
         _mockParser.Verify(p => p.SetPlayer(1, It.Is<PlayerInfo>(pi =>
-            pi.Guid == "guid-b" && pi.Name == "Bob" && pi.Ping == 50 && pi.Rate == 20000)), Times.Once);
+            pi.Guid == "guid-b" && pi.Name == "Bob" && pi.IpAddress == "5.6.7.8" && pi.Ping == 50 && pi.Rate == 20000)), Times.Once);
     }
 
     [Fact]
@@ -534,7 +534,7 @@ public class ServerSyncServiceTests
     {
         var rconPlayers = new List<CoD4xStatusPlayerDto>
         {
-            new() { Num = 0, PlayerIdentifier = "guid-from-rcon", Name = "Alice", Address = "9.9.9.9", Ping = 30, Rate = 25000 }
+            new() { Num = 0, PlayerIdentifier = "guid-from-rcon", Name = "Alice", IpAddress = "9.9.9.9", Ping = 30, Rate = 25000 }
         };
 
         _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))

@@ -174,7 +174,7 @@ public sealed class ServerSyncService : IServerSyncService
                 player.Num,
                 player.PlayerIdentifier,
                 player.Name,
-                player.Address,
+                player.IpAddress,
                 player.Ping ?? 0,
                 player.Rate)).ToList());
         }
