@@ -13,6 +13,10 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 /// </summary>
 public sealed class ServerSyncService : IServerSyncService
 {
+    private const string CallOfDuty2GameType = "CallOfDuty2";
+    private const string CallOfDuty4GameType = "CallOfDuty4";
+    private const string CallOfDuty5GameType = "CallOfDuty5";
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ServerSyncService> _logger;
 
@@ -34,10 +38,12 @@ public sealed class ServerSyncService : IServerSyncService
             using var scope = _scopeFactory.CreateScope();
             var serversApiClient = scope.ServiceProvider.GetRequiredService<IServersApiClient>();
 
-            if (!string.IsNullOrWhiteSpace(gameType) && !string.Equals(gameType, Cod4xCvarProbe.Cod4xGameType, StringComparison.OrdinalIgnoreCase))
+            var (isSupportedGameType, rconPlayers) = await TryGetRconPlayersAsync(serversApiClient, serverId, gameType, ct).ConfigureAwait(false);
+
+            if (!isSupportedGameType)
             {
                 _logger.LogDebug(
-                    "Skipping CoD4x RCON sync for server {ServerId} because game type is {GameType}",
+                    "Skipping RCON player sync for server {ServerId} because game type {GameType} is not supported",
                     serverId,
                     gameType);
 
@@ -45,16 +51,13 @@ public sealed class ServerSyncService : IServerSyncService
                 return ipResolvedEvents;
             }
 
-            var result = await serversApiClient.CoD4xRcon.V1.Status(serverId, ct).ConfigureAwait(false);
-
-            if (!result.IsSuccess || result.Result?.Data?.Players is null)
+            if (rconPlayers is null)
             {
-                _logger.LogWarning("RCON sync failed for server {ServerId}: API returned non-success or no data", serverId);
+                await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
                 return ipResolvedEvents;
             }
 
             var now = DateTime.UtcNow;
-            var rconPlayers = result.Result.Data.Players;
             var existingPlayers = parser.ConnectedPlayers;
             var added = 0;
             var updated = 0;
@@ -66,21 +69,29 @@ public sealed class ServerSyncService : IServerSyncService
                 if (existingPlayers.TryGetValue(slotId, out var existing))
                 {
                     // Update mutable RCON fields on existing player
-                    existing.Ping = rconPlayer.Ping is int ping ? ping : 0;
-                    existing.Rate = rconPlayer.Rate is int rate ? rate : 0;
+                    existing.Ping = rconPlayer.Ping;
+                    existing.Rate = rconPlayer.Rate;
 
                     // Emit event when RCON provides an IP that differs from what we had
                     // (includes null→value first discovery and value→value IP changes)
-                    if (!string.IsNullOrWhiteSpace(rconPlayer.Address) &&
-                        existing.IpAddress != rconPlayer.Address)
+                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress) &&
+                        existing.IpAddress != rconPlayer.IpAddress)
                     {
-                        existing.IpAddress = rconPlayer.Address;
-                        ipResolvedEvents.Add(new PlayerIpResolvedEvent
+                        existing.IpAddress = rconPlayer.IpAddress;
+
+                        var resolvedPlayerGuid = string.IsNullOrWhiteSpace(existing.Guid)
+                            ? rconPlayer.Guid
+                            : existing.Guid;
+
+                        if (!string.IsNullOrWhiteSpace(resolvedPlayerGuid))
                         {
-                            Timestamp = now,
-                            PlayerGuid = existing.Guid,
-                            IpAddress = rconPlayer.Address
-                        });
+                            ipResolvedEvents.Add(new PlayerIpResolvedEvent
+                            {
+                                Timestamp = now,
+                                PlayerGuid = resolvedPlayerGuid,
+                                IpAddress = rconPlayer.IpAddress
+                            });
+                        }
                     }
 
                     updated++;
@@ -89,25 +100,25 @@ public sealed class ServerSyncService : IServerSyncService
                 {
                     parser.SetPlayer(slotId, new PlayerInfo
                     {
-                        Guid = rconPlayer.PlayerIdentifier ?? string.Empty,
-                        Name = rconPlayer.Name ?? string.Empty,
+                        Guid = rconPlayer.Guid,
+                        Name = rconPlayer.Name,
                         SlotId = slotId,
-                        IpAddress = rconPlayer.Address,
+                        IpAddress = rconPlayer.IpAddress,
                         ConnectedAt = now,
-                        Ping = rconPlayer.Ping is int ping ? ping : 0,
-                        Rate = rconPlayer.Rate is int rate ? rate : 0
+                        Ping = rconPlayer.Ping,
+                        Rate = rconPlayer.Rate
                     });
                     added++;
 
                     // New player discovered via RCON with IP — emit resolved event
-                    if (!string.IsNullOrWhiteSpace(rconPlayer.Address) &&
-                        !string.IsNullOrWhiteSpace(rconPlayer.PlayerIdentifier))
+                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress) &&
+                        !string.IsNullOrWhiteSpace(rconPlayer.Guid))
                     {
                         ipResolvedEvents.Add(new PlayerIpResolvedEvent
                         {
                             Timestamp = now,
-                            PlayerGuid = rconPlayer.PlayerIdentifier,
-                            IpAddress = rconPlayer.Address
+                            PlayerGuid = rconPlayer.Guid,
+                            IpAddress = rconPlayer.IpAddress
                         });
                     }
                 }
@@ -127,10 +138,13 @@ public sealed class ServerSyncService : IServerSyncService
             // Query protocol for server metadata and player scores
             await SyncQueryAsync(scope, serverId, parser, ct);
 
-            var reconciliationService = scope.ServiceProvider.GetService<ICoD4xBanReconciliationService>();
-            if (reconciliationService is not null)
+            if (IsCoD4xGameType(gameType))
             {
-                await reconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
+                var reconciliationService = scope.ServiceProvider.GetService<ICoD4xBanReconciliationService>();
+                if (reconciliationService is not null)
+                {
+                    await reconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
+                }
             }
         }
         catch (Exception ex)
@@ -140,6 +154,90 @@ public sealed class ServerSyncService : IServerSyncService
 
         return ipResolvedEvents;
     }
+
+    private async Task<(bool IsSupportedGameType, IReadOnlyList<RconPlayerSnapshot>? Players)> TryGetRconPlayersAsync(
+        IServersApiClient serversApiClient,
+        Guid serverId,
+        string? gameType,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(gameType) || IsCoD4xGameType(gameType))
+        {
+            var result = await serversApiClient.CoD4xRcon.V1.Status(serverId, ct).ConfigureAwait(false);
+            if (!result.IsSuccess || result.Result?.Data?.Players is null)
+            {
+                _logger.LogWarning("RCON sync failed for server {ServerId}: CoD4x status returned non-success or no data", serverId);
+                return (true, null);
+            }
+
+            return (true, result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
+                player.Num,
+                player.PlayerIdentifier,
+                player.Name,
+                player.Address,
+                player.Ping ?? 0,
+                player.Rate)).ToList());
+        }
+
+        if (string.Equals(gameType, CallOfDuty2GameType, StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await serversApiClient.Cod2Rcon.V1.Status(serverId, ct).ConfigureAwait(false);
+            if (!result.IsSuccess || result.Result?.Data?.Players is null)
+            {
+                _logger.LogWarning("RCON sync failed for server {ServerId}: CoD2 status returned non-success or no data", serverId);
+                return (true, null);
+            }
+
+            return (true, result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
+                player.Num,
+                player.Guid,
+                player.Name,
+                player.IpAddress,
+                player.Ping,
+                player.Rate)).ToList());
+        }
+
+        if (string.Equals(gameType, CallOfDuty4GameType, StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await serversApiClient.Cod4Rcon.V1.Status(serverId, ct).ConfigureAwait(false);
+            if (!result.IsSuccess || result.Result?.Data?.Players is null)
+            {
+                _logger.LogWarning("RCON sync failed for server {ServerId}: CoD4 status returned non-success or no data", serverId);
+                return (true, null);
+            }
+
+            return (true, result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
+                player.Num,
+                player.Guid,
+                player.Name,
+                player.IpAddress,
+                player.Ping,
+                player.Rate)).ToList());
+        }
+
+        if (string.Equals(gameType, CallOfDuty5GameType, StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await serversApiClient.Cod5Rcon.V1.Status(serverId, ct).ConfigureAwait(false);
+            if (!result.IsSuccess || result.Result?.Data?.Players is null)
+            {
+                _logger.LogWarning("RCON sync failed for server {ServerId}: CoD5 status returned non-success or no data", serverId);
+                return (true, null);
+            }
+
+            return (true, result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
+                player.Num,
+                player.Guid,
+                player.Name,
+                player.IpAddress,
+                player.Ping,
+                player.Rate)).ToList());
+        }
+
+        return (false, null);
+    }
+
+    private static bool IsCoD4xGameType(string? gameType)
+        => string.Equals(gameType, Cod4xCvarProbe.Cod4xGameType, StringComparison.OrdinalIgnoreCase);
 
     private async Task SyncQueryAsync(IServiceScope scope, Guid serverId, ILogParser parser, CancellationToken ct)
     {
@@ -183,4 +281,12 @@ public sealed class ServerSyncService : IServerSyncService
             _logger.LogWarning(ex, "Query sync failed for server {ServerId}", serverId);
         }
     }
+
+    private sealed record RconPlayerSnapshot(
+        int Num,
+        string Guid,
+        string Name,
+        string IpAddress,
+        int Ping,
+        int Rate);
 }
