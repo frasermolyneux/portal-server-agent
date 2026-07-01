@@ -103,6 +103,12 @@ public sealed record ServerContext
     /// </summary>
     public string AgentNamePrefix { get; init; } = DefaultAgentNamePrefix;
 
+    /// <summary>
+    /// When true, in-game command and broadcast execution is owned by the CoD4x plugin.
+    /// Agent-side RCON broadcast paths are suppressed for this server.
+    /// </summary>
+    public bool IsCod4xPluginSourceEnabled { get; init; }
+
     public string EffectiveFileTransportType => FileTransportTypes.Normalize(FileTransportType);
 
     public bool EffectiveFileTransportEnabled => FileTransportEnabled ?? false;

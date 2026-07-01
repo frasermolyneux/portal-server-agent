@@ -9,6 +9,7 @@ using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Agent;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.BanFiles;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Broadcasts;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Shared;
 using RepositoryFileTransportType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.FileTransportType;
 using RepositoryGameServerFilter = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameServerFilter;
@@ -43,6 +44,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         try
         {
             var globalAgentNamePrefix = await FetchGlobalAgentNamePrefixAsync(ct);
+            var globalCod4xPluginSourceEnabled = await FetchGlobalCod4xPluginEnabledAsync(ct);
 
             var result = await _repositoryClient.GameServers.V1.GetGameServers(
                 gameTypes: null,
@@ -116,6 +118,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
                 var broadcasts = ParseBroadcastSettings(configs);
                 var banFileSettings = ParseBanFileSettings(configs);
+                var isCod4xServer = string.Equals(dto.GameType.ToString(), "CallOfDuty4x", StringComparison.OrdinalIgnoreCase);
+                var cod4xPluginSourceEnabled = isCod4xServer && ResolveCod4xPluginSourceEnabled(configs, globalCod4xPluginSourceEnabled);
                 var agentNamePrefix = globalAgentNamePrefix;
                 if (!string.IsNullOrWhiteSpace(agentSettings.AgentName))
                 {
@@ -152,6 +156,10 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     configHashInputs[$"{transportNamespace}.hostKeyFingerprint"] = sftpHostKeyFingerprint;
                 }
                 configHashInputs["agent.agentNamePrefix"] = agentNamePrefix;
+                if (isCod4xServer)
+                {
+                    configHashInputs["settings.cod4xPluginSourceEnabled"] = cod4xPluginSourceEnabled.ToString();
+                }
                 AppendBroadcastHashFields(configHashInputs, broadcasts);
                 var configHash = ComputeConfigHash(configs, configHashInputs);
 
@@ -181,6 +189,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     BanFileRootPath = banFileRootPath,
                     BanFileCheckIntervalSeconds = banFileCheckIntervalSeconds,
                     AgentNamePrefix = agentNamePrefix,
+                    IsCod4xPluginSourceEnabled = cod4xPluginSourceEnabled,
                     Broadcasts = broadcasts,
                     ConfigHash = configHash
                 });
@@ -227,6 +236,39 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         }
 
         return ServerContext.DefaultAgentNamePrefix;
+    }
+
+    private async Task<bool> FetchGlobalCod4xPluginEnabledAsync(CancellationToken ct)
+    {
+        try
+        {
+            var result = await _repositoryClient.GlobalConfigurations.V1.GetConfigurations(ct);
+            if (!result.IsSuccess || result.Result?.Data?.Items is null)
+            {
+                return false;
+            }
+
+            var pluginConfig = result.Result.Data.Items
+                .FirstOrDefault(x => string.Equals(x.Namespace, Cod4xPluginSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
+
+            if (pluginConfig is null || string.IsNullOrWhiteSpace(pluginConfig.Configuration))
+            {
+                return false;
+            }
+
+            var properties = ParseNamespaceProperties(pluginConfig.Configuration);
+            var parsed = ParseCod4xPluginSettings(properties);
+            if (parsed?.Enabled is bool enabled)
+            {
+                return enabled;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to fetch global cod4xPlugin settings, defaulting source flag to disabled");
+        }
+
+        return false;
     }
 
     private static TransportTypeResolution ResolveTransportType(GameServerDto dto)
@@ -514,6 +556,52 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         _ = new BanFileSettingsValidator().Validate(document);
 
         return document;
+    }
+
+    private static Cod4xPluginSettingsDocument? ParseCod4xPluginSettings(
+        Dictionary<string, JsonElement>? namespaceConfig)
+    {
+        if (namespaceConfig is null)
+        {
+            return null;
+        }
+
+        var document = DeserializeDocument<Cod4xPluginSettingsDocument>(namespaceConfig);
+        if (document is null)
+        {
+            return null;
+        }
+
+        if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
+        {
+            return null;
+        }
+
+        var validation = new Cod4xPluginSettingsValidator().Validate(document);
+        if (!validation.IsValid)
+        {
+            return null;
+        }
+
+        return document;
+    }
+
+    private static bool ResolveCod4xPluginSourceEnabled(
+        Dictionary<string, Dictionary<string, JsonElement>> configs,
+        bool globalCod4xPluginSourceEnabled)
+    {
+        if (!configs.TryGetValue(Cod4xPluginSettingsConstants.Namespace, out var namespaceConfig))
+        {
+            return globalCod4xPluginSourceEnabled;
+        }
+
+        var document = ParseCod4xPluginSettings(namespaceConfig);
+        if (document?.Enabled is bool enabled)
+        {
+            return enabled;
+        }
+
+        return globalCod4xPluginSourceEnabled;
     }
 
     private static BroadcastSettings ParseBroadcastSettings(

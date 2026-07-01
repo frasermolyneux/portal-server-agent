@@ -752,6 +752,36 @@ public class GameServerAgentTests
     }
 
     [Fact]
+    public async Task RunAsync_PluginSourceEnabled_DoesNotSendStartupOrScheduledBroadcasts()
+    {
+        var context = _testContext with
+        {
+            IsCod4xPluginSourceEnabled = true,
+            Broadcasts = new BroadcastSettings
+            {
+                Enabled = true,
+                IntervalSeconds = 1,
+                Messages = [new BroadcastMessage { Message = "message-1", Enabled = true }]
+            }
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
+
+        await agent.RunAsync(cts.Token);
+
+        _mockBroadcastService.Verify(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RunAsync_BroadcastSendFails_RetriesSameMessageWithoutRotating()
     {
         var context = _testContext with

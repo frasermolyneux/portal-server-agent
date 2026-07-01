@@ -13,6 +13,7 @@ using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.GameServers;
 using XtremeIdiots.Portal.Repository.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
 using RepositoryGameServerFilter = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameServerFilter;
 using RepositoryGameType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameType;
 
@@ -305,6 +306,83 @@ public class RepositoryServerConfigProviderTests
         Assert.True(server.Broadcasts.Messages[0].Enabled);
         Assert.Equal("Message B", server.Broadcasts.Messages[1].Message);
         Assert.False(server.Broadcasts.Messages[1].Enabled);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_ServerCod4xPluginOverride_ControlsPluginSourceFlag()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Cod4x Plugin Server Override", RepositoryGameType.CallOfDuty4x,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupGlobalConfigApi([
+            CreateConfigDto(Cod4xPluginSettingsConstants.Namespace, new { schemaVersion = 1, enabled = false })
+        ]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" }),
+            CreateConfigDto(Cod4xPluginSettingsConstants.Namespace, new { schemaVersion = 1, enabled = true })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.True(Assert.Single(result).IsCod4xPluginSourceEnabled);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_GlobalCod4xPluginFlag_AppliesWhenServerConfigMissing()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Cod4x Plugin Global", RepositoryGameType.CallOfDuty4x,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupGlobalConfigApi([
+            CreateConfigDto(Cod4xPluginSettingsConstants.Namespace, new { schemaVersion = 1, enabled = true })
+        ]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.True(Assert.Single(result).IsCod4xPluginSourceEnabled);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_NonCod4x_IgnoresCod4xPluginSourceFlag()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(serverId, "Non-CoD4x Server", RepositoryGameType.CallOfDuty4,
+            hostname: "game.example.com", queryPort: 28960);
+
+        SetupApiSuccess([dto]);
+        SetupGlobalConfigApi([
+            CreateConfigDto(Cod4xPluginSettingsConstants.Namespace, new { schemaVersion = 1, enabled = true })
+        ]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" }),
+            CreateConfigDto(Cod4xPluginSettingsConstants.Namespace, new { schemaVersion = 1, enabled = true })
+        });
+
+        var provider = CreateProvider();
+
+        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.False(Assert.Single(result).IsCod4xPluginSourceEnabled);
     }
 
     [Fact]
