@@ -126,6 +126,7 @@ builder.Services.AddSingleton<IServerLock, BlobServerLock>();
 builder.Services.AddSingleton<IServerSyncService, ServerSyncService>();
 builder.Services.AddSingleton<IRconBroadcastService, RconBroadcastService>();
 builder.Services.AddSingleton<ICod4xCvarProbe, Cod4xCvarProbe>();
+builder.Services.AddSingleton<ICoD4xPluginLifecycleService, CoD4xPluginLifecycleService>();
 builder.Services.AddSingleton<IBanFilePathResolver, BanFilePathResolver>();
 builder.Services.AddSingleton<IRemoteFileClientFactory, RemoteFileClientFactory>();
 builder.Services.AddSingleton(_ => new RemoteOpsSessionOptions());

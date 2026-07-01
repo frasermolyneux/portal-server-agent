@@ -27,6 +27,7 @@ public sealed class GameServerAgent
     private readonly IServerSyncService _syncService;
     private readonly IRconBroadcastService _broadcastService;
     private readonly ICod4xCvarProbe _cvarProbe;
+    private readonly ICoD4xPluginLifecycleService _coD4xPluginLifecycleService;
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILogger _logger;
     private readonly Random _startupJitterRandom;
@@ -36,6 +37,7 @@ public sealed class GameServerAgent
     private DateTime _lastStatusPublish = DateTime.MinValue;
     private DateTime _lastLeaseRenew = DateTime.MinValue;
     private DateTime _lastRconSync = DateTime.MinValue;
+    private DateTime _lastPluginLifecycleCheck = DateTime.MinValue;
     private DateTime _lastBanFileCheck = DateTime.MinValue;
     private DateTime _lastBroadcastAt = DateTime.MinValue;
     private int _nextBroadcastIndex;
@@ -44,6 +46,7 @@ public sealed class GameServerAgent
     internal static readonly TimeSpan StatusPublishInterval = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan LeaseRenewInterval = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan RconSyncInterval = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan PluginLifecycleCheckInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan BanFileCheckInterval = TimeSpan.FromSeconds(ServerContext.DefaultBanFileCheckIntervalSeconds);
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
@@ -57,6 +60,7 @@ public sealed class GameServerAgent
         IServerSyncService syncService,
         IRconBroadcastService broadcastService,
         ICod4xCvarProbe cvarProbe,
+        ICoD4xPluginLifecycleService coD4xPluginLifecycleService,
         IBanFileWatcher banFileWatcher,
         ILogger logger)
         : this(
@@ -69,6 +73,7 @@ public sealed class GameServerAgent
             syncService,
             broadcastService,
             cvarProbe,
+            coD4xPluginLifecycleService,
             banFileWatcher,
             logger,
             new Random())
@@ -85,6 +90,7 @@ public sealed class GameServerAgent
         IServerSyncService syncService,
         IRconBroadcastService broadcastService,
         ICod4xCvarProbe cvarProbe,
+        ICoD4xPluginLifecycleService coD4xPluginLifecycleService,
         IBanFileWatcher banFileWatcher,
         ILogger logger,
         Random startupJitterRandom)
@@ -98,6 +104,7 @@ public sealed class GameServerAgent
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
         _broadcastService = broadcastService ?? throw new ArgumentNullException(nameof(broadcastService));
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
+        _coD4xPluginLifecycleService = coD4xPluginLifecycleService ?? throw new ArgumentNullException(nameof(coD4xPluginLifecycleService));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _startupJitterRandom = startupJitterRandom ?? throw new ArgumentNullException(nameof(startupJitterRandom));
@@ -168,6 +175,8 @@ public sealed class GameServerAgent
             // so it runs at most once per agent lifecycle per server.
             await _cvarProbe.ProbeAsync(_context, ct);
 
+            await CheckCod4xPluginLifecycleAsync(ct);
+
             // 5. Main loop
             while (!ct.IsCancellationRequested)
             {
@@ -213,6 +222,11 @@ public sealed class GameServerAgent
                         var ipEvents = await _syncService.SyncAsync(_context.ServerId, _parser, _context.GameType, ct);
                         await PublishIpResolvedEventsAsync(ipEvents, ct);
                         _lastRconSync = DateTime.UtcNow;
+                    }
+
+                    if (DateTime.UtcNow - _lastPluginLifecycleCheck > PluginLifecycleCheckInterval)
+                    {
+                        await CheckCod4xPluginLifecycleAsync(ct);
                     }
 
                     // Periodic ban file check (defaults to 60 seconds, overridable via typed settings)
@@ -421,6 +435,26 @@ public sealed class GameServerAgent
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[{Title}] Ban file check failed", _context.Title);
+        }
+    }
+
+    private async Task CheckCod4xPluginLifecycleAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _coD4xPluginLifecycleService.ExecuteAsync(_context, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{Title}] CoD4x plugin lifecycle check failed", _context.Title);
+        }
+        finally
+        {
+            _lastPluginLifecycleCheck = DateTime.UtcNow;
         }
     }
 

@@ -23,6 +23,7 @@ public class AgentOrchestrator : BackgroundService
     private readonly IServerSyncService _syncService;
     private readonly IRconBroadcastService _broadcastService;
     private readonly ICod4xCvarProbe _cvarProbe;
+    private readonly ICoD4xPluginLifecycleService _coD4xPluginLifecycleService;
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly IRemoteOpsSessionCoordinator _opsSessionCoordinator;
     private readonly ILoggerFactory _loggerFactory;
@@ -44,6 +45,7 @@ public class AgentOrchestrator : BackgroundService
         IServerSyncService syncService,
         IRconBroadcastService broadcastService,
         ICod4xCvarProbe cvarProbe,
+        ICoD4xPluginLifecycleService coD4xPluginLifecycleService,
         IBanFileWatcher banFileWatcher,
         IRemoteOpsSessionCoordinator opsSessionCoordinator,
         ILoggerFactory loggerFactory,
@@ -58,6 +60,7 @@ public class AgentOrchestrator : BackgroundService
         _syncService = syncService ?? throw new ArgumentNullException(nameof(syncService));
         _broadcastService = broadcastService ?? throw new ArgumentNullException(nameof(broadcastService));
         _cvarProbe = cvarProbe ?? throw new ArgumentNullException(nameof(cvarProbe));
+        _coD4xPluginLifecycleService = coD4xPluginLifecycleService ?? throw new ArgumentNullException(nameof(coD4xPluginLifecycleService));
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _opsSessionCoordinator = opsSessionCoordinator ?? throw new ArgumentNullException(nameof(opsSessionCoordinator));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
@@ -253,7 +256,7 @@ public class AgentOrchestrator : BackgroundService
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 
-            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _banFileWatcher, agentLogger);
+            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _coD4xPluginLifecycleService, _banFileWatcher, agentLogger);
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
             _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash));
