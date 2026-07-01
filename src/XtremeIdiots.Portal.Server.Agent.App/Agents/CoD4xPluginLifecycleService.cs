@@ -12,6 +12,7 @@ using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
@@ -20,6 +21,8 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 {
     private const string CoD4xGameType = "CallOfDuty4x";
     private const string PluginName = "portal-cod4x-plugin";
+    private const string PluginArtifactRootEnvironmentVariable = "PORTAL_COD4X_PLUGIN_ARTIFACT_ROOT";
+    private static readonly string DefaultPluginArtifactRoot = Path.Combine(Path.GetTempPath(), "portal-cod4x-plugin-artifacts");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -29,14 +32,17 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     };
 
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRemoteOpsSessionCoordinator _remoteOpsSessionCoordinator;
     private readonly ILogger<CoD4xPluginLifecycleService> _logger;
     private readonly ConcurrentDictionary<Guid, string> _inFlightOperations = new();
 
     public CoD4xPluginLifecycleService(
         IServiceScopeFactory scopeFactory,
+        IRemoteOpsSessionCoordinator remoteOpsSessionCoordinator,
         ILogger<CoD4xPluginLifecycleService> logger)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _remoteOpsSessionCoordinator = remoteOpsSessionCoordinator ?? throw new ArgumentNullException(nameof(remoteOpsSessionCoordinator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -146,13 +152,28 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
                 return;
             }
 
-            var actionResult = await ExecuteActionAsync(
-                    context,
-                    serversApiClient.CoD4xRcon.V1,
-                    settings.RuntimeState,
-                    request,
-                    ct)
-                .ConfigureAwait(false);
+            ActionResult actionResult;
+            try
+            {
+                actionResult = await ExecuteActionAsync(
+                        context,
+                        serversApiClient.CoD4xRcon.V1,
+                        settings,
+                        settings.RuntimeState,
+                        request,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "[{Title}] CoD4x plugin lifecycle action {Action} failed with an unexpected exception",
+                    context.Title,
+                    request.Action);
+
+                actionResult = ActionResult.Failure("Unexpected CoD4x plugin lifecycle exception.");
+            }
 
             if (!actionResult.IsSuccess)
             {
@@ -181,14 +202,15 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private async Task<ActionResult> ExecuteActionAsync(
         ServerContext context,
         ICoD4xRconApi coD4xRconApi,
+        Cod4xPluginSettingsDocument settings,
         Cod4xPluginRuntimeState runtimeState,
         Cod4xPluginOperationRequest request,
         CancellationToken ct)
     {
         return request.Action switch
         {
-            Cod4xPluginOperationAction.Install => await ExecuteInstallAsync(context, coD4xRconApi, request, ct).ConfigureAwait(false),
-            Cod4xPluginOperationAction.Rollback => await ExecuteRollbackAsync(context, coD4xRconApi, runtimeState, ct).ConfigureAwait(false),
+            Cod4xPluginOperationAction.Install => await ExecuteInstallAsync(context, coD4xRconApi, settings, runtimeState, request, ct).ConfigureAwait(false),
+            Cod4xPluginOperationAction.Rollback => await ExecuteRollbackAsync(context, coD4xRconApi, settings, runtimeState, request, ct).ConfigureAwait(false),
             Cod4xPluginOperationAction.Unload => await ExecuteUnloadAsync(context, coD4xRconApi, ct).ConfigureAwait(false),
             _ => ActionResult.Failure($"Unsupported CoD4x plugin lifecycle action '{request.Action}'.")
         };
@@ -197,6 +219,8 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private async Task<ActionResult> ExecuteInstallAsync(
         ServerContext context,
         ICoD4xRconApi coD4xRconApi,
+        Cod4xPluginSettingsDocument settings,
+        Cod4xPluginRuntimeState runtimeState,
         Cod4xPluginOperationRequest request,
         CancellationToken ct)
     {
@@ -211,7 +235,27 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             return ActionResult.Failure("Install operation targetVersion is invalid.");
         }
 
+        if (string.Equals(runtimeState.CurrentVersion?.Trim(), targetVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            var alreadyLoadedResult = await VerifyPluginHealthAsync(context, coD4xRconApi, targetVersion, ct).ConfigureAwait(false);
+            if (alreadyLoadedResult.IsSuccess)
+            {
+                return ActionResult.Success(targetVersion);
+            }
+
+            _logger.LogInformation(
+                "[{Title}] CoD4x plugin target version {TargetVersion} is already marked current but failed health check; attempting redeploy",
+                context.Title,
+                targetVersion);
+        }
+
         await TryBestEffortUnloadAsync(context, coD4xRconApi, ct).ConfigureAwait(false);
+
+        var uploadResult = await UploadPluginBinaryAsync(context, settings, request, targetVersion, ct).ConfigureAwait(false);
+        if (!uploadResult.IsSuccess)
+        {
+            return uploadResult;
+        }
 
         var loadResult = await coD4xRconApi.LoadPlugin(
             context.ServerId,
@@ -232,7 +276,9 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private async Task<ActionResult> ExecuteRollbackAsync(
         ServerContext context,
         ICoD4xRconApi coD4xRconApi,
+        Cod4xPluginSettingsDocument settings,
         Cod4xPluginRuntimeState runtimeState,
+        Cod4xPluginOperationRequest request,
         CancellationToken ct)
     {
         var rollbackVersion = runtimeState.PreviousKnownGoodVersion?.Trim();
@@ -247,6 +293,12 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         }
 
         await TryBestEffortUnloadAsync(context, coD4xRconApi, ct).ConfigureAwait(false);
+
+        var uploadResult = await UploadPluginBinaryAsync(context, settings, request, rollbackVersion, ct).ConfigureAwait(false);
+        if (!uploadResult.IsSuccess)
+        {
+            return uploadResult;
+        }
 
         var loadResult = await coD4xRconApi.LoadPlugin(
             context.ServerId,
@@ -325,6 +377,69 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
                 "[{Title}] Best-effort unload before install/rollback returned status {StatusCode}",
                 context.Title,
                 unloadResult.StatusCode);
+        }
+    }
+
+    private async Task<ActionResult> UploadPluginBinaryAsync(
+        ServerContext context,
+        Cod4xPluginSettingsDocument settings,
+        Cod4xPluginOperationRequest request,
+        string version,
+        CancellationToken ct)
+    {
+        if (!TryResolveArtifactPath(request, out var artifactPath, out var artifactPathError))
+        {
+            return ActionResult.Failure(artifactPathError);
+        }
+
+        if (!File.Exists(artifactPath))
+        {
+            return ActionResult.Failure($"Plugin artifact path '{artifactPath}' does not exist.");
+        }
+
+        if (!TryNormalizePluginRootDirectory(settings.PluginRootDirectory, out var rootDirectory, out var rootDirectoryError))
+        {
+            return ActionResult.Failure(rootDirectoryError);
+        }
+
+        if (!TryResolvePluginBinaryExtension(artifactPath, out var extension, out var extensionError))
+        {
+            return ActionResult.Failure(extensionError);
+        }
+
+        var remotePluginPath = BuildRemotePluginPath(rootDirectory, extension);
+
+        try
+        {
+            await _remoteOpsSessionCoordinator.ExecuteAsync(
+                context,
+                async (remoteFileClient, token) =>
+                {
+                    await using var artifactStream = File.OpenRead(artifactPath);
+                    await remoteFileClient.UploadAsync(artifactStream, remotePluginPath, token).ConfigureAwait(false);
+                },
+                ct).ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "[{Title}] Uploaded CoD4x plugin version {Version} from {ArtifactPath} to {RemotePluginPath}",
+                context.Title,
+                version,
+                artifactPath,
+                remotePluginPath);
+
+            return ActionResult.Success(version);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "[{Title}] Failed to upload CoD4x plugin version {Version} from {ArtifactPath} to {RemotePluginPath}",
+                context.Title,
+                version,
+                artifactPath,
+                remotePluginPath);
+
+            return ActionResult.Failure($"Plugin artifact upload failed for version '{version}'.");
         }
     }
 
@@ -490,6 +605,214 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         }
 
         return true;
+    }
+
+    private static bool TryResolveArtifactPath(
+        Cod4xPluginOperationRequest request,
+        out string artifactPath,
+        out string error)
+    {
+        artifactPath = string.Empty;
+        error = string.Empty;
+
+        if (!TryGetExtensionDataString(request.ExtensionData, "artifactPath", out var rawArtifactPath)
+            && !TryGetExtensionDataString(request.ExtensionData, "artifactLocalPath", out rawArtifactPath))
+        {
+            error = "Operation request is missing artifactPath in extension data.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(rawArtifactPath))
+        {
+            error = "Operation request artifactPath is empty.";
+            return false;
+        }
+
+        if (!TryGetCanonicalPath(rawArtifactPath.Trim(), out artifactPath, out error))
+        {
+            return false;
+        }
+
+        if (!TryResolveTrustedArtifactRoot(out var trustedRootPath, out error))
+        {
+            return false;
+        }
+
+        if (!IsPathUnderRoot(artifactPath, trustedRootPath))
+        {
+            error = $"Operation request artifactPath '{artifactPath}' is outside trusted plugin artifact root '{trustedRootPath}'.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetExtensionDataString(
+        IReadOnlyDictionary<string, JsonElement>? extensionData,
+        string key,
+        out string? value)
+    {
+        value = null;
+
+        if (extensionData is null || extensionData.Count == 0)
+        {
+            return false;
+        }
+
+        var match = extensionData.FirstOrDefault(pair =>
+            string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
+
+        if (string.IsNullOrWhiteSpace(match.Key))
+        {
+            return false;
+        }
+
+        if (match.Value.ValueKind == JsonValueKind.String)
+        {
+            value = match.Value.GetString();
+            return true;
+        }
+
+        if (match.Value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
+        {
+            value = match.Value.ToString();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryNormalizePluginRootDirectory(string? pluginRootDirectory, out string normalizedRootDirectory, out string error)
+    {
+        normalizedRootDirectory = string.Empty;
+        error = string.Empty;
+
+        var normalized = string.IsNullOrWhiteSpace(pluginRootDirectory)
+            ? "/plugins"
+            : pluginRootDirectory.Trim();
+
+        normalized = normalized.Replace('\\', '/');
+        if (!normalized.StartsWith('/'))
+        {
+            normalized = $"/{normalized}";
+        }
+
+        if (normalized.Length > 1)
+        {
+            normalized = normalized.TrimEnd('/');
+        }
+
+        var segments = normalized
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(static segment => segment.Trim())
+            .ToArray();
+
+        if (segments.Any(static segment => segment is "." or ".."))
+        {
+            error = "cod4xPlugin.pluginRootDirectory contains invalid traversal segments.";
+            return false;
+        }
+
+        if (segments.Any(static segment => segment.Contains(':')))
+        {
+            error = "cod4xPlugin.pluginRootDirectory contains invalid path characters.";
+            return false;
+        }
+
+        normalizedRootDirectory = segments.Length == 0
+            ? "/"
+            : $"/{string.Join('/', segments)}";
+
+        return true;
+    }
+
+    private static bool TryResolvePluginBinaryExtension(string artifactPath, out string extension, out string error)
+    {
+        extension = string.Empty;
+        error = string.Empty;
+
+        var rawExtension = Path.GetExtension(artifactPath)?.Trim();
+        if (string.IsNullOrWhiteSpace(rawExtension))
+        {
+            error = "Plugin artifact path is missing a file extension. Expected .so or .dll.";
+            return false;
+        }
+
+        if (!string.Equals(rawExtension, ".so", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(rawExtension, ".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            error = $"Plugin artifact extension '{rawExtension}' is not supported. Expected .so or .dll.";
+            return false;
+        }
+
+        extension = rawExtension.ToLowerInvariant();
+        return true;
+    }
+
+    private static bool TryResolveTrustedArtifactRoot(out string trustedRootPath, out string error)
+    {
+        trustedRootPath = string.Empty;
+        error = string.Empty;
+
+        var configuredRoot = Environment.GetEnvironmentVariable(PluginArtifactRootEnvironmentVariable);
+        var candidateRoot = string.IsNullOrWhiteSpace(configuredRoot)
+            ? DefaultPluginArtifactRoot
+            : configuredRoot;
+
+        if (!TryGetCanonicalPath(candidateRoot, out trustedRootPath, out error))
+        {
+            error = $"Configured trusted plugin artifact root is invalid: {error}";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetCanonicalPath(string rawPath, out string canonicalPath, out string error)
+    {
+        canonicalPath = string.Empty;
+        error = string.Empty;
+
+        try
+        {
+            canonicalPath = Path.GetFullPath(rawPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static bool IsPathUnderRoot(string fullPath, string rootPath)
+    {
+        var relativePath = Path.GetRelativePath(rootPath, fullPath);
+        if (Path.IsPathRooted(relativePath))
+        {
+            return false;
+        }
+
+        if (string.Equals(relativePath, "..", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var parentPrefix = $"..{Path.DirectorySeparatorChar}";
+        var altParentPrefix = $"..{Path.AltDirectorySeparatorChar}";
+        return !relativePath.StartsWith(parentPrefix, StringComparison.Ordinal)
+               && !relativePath.StartsWith(altParentPrefix, StringComparison.Ordinal);
+    }
+
+    private static string BuildRemotePluginPath(string rootDirectory, string extension)
+    {
+        var normalizedExtension = string.IsNullOrWhiteSpace(extension)
+            ? ".so"
+            : extension;
+
+        return rootDirectory == "/"
+            ? $"/{PluginName}{normalizedExtension}"
+            : $"{rootDirectory}/{PluginName}{normalizedExtension}";
     }
 
     private static string BuildApiFailureMessage<T>(string operation, ApiResult<T> result)

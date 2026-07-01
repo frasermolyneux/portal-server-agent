@@ -16,12 +16,16 @@ using XtremeIdiots.Portal.Repository.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
 
-public class CoD4xPluginLifecycleServiceTests
+public class CoD4xPluginLifecycleServiceTests : IDisposable
 {
+    private const string PluginArtifactRootEnvironmentVariable = "PORTAL_COD4X_PLUGIN_ARTIFACT_ROOT";
+    private static readonly string TrustedArtifactRoot = Path.Combine(Path.GetTempPath(), "portal-cod4x-plugin-artifacts-test");
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         Converters = { new JsonStringEnumConverter() }
@@ -33,11 +37,17 @@ public class CoD4xPluginLifecycleServiceTests
     private readonly Mock<IServersApiClient> _mockServersApiClient = new();
     private readonly Mock<IVersionedCoD4xRconApi> _mockVersionedCoD4xRconApi = new();
     private readonly Mock<ICoD4xRconApi> _mockCoD4xRconApi = new();
+    private readonly Mock<IRemoteOpsSessionCoordinator> _mockRemoteOpsSessionCoordinator = new();
+    private readonly Mock<IRemoteFileClient> _mockRemoteFileClient = new();
     private readonly TestLogger<CoD4xPluginLifecycleService> _logger = new();
     private readonly Guid _serverId = Guid.NewGuid();
+    private readonly string? _previousArtifactRoot;
 
     public CoD4xPluginLifecycleServiceTests()
     {
+        _previousArtifactRoot = Environment.GetEnvironmentVariable(PluginArtifactRootEnvironmentVariable);
+        Environment.SetEnvironmentVariable(PluginArtifactRootEnvironmentVariable, TrustedArtifactRoot);
+
         _mockRepositoryApiClient.Setup(x => x.GameServerConfigurations)
             .Returns(_mockVersionedGameServerConfigurationsApi.Object);
         _mockVersionedGameServerConfigurationsApi.Setup(x => x.V1)
@@ -72,6 +82,25 @@ public class CoD4xPluginLifecycleServiceTests
                 It.IsAny<CoD4xPluginRequestDto>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessResult("portal-cod4x-plugin version 1.2.3"));
+
+        _mockRemoteFileClient.Setup(x => x.UploadAsync(
+            It.IsAny<Stream>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _mockRemoteOpsSessionCoordinator.Setup(x => x.ExecuteAsync(
+            It.IsAny<ServerContext>(),
+            It.IsAny<Func<IRemoteFileClient, CancellationToken, Task>>(),
+            It.IsAny<CancellationToken>()))
+            .Returns<ServerContext, Func<IRemoteFileClient, CancellationToken, Task>, CancellationToken>((context, operation, cancellationToken) =>
+            operation(_mockRemoteFileClient.Object, cancellationToken));
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(PluginArtifactRootEnvironmentVariable, _previousArtifactRoot);
+        GC.SuppressFinalize(this);
     }
 
     [Fact]
@@ -204,10 +233,12 @@ public class CoD4xPluginLifecycleServiceTests
     [Fact]
     public async Task ExecuteAsync_InstallRequest_SetsSucceededStateAndUpdatesVersions()
     {
+        var artifactPath = CreateTemporaryArtifact(".so");
         var settings = new Cod4xPluginSettingsDocument
         {
             SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
             Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
             RuntimeState = new Cod4xPluginRuntimeState
             {
                 CurrentVersion = "1.0.0"
@@ -215,6 +246,67 @@ public class CoD4xPluginLifecycleServiceTests
             OperationRequest = new Cod4xPluginOperationRequest
             {
                 OperationId = "op-install-1",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Succeeded, final.RuntimeState!.LastOperationStatus);
+            Assert.Equal("1.2.3", final.RuntimeState.CurrentVersion);
+            Assert.Equal("1.0.0", final.RuntimeState.PreviousKnownGoodVersion);
+            Assert.Null(final.OperationRequest);
+            Assert.Null(final.RuntimeState.LastError);
+
+            _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+            _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(
+                It.IsAny<Stream>(),
+                "/fs_homepath/plugins/portal-cod4x-plugin.so",
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_AlreadyOnTargetAndHealthy_DoesNotRedeploy()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-noop-1",
                 Action = Cod4xPluginOperationAction.Install,
                 TargetVersion = "1.2.3",
                 RequestedBy = "tester"
@@ -241,13 +333,170 @@ public class CoD4xPluginLifecycleServiceTests
         Assert.NotNull(final.RuntimeState);
         Assert.Equal(Cod4xPluginOperationStatus.Succeeded, final.RuntimeState!.LastOperationStatus);
         Assert.Equal("1.2.3", final.RuntimeState.CurrentVersion);
-        Assert.Equal("1.0.0", final.RuntimeState.PreviousKnownGoodVersion);
-        Assert.Null(final.OperationRequest);
         Assert.Null(final.RuntimeState.LastError);
+        Assert.Null(final.OperationRequest);
 
-        _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
-        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_MissingArtifactPath_SetsFailedState()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-missing-artifact",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester"
+            }
+        };
+
+        SetupConfiguration(settings);
+
+        var persistedPayloads = new List<UpsertConfigurationDto>();
+        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                _serverId,
+                Cod4xPluginSettingsConstants.Namespace,
+                It.IsAny<UpsertConfigurationDto>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        Assert.True(persistedPayloads.Count >= 2);
+        var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+        Assert.NotNull(final.RuntimeState);
+        Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+        Assert.Contains("missing artifactPath", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_ArtifactOutsideTrustedRoot_SetsFailedState()
+    {
+        var outsideArtifactPath = CreateArtifactOutsideTrustedRoot(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-outside-root",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", outsideArtifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Contains("outside trusted plugin artifact root", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            TryDeleteFile(outsideArtifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_UnexpectedActionException_PersistsFailureAndClearsRequest()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-unexpected-exception",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            _mockRemoteOpsSessionCoordinator.Setup(x => x.ExecuteAsync(
+                    It.IsAny<ServerContext>(),
+                    It.IsAny<Func<IRemoteFileClient, CancellationToken, Task>>(),
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("synthetic failure"));
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Null(final.OperationRequest);
+            Assert.Contains("plugin artifact upload failed", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
     }
 
     [Fact]
@@ -295,8 +544,75 @@ public class CoD4xPluginLifecycleServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_RollbackWithKnownGoodVersion_DeploysAndSetsRollbackSucceeded()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3",
+                PreviousKnownGoodVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-rollback-success",
+                Action = Cod4xPluginOperationAction.Rollback,
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            _mockCoD4xRconApi.Setup(x => x.PluginInfo(
+                    _serverId,
+                    It.IsAny<CoD4xPluginRequestDto>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessResult("portal-cod4x-plugin version 1.0.0"));
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.RollbackSucceeded, final.RuntimeState!.LastOperationStatus);
+            Assert.Equal("1.0.0", final.RuntimeState.CurrentVersion);
+            Assert.Null(final.OperationRequest);
+
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(
+                It.IsAny<Stream>(),
+                "/fs_homepath/plugins/portal-cod4x-plugin.so",
+                It.IsAny<CancellationToken>()), Times.Once);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+            _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_InstallWithEmptyPluginInfo_SetsFailedState()
     {
+        var artifactPath = CreateTemporaryArtifact(".so");
         var settings = new Cod4xPluginSettingsDocument
         {
             SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
@@ -310,38 +626,46 @@ public class CoD4xPluginLifecycleServiceTests
                 OperationId = "op-install-empty-plugin-info",
                 Action = Cod4xPluginOperationAction.Install,
                 TargetVersion = "1.2.3",
-                RequestedBy = "tester"
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
             }
         };
 
-        SetupConfiguration(settings);
+        try
+        {
+            SetupConfiguration(settings);
 
-        _mockCoD4xRconApi.Setup(x => x.PluginInfo(
-                _serverId,
-                It.IsAny<CoD4xPluginRequestDto>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessResult(string.Empty));
+            _mockCoD4xRconApi.Setup(x => x.PluginInfo(
+                    _serverId,
+                    It.IsAny<CoD4xPluginRequestDto>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessResult(string.Empty));
 
-        var persistedPayloads = new List<UpsertConfigurationDto>();
-        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
-                _serverId,
-                Cod4xPluginSettingsConstants.Namespace,
-                It.IsAny<UpsertConfigurationDto>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
-            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
 
-        var service = CreateService();
-        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
 
-        Assert.True(persistedPayloads.Count >= 2);
-        var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
 
-        Assert.NotNull(final.RuntimeState);
-        Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
-        Assert.Equal("1.0.0", final.RuntimeState.CurrentVersion);
-        Assert.Null(final.OperationRequest);
-        Assert.Contains("did not return plugin info output", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Equal("1.0.0", final.RuntimeState.CurrentVersion);
+            Assert.Null(final.OperationRequest);
+            Assert.Contains("did not return plugin info output", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
     }
 
     private CoD4xPluginLifecycleService CreateService()
@@ -349,11 +673,12 @@ public class CoD4xPluginLifecycleServiceTests
         var services = new ServiceCollection();
         services.AddSingleton(_mockRepositoryApiClient.Object);
         services.AddSingleton(_mockServersApiClient.Object);
+        services.AddSingleton(_mockRemoteOpsSessionCoordinator.Object);
         services.AddSingleton<ILogger<CoD4xPluginLifecycleService>>(_logger);
 
         var serviceProvider = services.BuildServiceProvider();
         var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        return new CoD4xPluginLifecycleService(scopeFactory, _logger);
+        return new CoD4xPluginLifecycleService(scopeFactory, _mockRemoteOpsSessionCoordinator.Object, _logger);
     }
 
     private void SetupConfiguration(Cod4xPluginSettingsDocument settings)
@@ -406,6 +731,43 @@ public class CoD4xPluginLifecycleServiceTests
         var result = JsonSerializer.Deserialize<Cod4xPluginSettingsDocument>(payload, JsonOptions);
         Assert.NotNull(result);
         return result;
+    }
+
+    private static Dictionary<string, JsonElement> CreateExtensionData(string key, string value)
+    {
+        return new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+        {
+            [key] = ToJsonStringElement(value)
+        };
+    }
+
+    private static JsonElement ToJsonStringElement(string value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(value));
+        return document.RootElement.Clone();
+    }
+
+    private static string CreateTemporaryArtifact(string extension)
+    {
+        Directory.CreateDirectory(TrustedArtifactRoot);
+        var path = Path.Combine(TrustedArtifactRoot, $"portal-cod4x-plugin-test-{Guid.NewGuid():N}{extension}");
+        File.WriteAllText(path, "binary-content");
+        return path;
+    }
+
+    private static string CreateArtifactOutsideTrustedRoot(string extension)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"portal-cod4x-plugin-outside-root-{Guid.NewGuid():N}{extension}");
+        File.WriteAllText(path, "binary-content");
+        return path;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
     }
 
     private sealed class TestLogger<T> : ILogger<T>
