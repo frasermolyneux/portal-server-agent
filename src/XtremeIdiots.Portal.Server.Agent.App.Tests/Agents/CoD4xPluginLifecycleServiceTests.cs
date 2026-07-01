@@ -249,7 +249,17 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                 Action = Cod4xPluginOperationAction.Install,
                 TargetVersion = "1.2.3",
                 RequestedBy = "tester",
-                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["artifactPath"] = ToJsonElement(artifactPath),
+                    ["healthReportChannel"] = ToJsonElement("cod4x-lifecycle-health"),
+                    ["rollout"] = ToJsonElement(new
+                    {
+                        rolloutStage = "canary",
+                        rolloutApproved = true,
+                        canaryHealthy = true
+                    })
+                }
             }
         };
 
@@ -278,6 +288,22 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.Equal("1.0.0", final.RuntimeState.PreviousKnownGoodVersion);
             Assert.Null(final.OperationRequest);
             Assert.Null(final.RuntimeState.LastError);
+            Assert.NotNull(final.RuntimeState.ExtensionData);
+            Assert.True(final.RuntimeState.ExtensionData!.TryGetValue("healthReport", out var runtimeReport));
+            Assert.Equal("healthy", runtimeReport.GetProperty("HealthStatus").GetString());
+            Assert.Equal("canary", runtimeReport.GetProperty("RolloutStage").GetString());
+
+            Assert.NotNull(final.ExtensionData);
+            Assert.True(final.ExtensionData!.TryGetValue("healthReportChannel", out var reportChannel));
+            Assert.Equal("cod4x-lifecycle-health", reportChannel.GetString());
+            Assert.True(final.ExtensionData.TryGetValue("healthReport", out var documentReport));
+            Assert.Equal("Succeeded", documentReport.GetProperty("Status").GetString());
+            Assert.True(final.ExtensionData.TryGetValue("rollout", out var rollout));
+            Assert.Equal("canary", rollout.GetProperty("rolloutStage").GetString());
+            Assert.True(rollout.GetProperty("rolloutApproved").GetBoolean());
+            Assert.True(rollout.GetProperty("canaryHealthy").GetBoolean());
+            Assert.True(final.ExtensionData.TryGetValue("rolloutEvaluation", out var rolloutEvaluation));
+            Assert.True(rolloutEvaluation.GetProperty("rolloutGatePassed").GetBoolean());
 
             _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
             _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
@@ -340,6 +366,194 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_RolloutGateDenied_SetsFailedStateWithoutDeploy()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-rollout-denied",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["artifactPath"] = ToJsonElement(artifactPath),
+                    ["rolloutApproved"] = ToJsonElement(false),
+                    ["rolloutStage"] = ToJsonElement("ring-1")
+                }
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Contains("not approved", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+            Assert.Null(final.OperationRequest);
+
+            _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_MalformedRolloutApproval_FailsClosedWithoutDeploy()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-rollout-malformed-approval",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["artifactPath"] = ToJsonElement(artifactPath),
+                    ["rolloutApproved"] = ToJsonElement("not-a-bool"),
+                    ["rolloutStage"] = ToJsonElement("ring-2")
+                }
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Contains("approval gate value is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+            Assert.Null(final.OperationRequest);
+
+            _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_MalformedRolloutSoakUntil_FailsClosedWithoutDeploy()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-rollout-malformed-soak",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["artifactPath"] = ToJsonElement(artifactPath),
+                    ["rollout"] = ToJsonElement(new
+                    {
+                        rolloutStage = "ring-3",
+                        rolloutApproved = true,
+                        canaryHealthy = true,
+                        rolloutSoakUntilUtc = "tomorrow"
+                    })
+                }
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Contains("soak-until value is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+            Assert.Null(final.OperationRequest);
+
+            _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
     }
 
     [Fact]
@@ -737,11 +951,11 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     {
         return new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
         {
-            [key] = ToJsonStringElement(value)
+            [key] = ToJsonElement(value)
         };
     }
 
-    private static JsonElement ToJsonStringElement(string value)
+    private static JsonElement ToJsonElement<T>(T value)
     {
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(value));
         return document.RootElement.Clone();
