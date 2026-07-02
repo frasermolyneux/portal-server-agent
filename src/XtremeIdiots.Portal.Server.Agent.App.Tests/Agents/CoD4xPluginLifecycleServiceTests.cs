@@ -602,6 +602,55 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_InstallRequest_ArtifactPathFileDoesNotExist_SetsFailedState()
+    {
+        Directory.CreateDirectory(TrustedArtifactRoot);
+        var missingArtifactPath = Path.Combine(TrustedArtifactRoot, $"portal-cod4x-plugin-missing-{Guid.NewGuid():N}.so");
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-missing-artifact-file",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", missingArtifactPath)
+            }
+        };
+
+        SetupConfiguration(settings);
+
+        var persistedPayloads = new List<UpsertConfigurationDto>();
+        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                _serverId,
+                Cod4xPluginSettingsConstants.Namespace,
+                It.IsAny<UpsertConfigurationDto>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        Assert.True(persistedPayloads.Count >= 2);
+        var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+        Assert.NotNull(final.RuntimeState);
+        Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+        Assert.Contains("does not exist", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_InstallRequest_ArtifactOutsideTrustedRoot_SetsFailedState()
     {
         var outsideArtifactPath = CreateArtifactOutsideTrustedRoot(".so");

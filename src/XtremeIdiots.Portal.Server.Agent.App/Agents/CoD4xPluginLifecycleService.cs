@@ -697,8 +697,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         artifactPath = string.Empty;
         error = string.Empty;
 
-        if (!TryGetExtensionDataString(request.ExtensionData, "artifactPath", out var rawArtifactPath)
-            && !TryGetExtensionDataString(request.ExtensionData, "artifactLocalPath", out rawArtifactPath))
+        if (!TryGetExtensionDataString(request.ExtensionData, "artifactPath", out var rawArtifactPath))
         {
             error = "Operation request is missing artifactPath in extension data.";
             return false;
