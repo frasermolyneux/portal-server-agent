@@ -4,6 +4,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
+using Azure;
+using Azure.Identity;
+using Azure.Storage.Blobs;
+
 using Microsoft.Extensions.DependencyInjection;
 
 using MX.Api.Abstractions;
@@ -46,6 +50,9 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private const string ExtensionKeyRolloutSoakUntilUtc = "rolloutSoakUntilUtc";
     private const string ExtensionKeyRolloutGatePassed = "rolloutGatePassed";
     private const string ExtensionKeyRolloutEvaluation = "rolloutEvaluation";
+    private const string ExtensionKeyArtifactStorageAccountName = "artifactStorageAccountName";
+    private const string ExtensionKeyArtifactContainerName = "artifactContainerName";
+    private const string ExtensionKeyArtifactBlobPath = "artifactBlobPath";
 
     public CoD4xPluginLifecycleService(
         IServiceScopeFactory scopeFactory,
@@ -476,7 +483,16 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         if (!File.Exists(artifactPath))
         {
-            return ActionResult.Failure($"Plugin artifact path '{artifactPath}' does not exist.");
+            var stageResult = await TryStageArtifactFromBlobAsync(request, artifactPath, ct).ConfigureAwait(false);
+            if (!stageResult.IsSuccess)
+            {
+                return ActionResult.Failure($"Plugin artifact path '{artifactPath}' does not exist. {stageResult.ErrorMessage}");
+            }
+
+            if (!File.Exists(artifactPath))
+            {
+                return ActionResult.Failure($"Plugin artifact path '{artifactPath}' does not exist after staging attempt.");
+            }
         }
 
         if (!TryNormalizePluginRootDirectory(settings.PluginRootDirectory, out var rootDirectory, out var rootDirectoryError))
@@ -761,6 +777,279 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         }
 
         return false;
+    }
+
+    private async Task<ArtifactStageResult> TryStageArtifactFromBlobAsync(
+        Cod4xPluginOperationRequest request,
+        string artifactPath,
+        CancellationToken ct)
+    {
+        if (!TryResolveArtifactBlobReference(request, artifactPath, out var blobReference, out var resolveError))
+        {
+            return ArtifactStageResult.Failure(resolveError);
+        }
+
+        try
+        {
+            var localDirectory = Path.GetDirectoryName(artifactPath);
+            if (string.IsNullOrWhiteSpace(localDirectory))
+            {
+                return ArtifactStageResult.Failure("Artifact local directory could not be determined.");
+            }
+
+            Directory.CreateDirectory(localDirectory);
+
+            var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+            {
+                ManagedIdentityClientId = Environment.GetEnvironmentVariable("AZURE_CLIENT_ID")
+            });
+
+            var storageAccountEndpoint = new Uri($"https://{blobReference.StorageAccountName}.blob.core.windows.net");
+            var blobServiceClient = new BlobServiceClient(storageAccountEndpoint, credential);
+            var blobClient = blobServiceClient
+                .GetBlobContainerClient(blobReference.ContainerName)
+                .GetBlobClient(blobReference.BlobPath);
+
+            var existsResponse = await blobClient.ExistsAsync(ct).ConfigureAwait(false);
+            if (!existsResponse.Value)
+            {
+                return ArtifactStageResult.Failure(
+                    $"Artifact blob '{blobReference.BlobPath}' was not found in container '{blobReference.ContainerName}' on storage account '{blobReference.StorageAccountName}'.");
+            }
+
+            await blobClient.DownloadToAsync(artifactPath, ct).ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "Staged CoD4x artifact blob {BlobPath} from storage account {StorageAccountName} container {ContainerName} to {ArtifactPath}",
+                blobReference.BlobPath,
+                blobReference.StorageAccountName,
+                blobReference.ContainerName,
+                artifactPath);
+
+            return ArtifactStageResult.Success();
+        }
+        catch (Exception ex) when (ex is RequestFailedException or CredentialUnavailableException or AuthenticationFailedException or IOException or UnauthorizedAccessException or UriFormatException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to stage CoD4x artifact from storage account {StorageAccountName} container {ContainerName} blob {BlobPath} to {ArtifactPath}",
+                blobReference.StorageAccountName,
+                blobReference.ContainerName,
+                blobReference.BlobPath,
+                artifactPath);
+
+            return ArtifactStageResult.Failure($"Artifact staging failed: {ex.Message}");
+        }
+    }
+
+    private static bool TryResolveArtifactBlobReference(
+        Cod4xPluginOperationRequest request,
+        string artifactPath,
+        out ArtifactBlobReference blobReference,
+        out string error)
+    {
+        blobReference = default;
+        error = string.Empty;
+
+        if (!TryGetExtensionDataString(request.ExtensionData, ExtensionKeyArtifactStorageAccountName, out var storageAccountName)
+            || string.IsNullOrWhiteSpace(storageAccountName))
+        {
+            error = $"Operation request extension data is missing {ExtensionKeyArtifactStorageAccountName}.";
+            return false;
+        }
+
+        storageAccountName = storageAccountName.Trim();
+        if (!IsValidStorageAccountName(storageAccountName))
+        {
+            error = $"Operation request extension data {ExtensionKeyArtifactStorageAccountName} is invalid.";
+            return false;
+        }
+
+        if (!TryGetExtensionDataString(request.ExtensionData, ExtensionKeyArtifactContainerName, out var containerName)
+            || string.IsNullOrWhiteSpace(containerName))
+        {
+            error = $"Operation request extension data is missing {ExtensionKeyArtifactContainerName}.";
+            return false;
+        }
+
+        containerName = containerName.Trim();
+        if (!IsValidContainerName(containerName))
+        {
+            error = $"Operation request extension data {ExtensionKeyArtifactContainerName} is invalid.";
+            return false;
+        }
+
+        if (!TryDeriveBlobPathFromArtifactPath(artifactPath, out var derivedBlobPath, out error))
+        {
+            return false;
+        }
+
+        string blobPath = derivedBlobPath;
+        if (TryGetExtensionDataString(request.ExtensionData, ExtensionKeyArtifactBlobPath, out var blobPathFromRequest)
+            && !string.IsNullOrWhiteSpace(blobPathFromRequest))
+        {
+            var requestedBlobPath = NormalizeBlobPath(blobPathFromRequest);
+            if (!IsValidBlobPath(requestedBlobPath))
+            {
+                error = "Artifact blob path is invalid.";
+                return false;
+            }
+
+            if (!string.Equals(requestedBlobPath, derivedBlobPath, StringComparison.Ordinal))
+            {
+                error = "Artifact blob path does not match artifactPath under trusted root.";
+                return false;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(blobPath))
+        {
+            error = "Artifact blob path is empty.";
+            return false;
+        }
+
+        if (!IsValidBlobPath(blobPath))
+        {
+            error = "Artifact blob path is invalid.";
+            return false;
+        }
+
+        blobReference = new ArtifactBlobReference(
+            storageAccountName,
+            containerName,
+            blobPath);
+        return true;
+    }
+
+    private static bool TryDeriveBlobPathFromArtifactPath(string artifactPath, out string blobPath, out string error)
+    {
+        blobPath = string.Empty;
+        error = string.Empty;
+
+        if (!TryResolveTrustedArtifactRoot(out var trustedRootPath, out error))
+        {
+            return false;
+        }
+
+        var relativePath = Path.GetRelativePath(trustedRootPath, artifactPath);
+        if (string.IsNullOrWhiteSpace(relativePath)
+            || relativePath.StartsWith("..", StringComparison.Ordinal)
+            || Path.IsPathRooted(relativePath))
+        {
+            error = "Artifact blob path could not be derived from artifactPath under trusted root.";
+            return false;
+        }
+
+        blobPath = NormalizeBlobPath(relativePath);
+        if (string.IsNullOrWhiteSpace(blobPath))
+        {
+            error = "Artifact blob path is empty.";
+            return false;
+        }
+
+        if (!IsValidBlobPath(blobPath))
+        {
+            error = "Artifact blob path is invalid.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string NormalizeBlobPath(string value)
+    {
+        return value.Trim().Replace('\\', '/').TrimStart('/');
+    }
+
+    private static bool IsValidStorageAccountName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length is < 3 or > 24)
+        {
+            return false;
+        }
+
+        return value.All(static ch => (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'));
+    }
+
+    private static bool IsValidContainerName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length is < 3 or > 63)
+        {
+            return false;
+        }
+
+        if (value.StartsWith('-') || value.EndsWith('-'))
+        {
+            return false;
+        }
+
+        if (value.Contains("--", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var ch in value)
+        {
+            var isLowercaseLetter = ch >= 'a' && ch <= 'z';
+            var isDigit = ch >= '0' && ch <= '9';
+            if (!isLowercaseLetter && !isDigit && ch != '-')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsValidBlobPath(string value)
+    {
+        var normalized = value.Replace('\\', '/').Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        if (normalized.Contains("//", StringComparison.Ordinal)
+            || normalized.Contains('?', StringComparison.Ordinal)
+            || normalized.Contains('#', StringComparison.Ordinal)
+            || normalized.Contains('%', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (normalized.StartsWith('/') || normalized.EndsWith('/'))
+        {
+            return false;
+        }
+
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var segment in segments)
+        {
+            if (segment is "." or "..")
+            {
+                return false;
+            }
+
+            if (segment.Contains('\\') || segment.Contains(':'))
+            {
+                return false;
+            }
+
+            foreach (var ch in segment)
+            {
+                if (char.IsControl(ch))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private static bool TryNormalizePluginRootDirectory(string? pluginRootDirectory, out string normalizedRootDirectory, out string error)
@@ -1502,5 +1791,16 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         public string? LastError { get; set; }
 
         public string? Details { get; set; }
+    }
+
+    private readonly record struct ArtifactBlobReference(
+        string StorageAccountName,
+        string ContainerName,
+        string BlobPath);
+
+    private readonly record struct ArtifactStageResult(bool IsSuccess, string ErrorMessage)
+    {
+        public static ArtifactStageResult Success() => new(true, string.Empty);
+        public static ArtifactStageResult Failure(string errorMessage) => new(false, errorMessage);
     }
 }

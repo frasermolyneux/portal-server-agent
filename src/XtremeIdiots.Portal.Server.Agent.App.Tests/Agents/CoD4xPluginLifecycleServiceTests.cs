@@ -651,6 +651,171 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_InstallRequest_InvalidArtifactStorageAccountMetadata_SetsFailedState()
+    {
+        Directory.CreateDirectory(TrustedArtifactRoot);
+        var missingArtifactPath = Path.Combine(TrustedArtifactRoot, $"portal-cod4x-plugin-missing-{Guid.NewGuid():N}.so");
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-invalid-artifact-storage-account",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["artifactPath"] = ToJsonElement(missingArtifactPath),
+                    ["artifactStorageAccountName"] = ToJsonElement("Invalid-Name"),
+                    ["artifactContainerName"] = ToJsonElement("plugin-artifacts"),
+                    ["artifactBlobPath"] = ToJsonElement("releases/1.2.3/linux/x86_64/portal-cod4x-plugin.so")
+                }
+            }
+        };
+
+        SetupConfiguration(settings);
+
+        var persistedPayloads = new List<UpsertConfigurationDto>();
+        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                _serverId,
+                Cod4xPluginSettingsConstants.Namespace,
+                It.IsAny<UpsertConfigurationDto>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        Assert.True(persistedPayloads.Count >= 2);
+        var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+        Assert.NotNull(final.RuntimeState);
+        Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+        Assert.Contains("artifactStorageAccountName is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_InvalidArtifactBlobPathMetadata_SetsFailedState()
+    {
+        Directory.CreateDirectory(TrustedArtifactRoot);
+        var missingArtifactPath = Path.Combine(TrustedArtifactRoot, $"portal-cod4x-plugin-missing-{Guid.NewGuid():N}.so");
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-invalid-artifact-blob-path",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["artifactPath"] = ToJsonElement(missingArtifactPath),
+                    ["artifactStorageAccountName"] = ToJsonElement("storcod4xartifacts"),
+                    ["artifactContainerName"] = ToJsonElement("plugin-artifacts"),
+                    ["artifactBlobPath"] = ToJsonElement("../portal-cod4x-plugin.so")
+                }
+            }
+        };
+
+        SetupConfiguration(settings);
+
+        var persistedPayloads = new List<UpsertConfigurationDto>();
+        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                _serverId,
+                Cod4xPluginSettingsConstants.Namespace,
+                It.IsAny<UpsertConfigurationDto>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        Assert.True(persistedPayloads.Count >= 2);
+        var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+        Assert.NotNull(final.RuntimeState);
+        Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+        Assert.Contains("Artifact blob path is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_ArtifactBlobPathMismatchWithArtifactPath_SetsFailedState()
+    {
+        Directory.CreateDirectory(TrustedArtifactRoot);
+        var missingArtifactPath = Path.Combine(TrustedArtifactRoot, $"portal-cod4x-plugin-missing-{Guid.NewGuid():N}.so");
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-artifact-blob-mismatch",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["artifactPath"] = ToJsonElement(missingArtifactPath),
+                    ["artifactStorageAccountName"] = ToJsonElement("storcod4xartifacts"),
+                    ["artifactContainerName"] = ToJsonElement("plugin-artifacts"),
+                    ["artifactBlobPath"] = ToJsonElement("releases/9.9.9/linux/x86_64/portal-cod4x-plugin.so")
+                }
+            }
+        };
+
+        SetupConfiguration(settings);
+
+        var persistedPayloads = new List<UpsertConfigurationDto>();
+        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                _serverId,
+                Cod4xPluginSettingsConstants.Namespace,
+                It.IsAny<UpsertConfigurationDto>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        Assert.True(persistedPayloads.Count >= 2);
+        var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+        Assert.NotNull(final.RuntimeState);
+        Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+        Assert.Contains("does not match artifactPath", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_InstallRequest_ArtifactOutsideTrustedRoot_SetsFailedState()
     {
         var outsideArtifactPath = CreateArtifactOutsideTrustedRoot(".so");
