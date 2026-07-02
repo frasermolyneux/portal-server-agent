@@ -15,6 +15,7 @@ using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.AdminActions;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Players;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
 
@@ -26,6 +27,7 @@ public class CoD4xBanReconciliationServiceTests
     private readonly Mock<IAdminActionsApi> _mockAdminActionsApi = new();
     private readonly Mock<IVersionedPlayersApi> _mockVersionedPlayersApi = new();
     private readonly Mock<IPlayersApi> _mockPlayersApi = new();
+    private readonly Mock<IEventPublisher> _mockEventPublisher = new();
 
     private readonly Guid _serverId = Guid.NewGuid();
 
@@ -40,6 +42,7 @@ public class CoD4xBanReconciliationServiceTests
         return new CoD4xBanReconciliationService(
             _mockRepositoryApiClient.Object,
             _mockCoD4xRconApi.Object,
+            _mockEventPublisher.Object,
             NullLogger<CoD4xBanReconciliationService>.Instance);
     }
 
@@ -101,6 +104,290 @@ public class CoD4xBanReconciliationServiceTests
         _mockCoD4xRconApi.Verify(c => c.BanPlayerByPlayerIdentifier(
             _serverId,
             It.Is<CoD4xPermBanRequestDto>(r => r.PlayerIdentifier == "cod4x-player-1"),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        _mockEventPublisher.Verify(x => x.PublishBanAppliedAsync(
+            _serverId,
+            It.IsAny<string>(),
+            It.IsAny<long>(),
+            "cod4x-player-1",
+            "cod4x-player-1",
+            false,
+            null,
+            "Portal",
+            It.Is<string>(s => s.Contains("Reconciled missing permanent ban", StringComparison.Ordinal)),
+            null,
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_PublishesBanSyncFailed_WhenReapplyFails()
+    {
+        // Arrange
+        _mockCoD4xRconApi.Setup(c => c.DumpBanList(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanListResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xBanListResponseDto>(new CoD4xBanListResponseDto
+                {
+                    Entries = [],
+                    ActiveBanCount = 0,
+                    RawResponse = string.Empty
+                })));
+
+        var activeBan = CreateAdminActionDto(
+            Guid.Parse("33333333-3333-3333-3333-333333333333"),
+            "cod4x-player-2",
+            AdminActionType.Ban,
+            null);
+
+        _mockAdminActionsApi.Setup(a => a.GetAdminActions(
+                GameType.CallOfDuty4x,
+                null,
+                null,
+                AdminActionFilter.ActiveBans,
+                0,
+                It.IsAny<int>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<AdminActionDto>>(
+                HttpStatusCode.OK,
+                new ApiResponse<CollectionModel<AdminActionDto>>(new CollectionModel<AdminActionDto>
+                {
+                    Items = [activeBan]
+                })));
+
+        _mockCoD4xRconApi.Setup(c => c.BanPlayerByPlayerIdentifier(
+                _serverId,
+                It.IsAny<CoD4xPermBanRequestDto>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanCommandResponseDto>(
+                HttpStatusCode.InternalServerError,
+                new ApiResponse<CoD4xBanCommandResponseDto>(new ApiError("RCON_ERROR", "rcon failed"))));
+
+        var service = CreateService();
+
+        // Act
+        await service.ReconcileAsync(_serverId, "CallOfDuty4x");
+
+        // Assert
+        _mockEventPublisher.Verify(x => x.PublishBanSyncFailedAsync(
+            _serverId,
+            It.IsAny<string>(),
+            It.IsAny<long>(),
+            "ReapplyPortalBan",
+            It.Is<string>(s => s.Contains("Status code", StringComparison.Ordinal)),
+            "Agent",
+            "cod4x-player-2",
+            null,
+            null,
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_DoesNotThrow_WhenBanAppliedPublishFails()
+    {
+        // Arrange
+        _mockCoD4xRconApi.Setup(c => c.DumpBanList(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanListResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xBanListResponseDto>(new CoD4xBanListResponseDto
+                {
+                    Entries = [],
+                    ActiveBanCount = 0,
+                    RawResponse = string.Empty
+                })));
+
+        var activeBan = CreateAdminActionDto(
+            Guid.Parse("77777777-7777-7777-7777-777777777777"),
+            "cod4x-player-7",
+            AdminActionType.Ban,
+            null);
+
+        _mockAdminActionsApi.Setup(a => a.GetAdminActions(
+                GameType.CallOfDuty4x,
+                null,
+                null,
+                AdminActionFilter.ActiveBans,
+                0,
+                It.IsAny<int>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<AdminActionDto>>(
+                HttpStatusCode.OK,
+                new ApiResponse<CollectionModel<AdminActionDto>>(new CollectionModel<AdminActionDto>
+                {
+                    Items = [activeBan]
+                })));
+
+        _mockCoD4xRconApi.Setup(c => c.BanPlayerByPlayerIdentifier(
+                _serverId,
+                It.IsAny<CoD4xPermBanRequestDto>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanCommandResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xBanCommandResponseDto>(new CoD4xBanCommandResponseDto
+                {
+                    IsSuccess = true,
+                    Outcome = "Success",
+                    PlayerIdentifier = "cod4x-player-7"
+                })));
+
+        _mockEventPublisher.Setup(x => x.PublishBanAppliedAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<string>(),
+                It.IsAny<long>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("publish failed"));
+
+        var service = CreateService();
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => service.ReconcileAsync(_serverId, "CallOfDuty4x"));
+
+        // Assert
+        Assert.Null(ex);
+        _mockCoD4xRconApi.Verify(c => c.BanPlayerByPlayerIdentifier(
+            _serverId,
+            It.Is<CoD4xPermBanRequestDto>(r => r.PlayerIdentifier == "cod4x-player-7"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_DoesNotThrow_WhenBanSyncFailedPublishFails()
+    {
+        // Arrange
+        _mockCoD4xRconApi.Setup(c => c.DumpBanList(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanListResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xBanListResponseDto>(new CoD4xBanListResponseDto
+                {
+                    Entries = [],
+                    ActiveBanCount = 0,
+                    RawResponse = string.Empty
+                })));
+
+        var activeBan = CreateAdminActionDto(
+            Guid.Parse("88888888-8888-8888-8888-888888888888"),
+            "cod4x-player-8",
+            AdminActionType.Ban,
+            null);
+
+        _mockAdminActionsApi.Setup(a => a.GetAdminActions(
+                GameType.CallOfDuty4x,
+                null,
+                null,
+                AdminActionFilter.ActiveBans,
+                0,
+                It.IsAny<int>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<AdminActionDto>>(
+                HttpStatusCode.OK,
+                new ApiResponse<CollectionModel<AdminActionDto>>(new CollectionModel<AdminActionDto>
+                {
+                    Items = [activeBan]
+                })));
+
+        _mockCoD4xRconApi.Setup(c => c.BanPlayerByPlayerIdentifier(
+                _serverId,
+                It.IsAny<CoD4xPermBanRequestDto>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanCommandResponseDto>(
+                HttpStatusCode.InternalServerError,
+                new ApiResponse<CoD4xBanCommandResponseDto>(new ApiError("RCON_ERROR", "rcon failed"))));
+
+        _mockEventPublisher.Setup(x => x.PublishBanSyncFailedAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<string>(),
+                It.IsAny<long>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("publish failed"));
+
+        var service = CreateService();
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => service.ReconcileAsync(_serverId, "CallOfDuty4x"));
+
+        // Assert
+        Assert.Null(ex);
+        _mockCoD4xRconApi.Verify(c => c.BanPlayerByPlayerIdentifier(
+            _serverId,
+            It.Is<CoD4xPermBanRequestDto>(r => r.PlayerIdentifier == "cod4x-player-8"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_WhenRconThrows_ContinuesAndPublishesBanSyncFailed()
+    {
+        // Arrange
+        _mockCoD4xRconApi.Setup(c => c.DumpBanList(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanListResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xBanListResponseDto>(new CoD4xBanListResponseDto
+                {
+                    Entries = [],
+                    ActiveBanCount = 0,
+                    RawResponse = string.Empty
+                })));
+
+        var activeBan = CreateAdminActionDto(
+            Guid.Parse("99999999-9999-9999-9999-999999999999"),
+            "cod4x-player-9",
+            AdminActionType.Ban,
+            null);
+
+        _mockAdminActionsApi.Setup(a => a.GetAdminActions(
+                GameType.CallOfDuty4x,
+                null,
+                null,
+                AdminActionFilter.ActiveBans,
+                0,
+                It.IsAny<int>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<AdminActionDto>>(
+                HttpStatusCode.OK,
+                new ApiResponse<CollectionModel<AdminActionDto>>(new CollectionModel<AdminActionDto>
+                {
+                    Items = [activeBan]
+                })));
+
+        _mockCoD4xRconApi.Setup(c => c.BanPlayerByPlayerIdentifier(
+                _serverId,
+                It.IsAny<CoD4xPermBanRequestDto>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("rcon exception"));
+
+        var service = CreateService();
+
+        // Act
+        var ex = await Record.ExceptionAsync(() => service.ReconcileAsync(_serverId, "CallOfDuty4x"));
+
+        // Assert
+        Assert.Null(ex);
+        _mockEventPublisher.Verify(x => x.PublishBanSyncFailedAsync(
+            _serverId,
+            It.IsAny<string>(),
+            It.IsAny<long>(),
+            "ReapplyPortalBan",
+            It.Is<string>(s => s.Contains("rcon exception", StringComparison.Ordinal)),
+            "Agent",
+            "cod4x-player-9",
+            null,
+            null,
             It.IsAny<CancellationToken>()), Times.Once);
     }
 

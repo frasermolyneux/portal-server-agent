@@ -316,6 +316,113 @@ public class ServiceBusEventPublisherTests
     }
 
     [Fact]
+    public async Task PublishBanAppliedAsync_SendsToCorrectQueueAndPayload()
+    {
+        ServiceBusMessage? captured = null;
+        _senderMock
+            .Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((msg, _) => captured = msg)
+            .Returns(Task.CompletedTask);
+
+        var expiresUtc = new DateTime(2026, 7, 3, 12, 0, 0, DateTimeKind.Utc);
+
+        await _publisher.PublishBanAppliedAsync(
+            ServerId,
+            GameType,
+            SequenceId,
+            "guid-ban-1",
+            "Player One",
+            true,
+            expiresUtc,
+            "Portal",
+            "Manual moderation",
+            "corr-1");
+
+        _clientMock.Verify(c => c.CreateSender("ban-applied"), Times.Once);
+
+        Assert.NotNull(captured);
+        var json = captured!.Body.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.Equal("guid-ban-1", root.GetProperty("playerGuid").GetString());
+        Assert.Equal("Player One", root.GetProperty("playerName").GetString());
+        Assert.True(root.GetProperty("isTemporary").GetBoolean());
+        Assert.Equal(expiresUtc, root.GetProperty("expiresUtc").GetDateTime());
+        Assert.Equal("Portal", root.GetProperty("source").GetString());
+        Assert.Equal("Manual moderation", root.GetProperty("reason").GetString());
+        Assert.Equal("corr-1", root.GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
+    public async Task PublishBanLiftAppliedAsync_SendsToCorrectQueueAndPayload()
+    {
+        ServiceBusMessage? captured = null;
+        _senderMock
+            .Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((msg, _) => captured = msg)
+            .Returns(Task.CompletedTask);
+
+        await _publisher.PublishBanLiftAppliedAsync(
+            ServerId,
+            GameType,
+            SequenceId,
+            "guid-ban-2",
+            "Player Two",
+            "Portal",
+            "Lifted by moderator",
+            "corr-2");
+
+        _clientMock.Verify(c => c.CreateSender("ban-lift-applied"), Times.Once);
+
+        Assert.NotNull(captured);
+        var json = captured!.Body.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.Equal("guid-ban-2", root.GetProperty("playerGuid").GetString());
+        Assert.Equal("Player Two", root.GetProperty("playerName").GetString());
+        Assert.Equal("Portal", root.GetProperty("source").GetString());
+        Assert.Equal("Lifted by moderator", root.GetProperty("liftReason").GetString());
+        Assert.Equal("corr-2", root.GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
+    public async Task PublishBanSyncFailedAsync_SendsToCorrectQueueAndPayload()
+    {
+        ServiceBusMessage? captured = null;
+        _senderMock
+            .Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((msg, _) => captured = msg)
+            .Returns(Task.CompletedTask);
+
+        await _publisher.PublishBanSyncFailedAsync(
+            ServerId,
+            GameType,
+            SequenceId,
+            "ApplyPortalBan",
+            "RCON timeout",
+            "Agent",
+            "guid-ban-3",
+            "Player Three",
+            "corr-3");
+
+        _clientMock.Verify(c => c.CreateSender("ban-sync-failed"), Times.Once);
+
+        Assert.NotNull(captured);
+        var json = captured!.Body.ToString();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.Equal("ApplyPortalBan", root.GetProperty("operation").GetString());
+        Assert.Equal("RCON timeout", root.GetProperty("failureReason").GetString());
+        Assert.Equal("Agent", root.GetProperty("source").GetString());
+        Assert.Equal("guid-ban-3", root.GetProperty("playerGuid").GetString());
+        Assert.Equal("Player Three", root.GetProperty("playerName").GetString());
+        Assert.Equal("corr-3", root.GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
     public async Task PublishAsync_UnknownEventType_DoesNotSend()
     {
         var unknownEvent = new UnknownTestEvent { Timestamp = DateTime.UtcNow };

@@ -33,4 +33,28 @@ public interface IEventPublisher : IAsyncDisposable
     /// </summary>
     Task PublishBanDetectedAsync(Guid serverId, string gameType, long sequenceId,
         IReadOnlyList<DetectedBanEntry> newBans, CancellationToken ct = default);
+
+    /// <summary>
+    /// Publish an event when a ban has been successfully applied on the game server.
+    /// </summary>
+    Task PublishBanAppliedAsync(Guid serverId, string gameType, long sequenceId,
+        string playerGuid, string playerName, bool isTemporary, DateTime? expiresUtc,
+        string source, string reason, string? correlationId = null,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Publish an event when an existing ban has been lifted on the game server.
+    /// </summary>
+    Task PublishBanLiftAppliedAsync(Guid serverId, string gameType, long sequenceId,
+        string playerGuid, string playerName,
+        string source, string liftReason, string? correlationId = null,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Publish an event when a ban sync operation fails.
+    /// </summary>
+    Task PublishBanSyncFailedAsync(Guid serverId, string gameType, long sequenceId,
+        string operation, string failureReason, string source,
+        string? playerGuid = null, string? playerName = null, string? correlationId = null,
+        CancellationToken ct = default);
 }

@@ -6,12 +6,14 @@ using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.AdminActions;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Players;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
+using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
 public sealed class CoD4xBanReconciliationService(
     IRepositoryApiClient repositoryApiClient,
     ICoD4xRconApi coD4xRconApi,
+    IEventPublisher eventPublisher,
     ILogger<CoD4xBanReconciliationService> logger) : ICoD4xBanReconciliationService
 {
     private const int ActiveBanPageSize = 200;
@@ -40,7 +42,7 @@ public sealed class CoD4xBanReconciliationService(
             var portalActiveBansByIdentifier = await GetPortalActiveBansByIdentifierAsync(ct).ConfigureAwait(false);
 
             await ImportServerOnlyBansAsync(serverId, serverBansByIdentifier, portalActiveBansByIdentifier, ct).ConfigureAwait(false);
-            await ReapplyPortalOnlyBansAsync(serverId, serverBansByIdentifier, portalActiveBansByIdentifier, ct).ConfigureAwait(false);
+            await ReapplyPortalOnlyBansAsync(serverId, gameType, serverBansByIdentifier, portalActiveBansByIdentifier, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -202,6 +204,7 @@ public sealed class CoD4xBanReconciliationService(
 
     private async Task ReapplyPortalOnlyBansAsync(
         Guid serverId,
+        string? gameType,
         IReadOnlyDictionary<string, CoD4xBanEntryDto> serverBansByIdentifier,
         IReadOnlyDictionary<string, PortalBanExpectation> portalActiveBansByIdentifier,
         CancellationToken ct)
@@ -217,31 +220,70 @@ public sealed class CoD4xBanReconciliationService(
 
             ApiResult<CoD4xBanCommandResponseDto> result;
 
-            if (portalBan.IsTemporary)
+            try
             {
-                var durationMinutes = Math.Max(portalBan.DurationMinutes ?? 1, 1);
-                result = await coD4xRconApi.TempBanPlayerByPlayerIdentifier(
-                    serverId,
-                    new CoD4xTempBanRequestDto
-                    {
-                        PlayerIdentifier = portalBan.PlayerIdentifier,
-                        DurationMinutes = durationMinutes
-                    },
-                    ct).ConfigureAwait(false);
+                if (portalBan.IsTemporary)
+                {
+                    var durationMinutes = Math.Max(portalBan.DurationMinutes ?? 1, 1);
+                    result = await coD4xRconApi.TempBanPlayerByPlayerIdentifier(
+                        serverId,
+                        new CoD4xTempBanRequestDto
+                        {
+                            PlayerIdentifier = portalBan.PlayerIdentifier,
+                            DurationMinutes = durationMinutes
+                        },
+                        ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    result = await coD4xRconApi.BanPlayerByPlayerIdentifier(
+                        serverId,
+                        new CoD4xPermBanRequestDto
+                        {
+                            PlayerIdentifier = portalBan.PlayerIdentifier
+                        },
+                        ct).ConfigureAwait(false);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                result = await coD4xRconApi.BanPlayerByPlayerIdentifier(
+                await TryPublishBanSyncFailedAsync(
                     serverId,
-                    new CoD4xPermBanRequestDto
-                    {
-                        PlayerIdentifier = portalBan.PlayerIdentifier
-                    },
+                    gameType,
+                    "ReapplyPortalBan",
+                    ex.Message,
+                    portalBan.PlayerIdentifier,
+                    null,
                     ct).ConfigureAwait(false);
+
+                logger.LogWarning(
+                    ex,
+                    "Exception while reapplying CoD4x {BanType} for {PlayerIdentifier} on server {ServerId}",
+                    portalBan.IsTemporary ? "temp ban" : "ban",
+                    portalBan.PlayerIdentifier,
+                    serverId);
+                continue;
             }
 
             if (!result.IsSuccess || result.Result?.Data?.IsSuccess != true)
             {
+                var detailedError = result.Result?.Errors?.FirstOrDefault()?.Message;
+                var failureReason =
+                    !string.IsNullOrWhiteSpace(detailedError)
+                        ? detailedError
+                        : !string.IsNullOrWhiteSpace(result.Result?.Data?.ErrorMessage)
+                            ? result.Result.Data.ErrorMessage
+                            : $"Status code {result.StatusCode}";
+
+                await TryPublishBanSyncFailedAsync(
+                    serverId,
+                    gameType,
+                    "ReapplyPortalBan",
+                    failureReason,
+                    portalBan.PlayerIdentifier,
+                    null,
+                    ct).ConfigureAwait(false);
+
                 logger.LogWarning(
                     "Failed to reapply CoD4x {BanType} for {PlayerIdentifier} on server {ServerId}. Status={StatusCode}, Error={Error}",
                     portalBan.IsTemporary ? "temp ban" : "ban",
@@ -251,6 +293,21 @@ public sealed class CoD4xBanReconciliationService(
                     result.Result?.Data?.ErrorMessage ?? "Unknown");
                 continue;
             }
+
+            await TryPublishBanAppliedAsync(
+                serverId,
+                gameType,
+                portalBan.PlayerIdentifier,
+                portalBan.PlayerIdentifier,
+                portalBan.IsTemporary,
+                portalBan.IsTemporary && portalBan.DurationMinutes.HasValue
+                    ? DateTime.UtcNow.AddMinutes(portalBan.DurationMinutes.Value)
+                    : null,
+                "Portal",
+                portalBan.IsTemporary
+                    ? "Reconciled missing temporary ban from portal"
+                    : "Reconciled missing permanent ban from portal",
+                ct).ConfigureAwait(false);
 
             reapplied++;
         }
@@ -329,6 +386,72 @@ public sealed class CoD4xBanReconciliationService(
         }
 
         return (AdminActionType.Ban, null);
+    }
+
+    private async Task TryPublishBanAppliedAsync(
+        Guid serverId,
+        string? gameType,
+        string playerGuid,
+        string playerName,
+        bool isTemporary,
+        DateTime? expiresUtc,
+        string source,
+        string reason,
+        CancellationToken ct)
+    {
+        try
+        {
+            await eventPublisher.PublishBanAppliedAsync(
+                serverId,
+                gameType ?? nameof(GameType.CallOfDuty4x),
+                DateTime.UtcNow.Ticks,
+                playerGuid,
+                playerName,
+                isTemporary,
+                expiresUtc,
+                source,
+                reason,
+                null,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to publish BanAppliedEvent during CoD4x reconciliation for server {ServerId}, player {PlayerGuid}",
+                serverId,
+                playerGuid);
+        }
+    }
+
+    private async Task TryPublishBanSyncFailedAsync(
+        Guid serverId,
+        string? gameType,
+        string operation,
+        string failureReason,
+        string? playerGuid,
+        string? playerName,
+        CancellationToken ct)
+    {
+        try
+        {
+            await eventPublisher.PublishBanSyncFailedAsync(
+                serverId,
+                gameType ?? nameof(GameType.CallOfDuty4x),
+                DateTime.UtcNow.Ticks,
+                operation,
+                failureReason,
+                "Agent",
+                playerGuid,
+                playerName,
+                null,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to publish BanSyncFailedEvent during CoD4x reconciliation for server {ServerId}",
+                serverId);
+        }
     }
 
     private sealed record PortalBanExpectation(string PlayerIdentifier, bool IsTemporary, int? DurationMinutes)

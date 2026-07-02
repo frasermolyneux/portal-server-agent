@@ -135,6 +135,108 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
     }
 
     /// <inheritdoc />
+    public async Task PublishBanAppliedAsync(
+        Guid serverId,
+        string gameType,
+        long sequenceId,
+        string playerGuid,
+        string playerName,
+        bool isTemporary,
+        DateTime? expiresUtc,
+        string source,
+        string reason,
+        string? correlationId = null,
+        CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+
+        var evt = new SbEvents.BanAppliedEvent
+        {
+            EventGeneratedUtc = now,
+            EventPublishedUtc = now,
+            ServerId = serverId,
+            GameType = gameType,
+            SequenceId = sequenceId,
+            PlayerGuid = playerGuid,
+            PlayerName = playerName,
+            IsTemporary = isTemporary,
+            ExpiresUtc = expiresUtc,
+            Source = source,
+            Reason = reason,
+            CorrelationId = correlationId
+        };
+
+        var body = JsonSerializer.Serialize(evt, JsonOptions);
+        await SendAsync(Queues.BanApplied, body, serverId, sequenceId, nameof(SbEvents.BanAppliedEvent), ct);
+    }
+
+    /// <inheritdoc />
+    public async Task PublishBanLiftAppliedAsync(
+        Guid serverId,
+        string gameType,
+        long sequenceId,
+        string playerGuid,
+        string playerName,
+        string source,
+        string liftReason,
+        string? correlationId = null,
+        CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+
+        var evt = new SbEvents.BanLiftAppliedEvent
+        {
+            EventGeneratedUtc = now,
+            EventPublishedUtc = now,
+            ServerId = serverId,
+            GameType = gameType,
+            SequenceId = sequenceId,
+            PlayerGuid = playerGuid,
+            PlayerName = playerName,
+            Source = source,
+            LiftReason = liftReason,
+            CorrelationId = correlationId
+        };
+
+        var body = JsonSerializer.Serialize(evt, JsonOptions);
+        await SendAsync(Queues.BanLiftApplied, body, serverId, sequenceId, nameof(SbEvents.BanLiftAppliedEvent), ct);
+    }
+
+    /// <inheritdoc />
+    public async Task PublishBanSyncFailedAsync(
+        Guid serverId,
+        string gameType,
+        long sequenceId,
+        string operation,
+        string failureReason,
+        string source,
+        string? playerGuid = null,
+        string? playerName = null,
+        string? correlationId = null,
+        CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+
+        var evt = new SbEvents.BanSyncFailedEvent
+        {
+            EventGeneratedUtc = now,
+            EventPublishedUtc = now,
+            ServerId = serverId,
+            GameType = gameType,
+            SequenceId = sequenceId,
+            Operation = operation,
+            FailureReason = failureReason,
+            Source = source,
+            PlayerGuid = playerGuid,
+            PlayerName = playerName,
+            CorrelationId = correlationId
+        };
+
+        var body = JsonSerializer.Serialize(evt, JsonOptions);
+        await SendAsync(Queues.BanSyncFailed, body, serverId, sequenceId, nameof(SbEvents.BanSyncFailedEvent), ct);
+    }
+
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         foreach (var sender in _senders.Values)
