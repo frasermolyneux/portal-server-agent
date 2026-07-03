@@ -175,7 +175,7 @@ public class CoD4xBanReconciliationServiceTests
             It.IsAny<string>(),
             It.IsAny<long>(),
             "ReapplyPortalBan",
-            It.Is<string>(s => s.Contains("Status code", StringComparison.Ordinal)),
+            It.Is<string>(s => s.Contains("rcon failed", StringComparison.Ordinal)),
             "Agent",
             "cod4x-player-2",
             null,
