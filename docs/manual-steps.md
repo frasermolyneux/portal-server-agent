@@ -23,11 +23,11 @@ Add both to the server's plugin load configuration (typically `loadPlugin legacy
 
 The agent's CoD4x log parser is built against the **modern** CoD4x log format. The following cvar values are checked once per agent lifecycle via a startup probe (`Cod4xCvarProbe`) that runs immediately after the first successful RCON sync. The probe is **read-only** — it never writes cvars.
 
-| Cvar                      | Required value               | Action on mismatch                                                                                          |
-| ------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Cvar                      | Required value               | Action on mismatch                                                                                                                                                  |
+| ------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `g_logSync`               | `1` or `3` (either accepted) | Probe-only — value is logged at Information level for inventory. `3` (instant flush) is preferred for low-latency event ingest; `1` (per-line flush) is acceptable. |
-| `g_logTimeStampInSeconds` | `0` or `1` (either accepted) | Probe-only — value is logged at Information level for inventory. Parser handles both timestamp shapes.      |
-| `logfile`                 | any non-zero value           | Probe-only — value is logged at Information level for inventory. `0` means no log file is written and the agent will have nothing to tail.  |
+| `g_logTimeStampInSeconds` | `0` or `1` (either accepted) | Probe-only — value is logged at Information level for inventory. Parser handles both timestamp shapes.                                                              |
+| `logfile`                 | any non-zero value           | Probe-only — value is logged at Information level for inventory. `0` means no log file is written and the agent will have nothing to tail.                          |
 
 ### Verifying after rollout
 
