@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -8,6 +9,7 @@ using Azure;
 using Azure.Identity;
 using Azure.Storage.Blobs;
 
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 using MX.Api.Abstractions;
@@ -26,6 +28,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 {
     private const string CoD4xGameType = "CallOfDuty4x";
     private const string PluginName = "portal-cod4x-plugin";
+    private const string PluginConfigFileName = "portal-cod4x-plugin.config.json";
     private const string PluginArtifactRootEnvironmentVariable = "PORTAL_COD4X_PLUGIN_ARTIFACT_ROOT";
     private static readonly string DefaultPluginArtifactRoot = Path.Combine(Path.GetTempPath(), "portal-cod4x-plugin-artifacts");
 
@@ -38,6 +41,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRemoteOpsSessionCoordinator _remoteOpsSessionCoordinator;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<CoD4xPluginLifecycleService> _logger;
     private readonly ConcurrentDictionary<Guid, string> _inFlightOperations = new();
 
@@ -53,14 +57,30 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private const string ExtensionKeyArtifactStorageAccountName = "artifactStorageAccountName";
     private const string ExtensionKeyArtifactContainerName = "artifactContainerName";
     private const string ExtensionKeyArtifactBlobPath = "artifactBlobPath";
+    private const string ExtensionKeyRuntimeConfig = "runtimeConfig";
+    private const string RuntimeConfigSectionName = "CoD4xPlugin";
+    private const string RuntimeConfigTenantIdKey = "tenantId";
+    private const string RuntimeConfigClientIdKey = "clientId";
+    private const string RuntimeConfigClientSecretKey = "clientSecret";
+    private const string RuntimeConfigRepositoryApiBaseUrlKey = "repositoryApiBaseUrl";
+    private const string RuntimeConfigRepositoryApiResourceKey = "repositoryApiResource";
+    private const string RuntimeConfigRefreshIntervalSecondsKey = "refreshIntervalSeconds";
+    private const string RuntimeConfigTenantIdEnvironmentVariable = "COD4X_PLUGIN_TENANT_ID";
+    private const string RuntimeConfigClientIdEnvironmentVariable = "COD4X_PLUGIN_CLIENT_ID";
+    private const string RuntimeConfigClientSecretEnvironmentVariable = "COD4X_PLUGIN_CLIENT_SECRET";
+    private const string RuntimeConfigRepositoryApiBaseUrlEnvironmentVariable = "COD4X_PLUGIN_REPOSITORY_API_BASE_URL";
+    private const string RuntimeConfigRepositoryApiResourceEnvironmentVariable = "COD4X_PLUGIN_REPOSITORY_API_RESOURCE";
+    private const string RuntimeConfigRefreshIntervalSecondsEnvironmentVariable = "COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS";
 
     public CoD4xPluginLifecycleService(
         IServiceScopeFactory scopeFactory,
         IRemoteOpsSessionCoordinator remoteOpsSessionCoordinator,
+        IConfiguration configuration,
         ILogger<CoD4xPluginLifecycleService> logger)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _remoteOpsSessionCoordinator = remoteOpsSessionCoordinator ?? throw new ArgumentNullException(nameof(remoteOpsSessionCoordinator));
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -106,6 +126,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         }
 
         settings.SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion;
+        SanitizeSensitiveRuntimeConfigData(settings);
 
         if (!TryNormalizeAndValidateRequest(settings.OperationRequest, out var request, out var validationError))
         {
@@ -288,7 +309,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         await TryBestEffortUnloadAsync(context, coD4xRconApi, ct).ConfigureAwait(false);
 
-        var uploadResult = await UploadPluginBinaryAsync(context, settings, request, targetVersion, ct).ConfigureAwait(false);
+        var uploadResult = await UploadPluginAssetsAsync(context, settings, request, targetVersion, ct).ConfigureAwait(false);
         if (!uploadResult.IsSuccess)
         {
             uploadResult.RolloutStage = rolloutDecision.Stage;
@@ -362,7 +383,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         await TryBestEffortUnloadAsync(context, coD4xRconApi, ct).ConfigureAwait(false);
 
-        var uploadResult = await UploadPluginBinaryAsync(context, settings, request, rollbackVersion, ct).ConfigureAwait(false);
+        var uploadResult = await UploadPluginAssetsAsync(context, settings, request, rollbackVersion, ct).ConfigureAwait(false);
         if (!uploadResult.IsSuccess)
         {
             uploadResult.RolloutStage = rolloutDecision.Stage;
@@ -469,7 +490,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         }
     }
 
-    private async Task<ActionResult> UploadPluginBinaryAsync(
+    private async Task<ActionResult> UploadPluginAssetsAsync(
         ServerContext context,
         Cod4xPluginSettingsDocument settings,
         Cod4xPluginOperationRequest request,
@@ -505,7 +526,14 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             return ActionResult.Failure(extensionError);
         }
 
+        if (!TryBuildPluginRuntimeConfig(context, settings, request, out var runtimeConfig, out var runtimeConfigError))
+        {
+            return ActionResult.Failure(runtimeConfigError);
+        }
+
         var remotePluginPath = BuildRemotePluginPath(rootDirectory, extension);
+        var remoteConfigPath = BuildRemotePluginConfigPath(rootDirectory);
+        var runtimeConfigPayload = JsonSerializer.Serialize(runtimeConfig, JsonOptions);
 
         try
         {
@@ -513,17 +541,21 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
                 context,
                 async (remoteFileClient, token) =>
                 {
+                    await using var configStream = new MemoryStream(Encoding.UTF8.GetBytes(runtimeConfigPayload));
+                    await remoteFileClient.UploadAsync(configStream, remoteConfigPath, token).ConfigureAwait(false);
+
                     await using var artifactStream = File.OpenRead(artifactPath);
                     await remoteFileClient.UploadAsync(artifactStream, remotePluginPath, token).ConfigureAwait(false);
                 },
                 ct).ConfigureAwait(false);
 
             _logger.LogInformation(
-                "[{Title}] Uploaded CoD4x plugin version {Version} from {ArtifactPath} to {RemotePluginPath}",
+                "[{Title}] Uploaded CoD4x plugin version {Version} from {ArtifactPath} to {RemotePluginPath} and generated runtime config at {RemoteConfigPath}",
                 context.Title,
                 version,
                 artifactPath,
-                remotePluginPath);
+                remotePluginPath,
+                remoteConfigPath);
 
             return ActionResult.Success(version);
         }
@@ -531,14 +563,360 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         {
             _logger.LogWarning(
                 ex,
-                "[{Title}] Failed to upload CoD4x plugin version {Version} from {ArtifactPath} to {RemotePluginPath}",
+                "[{Title}] Failed to upload CoD4x plugin assets for version {Version} from {ArtifactPath} to {RemotePluginPath}",
                 context.Title,
                 version,
                 artifactPath,
                 remotePluginPath);
 
-            return ActionResult.Failure($"Plugin artifact upload failed for version '{version}'.");
+            return ActionResult.Failure($"Plugin asset upload failed for version '{version}'.");
         }
+    }
+
+    private bool TryBuildPluginRuntimeConfig(
+        ServerContext context,
+        Cod4xPluginSettingsDocument settings,
+        Cod4xPluginOperationRequest request,
+        out PluginRuntimeConfigDocument runtimeConfig,
+        out string error)
+    {
+        runtimeConfig = new PluginRuntimeConfigDocument
+        {
+            GameServerId = context.ServerId.ToString("D", CultureInfo.InvariantCulture)
+        };
+
+        error = string.Empty;
+
+        runtimeConfig.TenantId = ResolveRuntimeConfigStringValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigTenantIdKey,
+            _configuration[$"{RuntimeConfigSectionName}:TenantId"],
+            Environment.GetEnvironmentVariable(RuntimeConfigTenantIdEnvironmentVariable),
+            Environment.GetEnvironmentVariable("AZURE_TENANT_ID"));
+
+        if (string.IsNullOrWhiteSpace(runtimeConfig.TenantId))
+        {
+            error = "Generated plugin runtime config is missing tenantId.";
+            return false;
+        }
+
+        if (!Guid.TryParse(runtimeConfig.TenantId, out var tenantId))
+        {
+            error = "Generated plugin runtime config tenantId is invalid. Expected a GUID.";
+            return false;
+        }
+
+        runtimeConfig.TenantId = tenantId.ToString("D", CultureInfo.InvariantCulture);
+
+        runtimeConfig.ClientId = ResolveRuntimeConfigStringValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigClientIdKey,
+            _configuration[$"{RuntimeConfigSectionName}:ClientId"],
+            Environment.GetEnvironmentVariable(RuntimeConfigClientIdEnvironmentVariable));
+
+        if (string.IsNullOrWhiteSpace(runtimeConfig.ClientId))
+        {
+            error = "Generated plugin runtime config is missing clientId.";
+            return false;
+        }
+
+        if (!Guid.TryParse(runtimeConfig.ClientId, out var clientId))
+        {
+            error = "Generated plugin runtime config clientId is invalid. Expected a GUID.";
+            return false;
+        }
+
+        runtimeConfig.ClientId = clientId.ToString("D", CultureInfo.InvariantCulture);
+
+        runtimeConfig.ClientSecret = ResolveRuntimeConfigStringValue(
+            null,
+            null,
+            RuntimeConfigClientSecretKey,
+            _configuration[$"{RuntimeConfigSectionName}:ClientSecret"],
+            Environment.GetEnvironmentVariable(RuntimeConfigClientSecretEnvironmentVariable));
+
+        if (string.IsNullOrWhiteSpace(runtimeConfig.ClientSecret))
+        {
+            error = "Generated plugin runtime config is missing clientSecret.";
+            return false;
+        }
+
+        runtimeConfig.RepositoryApiBaseUrl = ResolveRuntimeConfigStringValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigRepositoryApiBaseUrlKey,
+            _configuration[$"{RuntimeConfigSectionName}:RepositoryApiBaseUrl"],
+            _configuration["RepositoryApi:BaseUrl"],
+            Environment.GetEnvironmentVariable(RuntimeConfigRepositoryApiBaseUrlEnvironmentVariable));
+
+        if (string.IsNullOrWhiteSpace(runtimeConfig.RepositoryApiBaseUrl))
+        {
+            error = "Generated plugin runtime config is missing repositoryApiBaseUrl.";
+            return false;
+        }
+
+        runtimeConfig.RepositoryApiBaseUrl = runtimeConfig.RepositoryApiBaseUrl.TrimEnd('/');
+
+        if (!Uri.TryCreate(runtimeConfig.RepositoryApiBaseUrl, UriKind.Absolute, out var repositoryApiBaseUri)
+            || !string.Equals(repositoryApiBaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Generated plugin runtime config repositoryApiBaseUrl is invalid. Expected an absolute HTTPS URI.";
+            return false;
+        }
+
+        runtimeConfig.RepositoryApiResource = ResolveRuntimeConfigStringValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigRepositoryApiResourceKey,
+            _configuration[$"{RuntimeConfigSectionName}:RepositoryApiResource"],
+            _configuration["RepositoryApi:ApplicationAudience"],
+            Environment.GetEnvironmentVariable(RuntimeConfigRepositoryApiResourceEnvironmentVariable));
+
+        if (string.IsNullOrWhiteSpace(runtimeConfig.RepositoryApiResource))
+        {
+            error = "Generated plugin runtime config is missing repositoryApiResource.";
+            return false;
+        }
+
+        if (!Uri.TryCreate(runtimeConfig.RepositoryApiResource, UriKind.Absolute, out var repositoryApiResourceUri)
+            || repositoryApiResourceUri.IsFile)
+        {
+            error = "Generated plugin runtime config repositoryApiResource is invalid. Expected an absolute URI.";
+            return false;
+        }
+
+        var refreshIntervalSeconds = ResolveRuntimeConfigIntValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigRefreshIntervalSecondsKey,
+            _configuration[$"{RuntimeConfigSectionName}:RefreshIntervalSeconds"],
+            Environment.GetEnvironmentVariable(RuntimeConfigRefreshIntervalSecondsEnvironmentVariable));
+
+        runtimeConfig.RefreshIntervalSeconds = Math.Clamp(refreshIntervalSeconds ?? 120, 15, 900);
+        return true;
+    }
+
+    private static string ResolveRuntimeConfigStringValue(
+        IReadOnlyDictionary<string, JsonElement>? requestExtensionData,
+        IReadOnlyDictionary<string, JsonElement>? settingsExtensionData,
+        string key,
+        params string?[] additionalCandidates)
+    {
+        var candidateValues = new List<string?>
+        {
+            TryGetRuntimeConfigStringValue(requestExtensionData, key),
+            TryGetRuntimeConfigStringValue(settingsExtensionData, key)
+        };
+
+        if (additionalCandidates.Length > 0)
+        {
+            candidateValues.AddRange(additionalCandidates);
+        }
+
+        foreach (var candidateValue in candidateValues)
+        {
+            if (!string.IsNullOrWhiteSpace(candidateValue))
+            {
+                return candidateValue.Trim();
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static int? ResolveRuntimeConfigIntValue(
+        IReadOnlyDictionary<string, JsonElement>? requestExtensionData,
+        IReadOnlyDictionary<string, JsonElement>? settingsExtensionData,
+        string key,
+        params string?[] additionalCandidates)
+    {
+        if (TryGetRuntimeConfigIntValue(requestExtensionData, key, out var requestValue))
+        {
+            return requestValue;
+        }
+
+        if (TryGetRuntimeConfigIntValue(settingsExtensionData, key, out var settingsValue))
+        {
+            return settingsValue;
+        }
+
+        foreach (var candidate in additionalCandidates)
+        {
+            if (int.TryParse(candidate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedCandidate))
+            {
+                return parsedCandidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryGetRuntimeConfigStringValue(IReadOnlyDictionary<string, JsonElement>? extensionData, string key)
+    {
+        if (!TryGetRuntimeConfigElement(extensionData, key, out var element))
+        {
+            return null;
+        }
+
+        return TryGetElementAsString(element);
+    }
+
+    private static bool TryGetRuntimeConfigIntValue(IReadOnlyDictionary<string, JsonElement>? extensionData, string key, out int value)
+    {
+        value = default;
+
+        if (!TryGetRuntimeConfigElement(extensionData, key, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            return element.TryGetInt32(out value);
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var raw = element.GetString();
+            return !string.IsNullOrWhiteSpace(raw)
+                && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+        }
+
+        return false;
+    }
+
+    private static bool TryGetRuntimeConfigElement(
+        IReadOnlyDictionary<string, JsonElement>? extensionData,
+        string key,
+        out JsonElement value)
+    {
+        if (extensionData is null)
+        {
+            value = default;
+            return false;
+        }
+
+        if (TryGetElementFromDictionary(extensionData, key, out value))
+        {
+            return true;
+        }
+
+        if (!TryGetElementFromDictionary(extensionData, ExtensionKeyRuntimeConfig, out var runtimeConfigElement)
+            || runtimeConfigElement.ValueKind != JsonValueKind.Object)
+        {
+            value = default;
+            return false;
+        }
+
+        return TryGetPropertyCaseInsensitive(runtimeConfigElement, key, out value);
+    }
+
+    private static void SanitizeSensitiveRuntimeConfigData(Cod4xPluginSettingsDocument settings)
+    {
+        if (settings.ExtensionData is not null)
+        {
+            SanitizeSensitiveRuntimeConfigData(settings.ExtensionData);
+        }
+
+        if (settings.OperationRequest?.ExtensionData is not null)
+        {
+            SanitizeSensitiveRuntimeConfigData(settings.OperationRequest.ExtensionData);
+        }
+    }
+
+    private static void SanitizeSensitiveRuntimeConfigData(IDictionary<string, JsonElement> extensionData)
+    {
+        RemoveCaseInsensitiveKeys(extensionData, RuntimeConfigClientSecretKey);
+
+        var runtimeConfigKey = GetCaseInsensitiveKey(extensionData, ExtensionKeyRuntimeConfig);
+        if (runtimeConfigKey is null)
+        {
+            return;
+        }
+
+        if (!TryGetElementFromDictionary(extensionData, ExtensionKeyRuntimeConfig, out var runtimeConfigElement)
+            || runtimeConfigElement.ValueKind != JsonValueKind.Object)
+        {
+            extensionData.Remove(runtimeConfigKey);
+            return;
+        }
+
+        var sanitizedRuntimeConfig = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in runtimeConfigElement.EnumerateObject())
+        {
+            if (string.Equals(property.Name, RuntimeConfigClientSecretKey, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!IsPersistableRuntimeConfigKey(property.Name))
+            {
+                continue;
+            }
+
+            sanitizedRuntimeConfig[property.Name] = property.Value.Clone();
+        }
+
+        if (sanitizedRuntimeConfig.Count == 0)
+        {
+            extensionData.Remove(runtimeConfigKey);
+            return;
+        }
+
+        extensionData[runtimeConfigKey] = JsonSerializer.SerializeToElement(sanitizedRuntimeConfig, JsonOptions);
+    }
+
+    private static bool IsPersistableRuntimeConfigKey(string key)
+    {
+        return string.Equals(key, RuntimeConfigTenantIdKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, RuntimeConfigClientIdKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, RuntimeConfigRepositoryApiBaseUrlKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, RuntimeConfigRepositoryApiResourceKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, RuntimeConfigRefreshIntervalSecondsKey, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void RemoveCaseInsensitiveKeys(IDictionary<string, JsonElement> extensionData, string key)
+    {
+        var matchingKeys = extensionData.Keys
+            .Where(candidate => string.Equals(candidate, key, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        foreach (var matchingKey in matchingKeys)
+        {
+            extensionData.Remove(matchingKey);
+        }
+    }
+
+    private static string? GetCaseInsensitiveKey(IDictionary<string, JsonElement> extensionData, string key)
+    {
+        return extensionData.Keys.FirstOrDefault(candidate =>
+            string.Equals(candidate, key, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool TryGetElementFromDictionary(
+        IDictionary<string, JsonElement>? extensionData,
+        string key,
+        out JsonElement value)
+    {
+        if (extensionData is null)
+        {
+            value = default;
+            return false;
+        }
+
+        var matchingKey = extensionData.Keys.FirstOrDefault(candidate =>
+            string.Equals(candidate, key, StringComparison.OrdinalIgnoreCase));
+
+        if (matchingKey is null)
+        {
+            value = default;
+            return false;
+        }
+
+        value = extensionData[matchingKey];
+        return true;
     }
 
     private static void ApplySuccessfulStateMutation(
@@ -1185,6 +1563,28 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             : $"{rootDirectory}/{PluginName}{normalizedExtension}";
     }
 
+    private static string BuildRemotePluginConfigPath(string rootDirectory)
+    {
+        const string pluginDirectorySegment = "/plugins";
+        if (rootDirectory.Equals("/", StringComparison.Ordinal))
+        {
+            return $"/{PluginConfigFileName}";
+        }
+
+        if (rootDirectory.EndsWith(pluginDirectorySegment, StringComparison.OrdinalIgnoreCase))
+        {
+            var parentDirectory = rootDirectory[..^pluginDirectorySegment.Length].TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(parentDirectory))
+            {
+                return $"/{PluginConfigFileName}";
+            }
+
+            return $"{parentDirectory}/{PluginConfigFileName}";
+        }
+
+        return $"{rootDirectory}/{PluginConfigFileName}";
+    }
+
     private static string BuildApiFailureMessage<T>(string operation, ApiResult<T> result)
     {
         var error = result.Result?.Errors?.FirstOrDefault();
@@ -1791,6 +2191,30 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         public string? LastError { get; set; }
 
         public string? Details { get; set; }
+    }
+
+    private sealed class PluginRuntimeConfigDocument
+    {
+        [JsonPropertyName("tenantId")]
+        public string TenantId { get; set; } = string.Empty;
+
+        [JsonPropertyName("clientId")]
+        public string ClientId { get; set; } = string.Empty;
+
+        [JsonPropertyName("clientSecret")]
+        public string ClientSecret { get; set; } = string.Empty;
+
+        [JsonPropertyName("repositoryApiBaseUrl")]
+        public string RepositoryApiBaseUrl { get; set; } = string.Empty;
+
+        [JsonPropertyName("repositoryApiResource")]
+        public string RepositoryApiResource { get; set; } = string.Empty;
+
+        [JsonPropertyName("gameServerId")]
+        public string GameServerId { get; set; } = string.Empty;
+
+        [JsonPropertyName("refreshIntervalSeconds")]
+        public int RefreshIntervalSeconds { get; set; } = 120;
     }
 
     private readonly record struct ArtifactBlobReference(

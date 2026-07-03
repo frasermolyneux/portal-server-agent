@@ -34,9 +34,18 @@ The agent's CoD4x log parser is built against the **modern** CoD4x log format. T
 1. Bring the agent up against the server (`RconEnabled=true`, `GameType="CallOfDuty4x"`).
 2. Optional — to see the per-cvar inventory traces (`g_logSync`, `g_logTimeStampInSeconds`, and `logfile`), temporarily override `ApplicationInsights:TelemetryFilter:Traces:MinSeverity` to `Information` in App Configuration. The default `Warning` minimum filters these out.
 
+### CoD4x plugin runtime config automation
+
+`portal-server-agent` now generates and uploads `portal-cod4x-plugin.config.json` automatically during CoD4x plugin install and rollback operations.
+
+- No manual config file creation/copy step is required as part of normal plugin rollout.
+- The generated config always uses the current server context `gameServerId`.
+- Runtime config values are resolved from `XtremeIdiots.Portal.Server.Agent.App:CoD4xPlugin:*` App Configuration keys (or equivalent environment variable overrides).
+- If required runtime config values are missing, lifecycle execution fails closed and records the failure in the `cod4xPlugin` runtime state.
+
 ### Cross-references
 
 - Log parser: `src/XtremeIdiots.Portal.Server.Agent.App/Parsing/Cod4xLogParser.cs` (Phase 1 — modern format only).
 - Ban-file dual-format push: `src/XtremeIdiots.Portal.Server.Agent.App/BanFiles/` (Phase 3 — pushes both `ban.txt` legacy and CoD4x simple formats).
 - Cvar probe service: `src/XtremeIdiots.Portal.Server.Agent.App/Agents/Cod4xCvarProbe.cs`.
-- Platform settings architecture and troubleshooting: [Platform Settings Contracts](/docs/platform-settings-contracts.md).
+- Platform settings architecture and troubleshooting: [Platform Settings Contracts](platform-settings-contracts.md).
