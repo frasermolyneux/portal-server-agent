@@ -17,6 +17,7 @@ This document describes the settings architecture used by `portal-server-agent` 
 - Old approach: mixed JSON parsing and namespace-specific assumptions in runtime provider paths.
 - New approach: typed contracts + validators centralize schema behavior and reduce resolver drift.
 - Compatibility shims can remain during rollout, but new settings behavior must be implemented against `XtremeIdiots.Portal.Settings.Contracts.V1`.
+- Runtime ownership for CoD4x plugin-enabled servers is defined in [CoD4x Plugin Source Behaviour Matrix](./cod4x-plugin-source-behaviour-matrix.md).
 
 ## Troubleshooting Runbook
 

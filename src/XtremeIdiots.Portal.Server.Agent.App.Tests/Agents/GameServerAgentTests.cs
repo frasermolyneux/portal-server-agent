@@ -782,6 +782,115 @@ public class GameServerAgentTests
     }
 
     [Fact]
+    public async Task RunAsync_PluginSourceEnabled_PublishesChatButSuppressesOtherParsedEvents()
+    {
+        var context = _testContext with
+        {
+            IsCod4xPluginSourceEnabled = true
+        };
+
+        var chatEvent = new ChatMessageEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "player-1",
+            Username = "PlayerOne",
+            SlotId = 2,
+            Message = "!whoami",
+            IsTeamChat = false
+        };
+
+        var connectedEvent = new PlayerConnectedEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "player-2",
+            Username = "PlayerTwo",
+            SlotId = 3
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var pollCount = 0;
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                pollCount++;
+                return pollCount == 1
+                    ? ["chat-line", "connect-line"]
+                    : Array.Empty<string>();
+            });
+
+        _mockParser.Setup(p => p.ParseLine("chat-line")).Returns(chatEvent);
+        _mockParser.Setup(p => p.ParseLine("connect-line")).Returns(connectedEvent);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
+
+        await agent.RunAsync(cts.Token);
+
+        _mockPublisher.Verify(
+            p => p.PublishAsync(chatEvent, context.ServerId, context.GameType, It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        _mockPublisher.Verify(
+            p => p.PublishAsync(connectedEvent, context.ServerId, context.GameType, It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_PluginSourceEnabled_SuppressesStatusAndIpResolvedPublishing()
+    {
+        var context = _testContext with
+        {
+            IsCod4xPluginSourceEnabled = true
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        _mockParser.SetupGet(p => p.CurrentMap).Returns("mp_crash");
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+        _mockParser.SetupGet(p => p.ServerTitle).Returns("Test Server");
+        _mockParser.SetupGet(p => p.ServerMod).Returns("mod");
+        _mockParser.SetupGet(p => p.MaxPlayers).Returns(24);
+
+        var ipEvents = new[]
+        {
+            new PlayerIpResolvedEvent
+            {
+                Timestamp = DateTime.UtcNow,
+                PlayerGuid = "player-1",
+                IpAddress = "127.0.0.1"
+            }
+        };
+
+        _mockSyncService
+            .Setup(s => s.SyncAsync(context.ServerId, _mockParser.Object, context.GameType, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ipEvents);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
+
+        await agent.RunAsync(cts.Token);
+
+        _mockPublisher.Verify(
+            p => p.PublishServerStatusAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<int, PlayerInfo>>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _mockPublisher.Verify(
+            p => p.PublishAsync(It.Is<PlayerIpResolvedEvent>(e => e.PlayerGuid == "player-1"), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task RunAsync_BroadcastSendFails_RetriesSameMessageWithoutRotating()
     {
         var context = _testContext with

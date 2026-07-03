@@ -105,7 +105,8 @@ public sealed record ServerContext
 
     /// <summary>
     /// When true, in-game command and broadcast execution is owned by the CoD4x plugin.
-    /// Agent-side RCON broadcast paths are suppressed for this server.
+    /// Agent-side RCON broadcast paths are suppressed for this server, and equivalent
+    /// CoD4x event publication paths can be gated while log tailing remains active.
     /// </summary>
     public bool IsCod4xPluginSourceEnabled { get; init; }
 

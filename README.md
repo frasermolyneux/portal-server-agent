@@ -14,6 +14,7 @@
 
 * [Manual Steps](/docs/manual-steps.md) - Post-deployment and environment-specific operational actions
 * [Platform Settings Contracts](/docs/platform-settings-contracts.md) - Typed settings contract usage and migration guidance
+* [CoD4x Plugin Source Behaviour Matrix](/docs/cod4x-plugin-source-behaviour-matrix.md) - Runtime ownership matrix for plugin-enabled vs agent-owned behavior
 
 ## Overview
 

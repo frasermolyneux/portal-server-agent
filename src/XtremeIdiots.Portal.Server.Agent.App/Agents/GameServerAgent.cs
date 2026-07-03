@@ -189,6 +189,11 @@ public sealed class GameServerAgent
                         var gameEvent = _parser.ParseLine(line);
                         if (gameEvent is not null)
                         {
+                            if (!ShouldPublishParsedEvent(gameEvent))
+                            {
+                                continue;
+                            }
+
                             await _publisher.PublishAsync(gameEvent, _context.ServerId, _context.GameType, NextSequenceId(), ct);
                         }
                     }
@@ -408,6 +413,11 @@ public sealed class GameServerAgent
 
     private async Task PublishStatusAsync(CancellationToken ct)
     {
+        if (IsCod4xPluginSourceEnabledForCurrentServer())
+        {
+            return;
+        }
+
         if (_parser.CurrentMap is not null)
         {
             await _publisher.PublishServerStatusAsync(
@@ -470,6 +480,11 @@ public sealed class GameServerAgent
 
     private async Task PublishIpResolvedEventsAsync(IReadOnlyList<PlayerIpResolvedEvent>? events, CancellationToken ct)
     {
+        if (IsCod4xPluginSourceEnabledForCurrentServer())
+        {
+            return;
+        }
+
         if (events is null or { Count: 0 })
         {
             return;
@@ -488,4 +503,19 @@ public sealed class GameServerAgent
             }
         }
     }
+
+    private bool ShouldPublishParsedEvent(GameEvent gameEvent)
+    {
+        if (!IsCod4xPluginSourceEnabledForCurrentServer())
+        {
+            return true;
+        }
+
+        // Keep chat flowing so non-plugin-owned portal command paths can still run.
+        return gameEvent is ChatMessageEvent;
+    }
+
+    private bool IsCod4xPluginSourceEnabledForCurrentServer() =>
+        _context.IsCod4xPluginSourceEnabled &&
+        string.Equals(_context.GameType, Cod4xCvarProbe.Cod4xGameType, StringComparison.OrdinalIgnoreCase);
 }
