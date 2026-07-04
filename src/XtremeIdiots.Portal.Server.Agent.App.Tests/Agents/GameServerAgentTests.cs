@@ -782,7 +782,7 @@ public class GameServerAgentTests
     }
 
     [Fact]
-    public async Task RunAsync_PluginSourceEnabled_PublishesChatButSuppressesOtherParsedEvents()
+    public async Task RunAsync_PluginSourceEnabled_SuppressesAllParsedEvents()
     {
         var context = _testContext with
         {
@@ -833,7 +833,7 @@ public class GameServerAgentTests
 
         _mockPublisher.Verify(
             p => p.PublishAsync(chatEvent, context.ServerId, context.GameType, It.IsAny<long>(), It.IsAny<CancellationToken>()),
-            Times.Once);
+            Times.Never);
 
         _mockPublisher.Verify(
             p => p.PublishAsync(connectedEvent, context.ServerId, context.GameType, It.IsAny<long>(), It.IsAny<CancellationToken>()),

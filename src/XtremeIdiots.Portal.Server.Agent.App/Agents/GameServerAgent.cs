@@ -506,13 +506,16 @@ public sealed class GameServerAgent
 
     private bool ShouldPublishParsedEvent(GameEvent gameEvent)
     {
+        _ = gameEvent;
+
         if (!IsCod4xPluginSourceEnabledForCurrentServer())
         {
             return true;
         }
 
-        // Keep chat flowing so non-plugin-owned portal command paths can still run.
-        return gameEvent is ChatMessageEvent;
+        // Plugin-enabled CoD4x servers become the source of truth for parsed game
+        // events, so the log-tail path should not emit duplicates.
+        return false;
     }
 
     private bool IsCod4xPluginSourceEnabledForCurrentServer() =>
