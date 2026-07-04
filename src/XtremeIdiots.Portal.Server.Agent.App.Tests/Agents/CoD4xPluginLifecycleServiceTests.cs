@@ -339,6 +339,9 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.Equal("unit-test-cod4x-plugin-secret", runtimeConfigDocument.RootElement.GetProperty("clientSecret").GetString());
             Assert.Equal("https://portal-api.example.com/repository", runtimeConfigDocument.RootElement.GetProperty("repositoryApiBaseUrl").GetString());
             Assert.Equal("api://portal-repository-api", runtimeConfigDocument.RootElement.GetProperty("repositoryApiResource").GetString());
+            Assert.Equal("https://portal-api.example.com/ingest", runtimeConfigDocument.RootElement.GetProperty("ingestBaseUrl").GetString());
+            Assert.Equal("api://portal-server-events-api", runtimeConfigDocument.RootElement.GetProperty("ingestApiResource").GetString());
+            Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(_serverId.ToString("D"), runtimeConfigDocument.RootElement.GetProperty("gameServerId").GetString());
             Assert.Equal(120, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
         }
@@ -722,6 +725,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                         clientSecret = "request-extension-secret-should-be-ignored",
                         repositoryApiBaseUrl = "https://override.example.com/repository/",
                         repositoryApiResource = "api://override-repository-api",
+                        ingestBaseUrl = "https://override.example.com/ingest/",
+                        ingestApiResource = "api://override-server-events-api",
                         refreshIntervalSeconds = 45
                     })
                 }
@@ -762,6 +767,9 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.Equal("unit-test-cod4x-plugin-secret", runtimeConfigDocument.RootElement.GetProperty("clientSecret").GetString());
             Assert.Equal("https://override.example.com/repository", runtimeConfigDocument.RootElement.GetProperty("repositoryApiBaseUrl").GetString());
             Assert.Equal("api://override-repository-api", runtimeConfigDocument.RootElement.GetProperty("repositoryApiResource").GetString());
+            Assert.Equal("https://override.example.com/ingest", runtimeConfigDocument.RootElement.GetProperty("ingestBaseUrl").GetString());
+            Assert.Equal("api://override-server-events-api", runtimeConfigDocument.RootElement.GetProperty("ingestApiResource").GetString());
+            Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(45, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
 
             Assert.True(persistedPayloads.Count >= 1);
@@ -784,6 +792,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         var previousClientSecret = Environment.GetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET");
         var previousBaseUrl = Environment.GetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_BASE_URL");
         var previousAudience = Environment.GetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_RESOURCE");
+        var previousIngestBaseUrl = Environment.GetEnvironmentVariable("COD4X_PLUGIN_INGEST_BASE_URL");
+        var previousIngestAudience = Environment.GetEnvironmentVariable("COD4X_PLUGIN_INGEST_API_RESOURCE");
         var previousRefreshInterval = Environment.GetEnvironmentVariable("COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS");
 
         var settings = new Cod4xPluginSettingsDocument
@@ -812,6 +822,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET", "env-fallback-cod4x-plugin-secret");
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_BASE_URL", "https://env.example.com/repository/");
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_RESOURCE", "api://env-repository-api");
+            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_BASE_URL", "https://env.example.com/ingest/");
+            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_API_RESOURCE", "api://env-server-events-api");
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS", "300");
 
             SetupConfiguration(settings);
@@ -834,6 +846,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                 ["CoD4xPlugin:ClientSecret"] = null,
                 ["CoD4xPlugin:RepositoryApiBaseUrl"] = null,
                 ["CoD4xPlugin:RepositoryApiResource"] = null,
+                ["CoD4xPlugin:IngestBaseUrl"] = null,
+                ["CoD4xPlugin:IngestApiResource"] = null,
                 ["CoD4xPlugin:RefreshIntervalSeconds"] = null,
                 ["RepositoryApi:BaseUrl"] = null,
                 ["RepositoryApi:ApplicationAudience"] = null
@@ -848,6 +862,9 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.Equal("env-fallback-cod4x-plugin-secret", runtimeConfigDocument.RootElement.GetProperty("clientSecret").GetString());
             Assert.Equal("https://env.example.com/repository", runtimeConfigDocument.RootElement.GetProperty("repositoryApiBaseUrl").GetString());
             Assert.Equal("api://env-repository-api", runtimeConfigDocument.RootElement.GetProperty("repositoryApiResource").GetString());
+            Assert.Equal("https://env.example.com/ingest", runtimeConfigDocument.RootElement.GetProperty("ingestBaseUrl").GetString());
+            Assert.Equal("api://env-server-events-api", runtimeConfigDocument.RootElement.GetProperty("ingestApiResource").GetString());
+            Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(300, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
         }
         finally
@@ -857,7 +874,119 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET", previousClientSecret);
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_BASE_URL", previousBaseUrl);
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_RESOURCE", previousAudience);
+            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_BASE_URL", previousIngestBaseUrl);
+            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_API_RESOURCE", previousIngestAudience);
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS", previousRefreshInterval);
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_EmptyContextGameType_UsesFallbackGameType()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var uploadedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-empty-context-game-type",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            _mockRemoteFileClient.Setup(x => x.UploadAsync(
+                    It.IsAny<Stream>(),
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Stream, string, CancellationToken>((content, remotePath, _) =>
+                {
+                    using var reader = new StreamReader(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+                    uploadedFiles[remotePath] = reader.ReadToEnd();
+                })
+                .Returns(Task.CompletedTask);
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(string.Empty), CancellationToken.None);
+
+            Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
+            using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
+            Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_EmptyContextGameTypeWithInvalidConfiguredGameType_SetsFailedState()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-empty-context-invalid-game-type",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CoD4xPlugin:GameType"] = "CallOfDuty4"
+            });
+
+            await service.ExecuteAsync(CreateContext(string.Empty), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Contains("gameType is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
             TryDeleteFile(artifactPath);
         }
     }
@@ -1029,6 +1158,122 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.NotNull(final.RuntimeState);
             Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
             Assert.Contains("repositoryApiBaseUrl is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_InvalidIngestBaseUrl_SetsFailedState()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-invalid-ingest-base-url",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CoD4xPlugin:IngestBaseUrl"] = "http://insecure.example.com/ingest"
+            });
+
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Contains("ingestBaseUrl is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_InvalidIngestApiResource_SetsFailedState()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-invalid-ingest-api-resource",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId,
+                    Cod4xPluginSettingsConstants.Namespace,
+                    It.IsAny<UpsertConfigurationDto>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            var service = CreateService(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CoD4xPlugin:IngestApiResource"] = "relative-resource"
+            });
+
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(persistedPayloads.Count >= 2);
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+
+            Assert.NotNull(final.RuntimeState);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Contains("ingestApiResource is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
 
             _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
             _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -1547,6 +1792,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             ["CoD4xPlugin:ClientSecret"] = "unit-test-cod4x-plugin-secret",
             ["CoD4xPlugin:RepositoryApiBaseUrl"] = "https://portal-api.example.com/repository",
             ["CoD4xPlugin:RepositoryApiResource"] = "api://portal-repository-api",
+            ["CoD4xPlugin:IngestBaseUrl"] = "https://portal-api.example.com/ingest",
+            ["CoD4xPlugin:IngestApiResource"] = "api://portal-server-events-api",
             ["CoD4xPlugin:RefreshIntervalSeconds"] = "120"
         };
 

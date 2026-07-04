@@ -64,12 +64,17 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private const string RuntimeConfigClientSecretKey = "clientSecret";
     private const string RuntimeConfigRepositoryApiBaseUrlKey = "repositoryApiBaseUrl";
     private const string RuntimeConfigRepositoryApiResourceKey = "repositoryApiResource";
+    private const string RuntimeConfigIngestBaseUrlKey = "ingestBaseUrl";
+    private const string RuntimeConfigIngestApiResourceKey = "ingestApiResource";
+    private const string RuntimeConfigGameTypeKey = "gameType";
     private const string RuntimeConfigRefreshIntervalSecondsKey = "refreshIntervalSeconds";
     private const string RuntimeConfigTenantIdEnvironmentVariable = "COD4X_PLUGIN_TENANT_ID";
     private const string RuntimeConfigClientIdEnvironmentVariable = "COD4X_PLUGIN_CLIENT_ID";
     private const string RuntimeConfigClientSecretEnvironmentVariable = "COD4X_PLUGIN_CLIENT_SECRET";
     private const string RuntimeConfigRepositoryApiBaseUrlEnvironmentVariable = "COD4X_PLUGIN_REPOSITORY_API_BASE_URL";
     private const string RuntimeConfigRepositoryApiResourceEnvironmentVariable = "COD4X_PLUGIN_REPOSITORY_API_RESOURCE";
+    private const string RuntimeConfigIngestBaseUrlEnvironmentVariable = "COD4X_PLUGIN_INGEST_BASE_URL";
+    private const string RuntimeConfigIngestApiResourceEnvironmentVariable = "COD4X_PLUGIN_INGEST_API_RESOURCE";
     private const string RuntimeConfigRefreshIntervalSecondsEnvironmentVariable = "COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS";
 
     public CoD4xPluginLifecycleService(
@@ -88,7 +93,8 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (!string.Equals(context.GameType, CoD4xGameType, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(context.GameType)
+            && !string.Equals(context.GameType, CoD4xGameType, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -687,6 +693,69 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             return false;
         }
 
+        runtimeConfig.IngestBaseUrl = ResolveRuntimeConfigStringValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigIngestBaseUrlKey,
+            _configuration[$"{RuntimeConfigSectionName}:IngestBaseUrl"],
+            Environment.GetEnvironmentVariable(RuntimeConfigIngestBaseUrlEnvironmentVariable));
+
+        if (string.IsNullOrWhiteSpace(runtimeConfig.IngestBaseUrl))
+        {
+            error = "Generated plugin runtime config is missing ingestBaseUrl.";
+            return false;
+        }
+
+        runtimeConfig.IngestBaseUrl = runtimeConfig.IngestBaseUrl.TrimEnd('/');
+
+        if (!Uri.TryCreate(runtimeConfig.IngestBaseUrl, UriKind.Absolute, out var ingestBaseUri)
+            || !string.Equals(ingestBaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Generated plugin runtime config ingestBaseUrl is invalid. Expected an absolute HTTPS URI.";
+            return false;
+        }
+
+        runtimeConfig.IngestApiResource = ResolveRuntimeConfigStringValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigIngestApiResourceKey,
+            _configuration[$"{RuntimeConfigSectionName}:IngestApiResource"],
+            Environment.GetEnvironmentVariable(RuntimeConfigIngestApiResourceEnvironmentVariable));
+
+        if (string.IsNullOrWhiteSpace(runtimeConfig.IngestApiResource))
+        {
+            error = "Generated plugin runtime config is missing ingestApiResource.";
+            return false;
+        }
+
+        if (!Uri.TryCreate(runtimeConfig.IngestApiResource, UriKind.Absolute, out var ingestApiResourceUri)
+            || ingestApiResourceUri.IsFile)
+        {
+            error = "Generated plugin runtime config ingestApiResource is invalid. Expected an absolute URI.";
+            return false;
+        }
+
+        runtimeConfig.GameType = !string.IsNullOrWhiteSpace(context.GameType)
+            ? context.GameType.Trim()
+            : ResolveRuntimeConfigStringValue(
+                request.ExtensionData,
+                settings.ExtensionData,
+                RuntimeConfigGameTypeKey,
+                _configuration[$"{RuntimeConfigSectionName}:GameType"],
+                CoD4xGameType);
+
+        if (string.IsNullOrWhiteSpace(runtimeConfig.GameType))
+        {
+            error = "Generated plugin runtime config is missing gameType.";
+            return false;
+        }
+
+        if (!string.Equals(runtimeConfig.GameType, CoD4xGameType, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Generated plugin runtime config gameType is invalid. Expected CallOfDuty4x.";
+            return false;
+        }
+
         var refreshIntervalSeconds = ResolveRuntimeConfigIntValue(
             request.ExtensionData,
             settings.ExtensionData,
@@ -874,6 +943,9 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
                || string.Equals(key, RuntimeConfigClientIdKey, StringComparison.OrdinalIgnoreCase)
                || string.Equals(key, RuntimeConfigRepositoryApiBaseUrlKey, StringComparison.OrdinalIgnoreCase)
                || string.Equals(key, RuntimeConfigRepositoryApiResourceKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, RuntimeConfigIngestBaseUrlKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, RuntimeConfigIngestApiResourceKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(key, RuntimeConfigGameTypeKey, StringComparison.OrdinalIgnoreCase)
                || string.Equals(key, RuntimeConfigRefreshIntervalSecondsKey, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -2209,6 +2281,15 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         [JsonPropertyName("repositoryApiResource")]
         public string RepositoryApiResource { get; set; } = string.Empty;
+
+        [JsonPropertyName("ingestBaseUrl")]
+        public string IngestBaseUrl { get; set; } = string.Empty;
+
+        [JsonPropertyName("ingestApiResource")]
+        public string IngestApiResource { get; set; } = string.Empty;
+
+        [JsonPropertyName("gameType")]
+        public string GameType { get; set; } = string.Empty;
 
         [JsonPropertyName("gameServerId")]
         public string GameServerId { get; set; } = string.Empty;
