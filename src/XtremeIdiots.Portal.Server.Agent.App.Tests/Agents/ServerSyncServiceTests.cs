@@ -30,11 +30,12 @@ public class ServerSyncServiceTests
     private readonly Mock<ICod5RconApi> _mockCod5RconApi = new();
     private readonly Mock<IQueryApi> _mockQueryApi = new();
     private readonly Mock<ICoD4xBanReconciliationService> _mockCoD4xReconciliationService = new();
+    private readonly Mock<ICoD4xAdminReconciliationService> _mockCoD4xAdminReconciliationService = new();
     private readonly Mock<ILogParser> _mockParser = new();
     private readonly ILogger<ServerSyncService> _logger = NullLogger<ServerSyncService>.Instance;
     private readonly Guid _serverId = Guid.NewGuid();
 
-    private ServerSyncService CreateService(bool includeCoD4xReconciliationService = true)
+    private ServerSyncService CreateService(bool includeCoD4xReconciliationService = true, bool includeCoD4xAdminReconciliationService = true)
     {
         _mockVersionedCoD4xRconApi.Setup(x => x.V1).Returns(_mockCoD4xRconApi.Object);
         _mockVersionedCod2RconApi.Setup(x => x.V1).Returns(_mockCod2RconApi.Object);
@@ -52,6 +53,11 @@ public class ServerSyncServiceTests
         if (includeCoD4xReconciliationService)
         {
             services.AddScoped(_ => _mockCoD4xReconciliationService.Object);
+        }
+
+        if (includeCoD4xAdminReconciliationService)
+        {
+            services.AddScoped(_ => _mockCoD4xAdminReconciliationService.Object);
         }
 
         var sp = services.BuildServiceProvider();
@@ -368,6 +374,11 @@ public class ServerSyncServiceTests
             _serverId,
             "CallOfDuty4x",
             It.IsAny<CancellationToken>()), Times.Once);
+
+        _mockCoD4xAdminReconciliationService.Verify(x => x.ReconcileAsync(
+            _serverId,
+            "CallOfDuty4x",
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -381,9 +392,35 @@ public class ServerSyncServiceTests
 
         _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
 
-        var service = CreateService(includeCoD4xReconciliationService: false);
+        var service = CreateService(includeCoD4xReconciliationService: false, includeCoD4xAdminReconciliationService: false);
 
         await service.SyncAsync(_serverId, _mockParser.Object, "CallOfDuty4x");
+    }
+
+    [Fact]
+    public async Task SyncAsync_CallsAdminReconciliation_WhenBanReconciliationServiceIsNotRegistered()
+    {
+        var rconStatus = new CoD4xStatusResponseDto { Players = [] };
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xStatusResponseDto>(rconStatus)));
+
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var service = CreateService(includeCoD4xReconciliationService: false, includeCoD4xAdminReconciliationService: true);
+
+        await service.SyncAsync(_serverId, _mockParser.Object, "CallOfDuty4x");
+
+        _mockCoD4xReconciliationService.Verify(x => x.ReconcileAsync(
+            It.IsAny<Guid>(),
+            It.IsAny<string?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+
+        _mockCoD4xAdminReconciliationService.Verify(x => x.ReconcileAsync(
+            _serverId,
+            "CallOfDuty4x",
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -458,6 +495,11 @@ public class ServerSyncServiceTests
 
         _mockCod5RconApi.Verify(x => x.Status(_serverId, It.IsAny<CancellationToken>()), Times.Once);
         _mockCoD4xReconciliationService.Verify(x => x.ReconcileAsync(
+            It.IsAny<Guid>(),
+            It.IsAny<string?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+
+        _mockCoD4xAdminReconciliationService.Verify(x => x.ReconcileAsync(
             It.IsAny<Guid>(),
             It.IsAny<string?>(),
             It.IsAny<CancellationToken>()), Times.Never);
