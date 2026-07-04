@@ -163,8 +163,11 @@ public sealed class GameServerAgent
             // 2a. Broadcast startup status once after successful connection.
             await SendStartupOnlineBroadcastAsync(ct);
 
-            // 3. Publish server connected event
-            await _publisher.PublishServerConnectedAsync(_context.ServerId, _context.GameType, NextSequenceId(), ct);
+            // 3. Publish server connected event unless CoD4x plugin source mode owns event emission.
+            if (!IsCod4xPluginSourceEnabledForCurrentServer())
+            {
+                await _publisher.PublishServerConnectedAsync(_context.ServerId, _context.GameType, NextSequenceId(), ct);
+            }
 
             // 4. Initial RCON sync — populate slot map with current players
             var initialIpEvents = await _syncService.SyncAsync(_context.ServerId, _parser, _context.GameType, ct);

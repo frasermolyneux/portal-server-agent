@@ -891,6 +891,32 @@ public class GameServerAgentTests
     }
 
     [Fact]
+    public async Task RunAsync_PluginSourceEnabled_SuppressesServerConnectedPublishing()
+    {
+        var context = _testContext with
+        {
+            IsCod4xPluginSourceEnabled = true
+        };
+
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
+
+        await agent.RunAsync(cts.Token);
+
+        _mockPublisher.Verify(
+            p => p.PublishServerConnectedAsync(context.ServerId, context.GameType, It.IsAny<long>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task RunAsync_BroadcastSendFails_RetriesSameMessageWithoutRotating()
     {
         var context = _testContext with
