@@ -151,6 +151,12 @@ public sealed class ServerSyncService : IServerSyncService
                 {
                     await adminReconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
                 }
+
+                var commandPowerReconciliationService = scope.ServiceProvider.GetService<ICoD4xCommandPowerReconciliationService>();
+                if (commandPowerReconciliationService is not null)
+                {
+                    await commandPowerReconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
+                }
             }
         }
         catch (Exception ex)
