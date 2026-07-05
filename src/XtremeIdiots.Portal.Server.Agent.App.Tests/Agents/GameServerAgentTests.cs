@@ -73,7 +73,7 @@ public class GameServerAgentTests
             .ReturnsAsync(BanFileCheckResult.Empty);
 
         // Default: RCON sync returns no IP-resolved events
-        _mockSyncService.Setup(s => s.SyncAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        _mockSyncService.Setup(s => s.SyncAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<PlayerIpResolvedEvent>)Array.Empty<PlayerIpResolvedEvent>());
         _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
@@ -569,7 +569,7 @@ public class GameServerAgentTests
 
         // Assert — sync should be called at least once on startup
         _mockSyncService.Verify(
-            s => s.SyncAsync(_testContext.ServerId, _mockParser.Object, _testContext.GameType, It.IsAny<CancellationToken>()),
+            s => s.SyncAsync(_testContext.ServerId, _mockParser.Object, _testContext.GameType, _testContext.IsCod4xPluginSourceEnabled, It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
     }
 
@@ -872,7 +872,7 @@ public class GameServerAgentTests
         };
 
         _mockSyncService
-            .Setup(s => s.SyncAsync(context.ServerId, _mockParser.Object, context.GameType, It.IsAny<CancellationToken>()))
+            .Setup(s => s.SyncAsync(context.ServerId, _mockParser.Object, context.GameType, context.IsCod4xPluginSourceEnabled, It.IsAny<CancellationToken>()))
             .ReturnsAsync(ipEvents);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));

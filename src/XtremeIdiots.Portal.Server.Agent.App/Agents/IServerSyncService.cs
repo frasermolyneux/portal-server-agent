@@ -22,4 +22,19 @@ public interface IServerSyncService
     /// Best-effort — failures are logged but never throw.
     /// </summary>
     Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, string? gameType, CancellationToken ct = default);
+
+    /// <summary>
+    /// Query the server via RCON and merge the player list into the parser's slot map.
+    /// When <paramref name="gameType"/> is CoD4x, performs ban/admin/command-power
+    /// reconciliation. The <paramref name="isCod4xPluginSourceEnabled"/> flag controls
+    /// whether agent-side CoD4x ban reapply operations are skipped in favor of plugin
+    /// enforcement while preserving server-only import behavior.
+    /// Best-effort — failures are logged but never throw.
+    /// </summary>
+    Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(
+        Guid serverId,
+        ILogParser parser,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        CancellationToken ct = default);
 }

@@ -29,7 +29,15 @@ public sealed class ServerSyncService : IServerSyncService
     public Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, CancellationToken ct = default)
         => SyncAsync(serverId, parser, null, ct);
 
-    public async Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, string? gameType, CancellationToken ct = default)
+    public Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(Guid serverId, ILogParser parser, string? gameType, CancellationToken ct = default)
+        => SyncAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled: false, ct);
+
+    public async Task<IReadOnlyList<PlayerIpResolvedEvent>> SyncAsync(
+        Guid serverId,
+        ILogParser parser,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        CancellationToken ct = default)
     {
         var ipResolvedEvents = new List<PlayerIpResolvedEvent>();
 
@@ -143,7 +151,9 @@ public sealed class ServerSyncService : IServerSyncService
                 var reconciliationService = scope.ServiceProvider.GetService<ICoD4xBanReconciliationService>();
                 if (reconciliationService is not null)
                 {
-                    await reconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
+                    await reconciliationService
+                        .ReconcileAsync(serverId, gameType, isCod4xPluginSourceEnabled, ct)
+                        .ConfigureAwait(false);
                 }
 
                 var adminReconciliationService = scope.ServiceProvider.GetService<ICoD4xAdminReconciliationService>();

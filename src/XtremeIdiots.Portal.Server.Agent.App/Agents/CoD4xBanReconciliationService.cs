@@ -17,8 +17,12 @@ public sealed class CoD4xBanReconciliationService(
     ILogger<CoD4xBanReconciliationService> logger) : ICoD4xBanReconciliationService
 {
     private const int ActiveBanPageSize = 200;
+    private const string PortalBanReasonMarker = "[PORTAL-BAN]";
 
     public async Task ReconcileAsync(Guid serverId, string? gameType, CancellationToken ct = default)
+        => await ReconcileAsync(serverId, gameType, isCod4xPluginSourceEnabled: false, ct).ConfigureAwait(false);
+
+    public async Task ReconcileAsync(Guid serverId, string? gameType, bool isCod4xPluginSourceEnabled, CancellationToken ct = default)
     {
         if (!IsCoD4x(gameType))
         {
@@ -41,8 +45,17 @@ public sealed class CoD4xBanReconciliationService(
 
             var portalActiveBansByIdentifier = await GetPortalActiveBansByIdentifierAsync(ct).ConfigureAwait(false);
 
-            await ImportServerOnlyBansAsync(serverId, serverBansByIdentifier, portalActiveBansByIdentifier, ct).ConfigureAwait(false);
-            await ReapplyPortalOnlyBansAsync(serverId, gameType, serverBansByIdentifier, portalActiveBansByIdentifier, ct).ConfigureAwait(false);
+            await ImportServerOnlyBansAsync(
+                serverId,
+                serverBansByIdentifier,
+                portalActiveBansByIdentifier,
+                isCod4xPluginSourceEnabled,
+                ct).ConfigureAwait(false);
+
+            if (!isCod4xPluginSourceEnabled)
+            {
+                await ReapplyPortalOnlyBansAsync(serverId, gameType, serverBansByIdentifier, portalActiveBansByIdentifier, ct).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
@@ -139,6 +152,7 @@ public sealed class CoD4xBanReconciliationService(
         Guid serverId,
         IReadOnlyDictionary<string, CoD4xBanEntryDto> serverBansByIdentifier,
         IReadOnlyDictionary<string, PortalBanExpectation> portalActiveBansByIdentifier,
+        bool isCod4xPluginSourceEnabled,
         CancellationToken ct)
     {
         var importedCount = 0;
@@ -146,6 +160,11 @@ public sealed class CoD4xBanReconciliationService(
         foreach (var serverBan in serverBansByIdentifier)
         {
             if (portalActiveBansByIdentifier.ContainsKey(serverBan.Key))
+            {
+                continue;
+            }
+
+            if (isCod4xPluginSourceEnabled && IsPortalManagedBan(serverBan.Value))
             {
                 continue;
             }
@@ -201,6 +220,10 @@ public sealed class CoD4xBanReconciliationService(
             logger.LogInformation("Imported {ImportedCount} CoD4x server-only bans into portal for server {ServerId}", importedCount, serverId);
         }
     }
+
+    private static bool IsPortalManagedBan(CoD4xBanEntryDto banEntry)
+        => !string.IsNullOrWhiteSpace(banEntry.Reason)
+            && banEntry.Reason.Contains(PortalBanReasonMarker, StringComparison.OrdinalIgnoreCase);
 
     private async Task ReapplyPortalOnlyBansAsync(
         Guid serverId,

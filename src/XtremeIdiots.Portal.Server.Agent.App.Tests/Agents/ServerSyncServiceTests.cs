@@ -382,6 +382,7 @@ public class ServerSyncServiceTests
         _mockCoD4xReconciliationService.Verify(x => x.ReconcileAsync(
             _serverId,
             "CallOfDuty4x",
+            false,
             It.IsAny<CancellationToken>()), Times.Once);
 
         _mockCoD4xAdminReconciliationService.Verify(x => x.ReconcileAsync(
@@ -415,6 +416,28 @@ public class ServerSyncServiceTests
     }
 
     [Fact]
+    public async Task SyncAsync_WhenPluginSourceEnabled_PassesFlagToCoD4xBanReconciliation()
+    {
+        var rconStatus = new CoD4xStatusResponseDto { Players = [] };
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xStatusResponseDto>(rconStatus)));
+
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var service = CreateService(includeCoD4xReconciliationService: true);
+
+        await service.SyncAsync(_serverId, _mockParser.Object, "CallOfDuty4x", true);
+
+        _mockCoD4xReconciliationService.Verify(x => x.ReconcileAsync(
+            _serverId,
+            "CallOfDuty4x",
+            true,
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task SyncAsync_CallsAdminReconciliation_WhenBanReconciliationServiceIsNotRegistered()
     {
         var rconStatus = new CoD4xStatusResponseDto { Players = [] };
@@ -432,6 +455,7 @@ public class ServerSyncServiceTests
         _mockCoD4xReconciliationService.Verify(x => x.ReconcileAsync(
             It.IsAny<Guid>(),
             It.IsAny<string?>(),
+            It.IsAny<bool>(),
             It.IsAny<CancellationToken>()), Times.Never);
 
         _mockCoD4xAdminReconciliationService.Verify(x => x.ReconcileAsync(
@@ -519,6 +543,7 @@ public class ServerSyncServiceTests
         _mockCoD4xReconciliationService.Verify(x => x.ReconcileAsync(
             It.IsAny<Guid>(),
             It.IsAny<string?>(),
+            It.IsAny<bool>(),
             It.IsAny<CancellationToken>()), Times.Never);
 
         _mockCoD4xAdminReconciliationService.Verify(x => x.ReconcileAsync(
