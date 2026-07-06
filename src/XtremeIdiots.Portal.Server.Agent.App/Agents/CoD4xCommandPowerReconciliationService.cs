@@ -19,6 +19,12 @@ public sealed class CoD4xCommandPowerReconciliationService(
     ICoD4xRconApi coD4xRconApi,
     ILogger<CoD4xCommandPowerReconciliationService> logger) : ICoD4xCommandPowerReconciliationService
 {
+    private static readonly IReadOnlySet<string> extendedManagedCommands =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "portalpluginhealth"
+        };
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -64,9 +70,17 @@ public sealed class CoD4xCommandPowerReconciliationService(
             }
 
             var currentPowers = ParseCurrentCommandPowers(commandListResult.Result.Data);
+            var builtInCanonicalCommands = Cod4xCommandSettingsConstants.BuiltInCommandMinPowerDefaults
+                .Select(static command => ResolveCanonicalCommand(command.Key))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var managedExtendedCanonicalCommands = extendedManagedCommands
+                .Select(static command => ResolveCanonicalCommand(command))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var changedCount = 0;
             var skippedAlreadyHiddenCount = 0;
+            var skippedCustomNotListedCount = 0;
 
             foreach (var desired in desiredBuild.DesiredPowersByCommand.OrderBy(static x => x.Key, StringComparer.OrdinalIgnoreCase))
             {
@@ -76,6 +90,18 @@ public sealed class CoD4xCommandPowerReconciliationService(
                     if (desired.Value >= Cod4xCommandSettingsConstants.MaxPower)
                     {
                         skippedAlreadyHiddenCount++;
+                        continue;
+                    }
+
+                    // Built-in commands can be safely reconciled even when hidden from list output.
+                    // Extended managed commands (for example portalpluginhealth) are
+                    // reconciled as well so previously hidden commands can be re-enabled.
+                    var shouldTrySetMissingCommand = builtInCanonicalCommands.Contains(desired.Key)
+                        || managedExtendedCanonicalCommands.Contains(desired.Key);
+
+                    if (!shouldTrySetMissingCommand)
+                    {
+                        skippedCustomNotListedCount++;
                         continue;
                     }
 
@@ -99,13 +125,14 @@ public sealed class CoD4xCommandPowerReconciliationService(
             }
 
             logger.LogInformation(
-                "CoD4x command-power reconciliation for {ServerId}: desired={DesiredCount}, listed={ListedCount}, changed={ChangedCount}, ignoredUnknown={IgnoredUnknownCount}, skippedAlreadyHidden={SkippedAlreadyHiddenCount}",
+                "CoD4x command-power reconciliation for {ServerId}: desired={DesiredCount}, listed={ListedCount}, changed={ChangedCount}, ignoredUnknown={IgnoredUnknownCount}, skippedAlreadyHidden={SkippedAlreadyHiddenCount}, skippedCustomNotListed={SkippedCustomNotListedCount}",
                 serverId,
                 desiredBuild.DesiredPowersByCommand.Count,
                 currentPowers.Count,
                 changedCount,
                 desiredBuild.IgnoredUnknownCommandCount,
-                skippedAlreadyHiddenCount);
+                skippedAlreadyHiddenCount,
+                skippedCustomNotListedCount);
         }
         catch (Exception ex)
         {
@@ -144,7 +171,11 @@ public sealed class CoD4xCommandPowerReconciliationService(
             return DesiredCommandPowerBuildResult.Skipped();
         }
 
-        var rulesByCommand = Cod4xCommandSettingsConstants.BuiltInCommandMinPowerDefaults
+        var commandDefaults = new Dictionary<string, int>(
+            Cod4xCommandSettingsConstants.BuiltInCommandMinPowerDefaults,
+            StringComparer.OrdinalIgnoreCase);
+
+        var rulesByCommand = commandDefaults
             .ToDictionary(
                 static x => ResolveCanonicalCommand(x.Key),
                 static x => new CommandPowerRule(true, Math.Clamp(x.Value, Cod4xCommandSettingsConstants.MinPower, Cod4xCommandSettingsConstants.MaxPower)),
@@ -154,12 +185,20 @@ public sealed class CoD4xCommandPowerReconciliationService(
 
         if (globalEnabled)
         {
-            ApplyOverrides(globalFetch.Document, rulesByCommand, ref ignoredUnknownCommandCount);
+            ApplyOverrides(
+                globalFetch.Document,
+                rulesByCommand,
+                extendedManagedCommands,
+                ref ignoredUnknownCommandCount);
         }
 
         if (serverEnabled)
         {
-            ApplyOverrides(serverFetch.Document, rulesByCommand, ref ignoredUnknownCommandCount);
+            ApplyOverrides(
+                serverFetch.Document,
+                rulesByCommand,
+                extendedManagedCommands,
+                ref ignoredUnknownCommandCount);
         }
 
         var desiredPowersByCommand = rulesByCommand.ToDictionary(
@@ -252,6 +291,7 @@ public sealed class CoD4xCommandPowerReconciliationService(
     private static void ApplyOverrides(
         Cod4xCommandSettingsDocument? document,
         Dictionary<string, CommandPowerRule> rulesByCommand,
+        IReadOnlySet<string> managedExtendedCommands,
         ref int ignoredUnknownCommandCount)
     {
         if (document?.Commands is null)
@@ -264,8 +304,23 @@ public sealed class CoD4xCommandPowerReconciliationService(
             var canonicalCommand = ResolveCanonicalCommand(commandOverride.Key);
             if (!rulesByCommand.TryGetValue(canonicalCommand, out var currentRule))
             {
-                ignoredUnknownCommandCount++;
-                continue;
+                if (!managedExtendedCommands.Contains(canonicalCommand))
+                {
+                    ignoredUnknownCommandCount++;
+                    continue;
+                }
+
+                var extendedEntry = commandOverride.Value;
+                if (extendedEntry?.Enabled != false && extendedEntry?.MinPower is not int)
+                {
+                    continue;
+                }
+
+                currentRule = new CommandPowerRule(
+                    extendedEntry?.Enabled ?? true,
+                    extendedEntry?.MinPower is int extendedMinPower
+                        ? Math.Clamp(extendedMinPower, Cod4xCommandSettingsConstants.MinPower, Cod4xCommandSettingsConstants.MaxPower)
+                        : Cod4xCommandSettingsConstants.MaxPower);
             }
 
             var overrideEntry = commandOverride.Value;

@@ -19,6 +19,7 @@ using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xCommands;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
@@ -35,6 +36,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     };
 
     private readonly Mock<IRepositoryApiClient> _mockRepositoryApiClient = new();
+    private readonly Mock<IVersionedGlobalConfigurationsApi> _mockVersionedGlobalConfigurationsApi = new();
+    private readonly Mock<IGlobalConfigurationsApi> _mockGlobalConfigurationsApi = new();
     private readonly Mock<IVersionedGameServerConfigurationsApi> _mockVersionedGameServerConfigurationsApi = new();
     private readonly Mock<IGameServerConfigurationsApi> _mockGameServerConfigurationsApi = new();
     private readonly Mock<IServersApiClient> _mockServersApiClient = new();
@@ -51,10 +54,26 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         _previousArtifactRoot = Environment.GetEnvironmentVariable(PluginArtifactRootEnvironmentVariable);
         Environment.SetEnvironmentVariable(PluginArtifactRootEnvironmentVariable, TrustedArtifactRoot);
 
+        _mockRepositoryApiClient.Setup(x => x.GlobalConfigurations)
+            .Returns(_mockVersionedGlobalConfigurationsApi.Object);
+        _mockVersionedGlobalConfigurationsApi.Setup(x => x.V1)
+            .Returns(_mockGlobalConfigurationsApi.Object);
+
         _mockRepositoryApiClient.Setup(x => x.GameServerConfigurations)
             .Returns(_mockVersionedGameServerConfigurationsApi.Object);
         _mockVersionedGameServerConfigurationsApi.Setup(x => x.V1)
             .Returns(_mockGameServerConfigurationsApi.Object);
+
+        _mockGlobalConfigurationsApi.Setup(x => x.GetConfiguration(
+                Cod4xCommandSettingsConstants.Namespace,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateNotFoundConfigurationResult());
+
+        _mockGameServerConfigurationsApi.Setup(x => x.GetConfiguration(
+                _serverId,
+                Cod4xCommandSettingsConstants.Namespace,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateNotFoundConfigurationResult());
 
         _mockServersApiClient.Setup(x => x.CoD4xRcon)
             .Returns(_mockVersionedCoD4xRconApi.Object);
@@ -344,6 +363,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(_serverId.ToString("D"), runtimeConfigDocument.RootElement.GetProperty("gameServerId").GetString());
             Assert.Equal(120, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
+            Assert.True(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(98, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
         }
         finally
         {
@@ -727,7 +748,9 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                         repositoryApiResource = "api://override-repository-api",
                         ingestBaseUrl = "https://override.example.com/ingest/",
                         ingestApiResource = "api://override-server-events-api",
-                        refreshIntervalSeconds = 45
+                        refreshIntervalSeconds = 45,
+                        portalPluginHealthEnabled = false,
+                        portalPluginHealthMinPower = 72
                     })
                 }
             }
@@ -771,6 +794,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.Equal("api://override-server-events-api", runtimeConfigDocument.RootElement.GetProperty("ingestApiResource").GetString());
             Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(45, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
+            Assert.False(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(72, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
 
             Assert.True(persistedPayloads.Count >= 1);
             Assert.DoesNotContain("request-extension-secret-should-be-ignored", persistedPayloads[0].Configuration, StringComparison.Ordinal);
@@ -866,6 +891,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.Equal("api://env-server-events-api", runtimeConfigDocument.RootElement.GetProperty("ingestApiResource").GetString());
             Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(300, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
+            Assert.True(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(98, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
         }
         finally
         {
@@ -877,6 +904,428 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_BASE_URL", previousIngestBaseUrl);
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_API_RESOURCE", previousIngestAudience);
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS", previousRefreshInterval);
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_RuntimeConfigProjectsPortalPluginHealthControlsFromCod4xCommands()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var uploadedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-runtime-config-projected-command-controls",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+            SetupGlobalCod4xCommandSettings(new
+            {
+                schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion,
+                enabled = true,
+                commands = new
+                {
+                    portalpluginhealth = new
+                    {
+                        enabled = false,
+                        minPower = 91
+                    }
+                }
+            });
+
+            SetupServerCod4xCommandSettings(new
+            {
+                schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion,
+                enabled = true,
+                commands = new
+                {
+                    portalpluginhealth = new
+                    {
+                        enabled = true,
+                        minPower = 74
+                    }
+                }
+            });
+
+            _mockRemoteFileClient.Setup(x => x.UploadAsync(
+                    It.IsAny<Stream>(),
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Stream, string, CancellationToken>((content, remotePath, _) =>
+                {
+                    using var reader = new StreamReader(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+                    uploadedFiles[remotePath] = reader.ReadToEnd();
+                })
+                .Returns(Task.CompletedTask);
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
+            using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
+            Assert.True(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(74, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_Cod4xCommandsFetchFailure_UsesPersistedPortalPluginHealthControls()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var uploadedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-runtime-config-cod4xcommands-fetch-failure-persisted-fallback",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["artifactPath"] = ToJsonElement(artifactPath),
+                    ["portalPluginHealthEnabled"] = ToJsonElement(false),
+                    ["portalPluginHealthMinPower"] = ToJsonElement(63)
+                }
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            _mockGlobalConfigurationsApi.Setup(x => x.GetConfiguration(
+                    Cod4xCommandSettingsConstants.Namespace,
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("global cod4xCommands unavailable"));
+
+            _mockGameServerConfigurationsApi.Setup(x => x.GetConfiguration(
+                    _serverId,
+                    Cod4xCommandSettingsConstants.Namespace,
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("server cod4xCommands unavailable"));
+
+            _mockRemoteFileClient.Setup(x => x.UploadAsync(
+                    It.IsAny<Stream>(),
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Stream, string, CancellationToken>((content, remotePath, _) =>
+                {
+                    using var reader = new StreamReader(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+                    uploadedFiles[remotePath] = reader.ReadToEnd();
+                })
+                .Returns(Task.CompletedTask);
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
+            using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
+            Assert.False(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(63, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_Cod4xCommandsFetchFailure_WithoutPersistedControls_FailsClosed()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var uploadedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-runtime-config-cod4xcommands-fetch-failure-default-fail-closed",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            _mockGlobalConfigurationsApi.Setup(x => x.GetConfiguration(
+                    Cod4xCommandSettingsConstants.Namespace,
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("global cod4xCommands unavailable"));
+
+            _mockGameServerConfigurationsApi.Setup(x => x.GetConfiguration(
+                    _serverId,
+                    Cod4xCommandSettingsConstants.Namespace,
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("server cod4xCommands unavailable"));
+
+            _mockRemoteFileClient.Setup(x => x.UploadAsync(
+                    It.IsAny<Stream>(),
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Stream, string, CancellationToken>((content, remotePath, _) =>
+                {
+                    using var reader = new StreamReader(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+                    uploadedFiles[remotePath] = reader.ReadToEnd();
+                })
+                .Returns(Task.CompletedTask);
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
+            using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
+            Assert.False(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(98, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_GlobalCod4xCommandsFetchFailure_WithServerNotConfigured_FailsClosed()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var uploadedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-runtime-config-global-cod4xcommands-fetch-failure-server-not-configured",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            _mockGlobalConfigurationsApi.Setup(x => x.GetConfiguration(
+                    Cod4xCommandSettingsConstants.Namespace,
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("global cod4xCommands unavailable"));
+
+            _mockRemoteFileClient.Setup(x => x.UploadAsync(
+                    It.IsAny<Stream>(),
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Stream, string, CancellationToken>((content, remotePath, _) =>
+                {
+                    using var reader = new StreamReader(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+                    uploadedFiles[remotePath] = reader.ReadToEnd();
+                })
+                .Returns(Task.CompletedTask);
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
+            using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
+            Assert.False(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(98, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_GlobalCod4xCommandsConfigured_ServerFetchFailure_FailsClosed()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var uploadedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-runtime-config-global-cod4xcommands-configured-server-fetch-failure",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            SetupGlobalCod4xCommandSettings(new
+            {
+                schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion,
+                enabled = true,
+                commands = new
+                {
+                    portalpluginhealth = new
+                    {
+                        enabled = true,
+                        minPower = 91
+                    }
+                }
+            });
+
+            _mockGameServerConfigurationsApi.Setup(x => x.GetConfiguration(
+                    _serverId,
+                    Cod4xCommandSettingsConstants.Namespace,
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("server cod4xCommands unavailable"));
+
+            _mockRemoteFileClient.Setup(x => x.UploadAsync(
+                    It.IsAny<Stream>(),
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Stream, string, CancellationToken>((content, remotePath, _) =>
+                {
+                    using var reader = new StreamReader(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+                    uploadedFiles[remotePath] = reader.ReadToEnd();
+                })
+                .Returns(Task.CompletedTask);
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
+            using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
+            Assert.False(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(98, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallRequest_ServerCod4xCommandsConfigured_GlobalFetchFailure_FailsClosed()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var uploadedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            PluginRootDirectory = "/fs_homepath/plugins",
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.0.0"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-runtime-config-server-cod4xcommands-configured-global-fetch-failure",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.2.3",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+
+            _mockGlobalConfigurationsApi.Setup(x => x.GetConfiguration(
+                    Cod4xCommandSettingsConstants.Namespace,
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("global cod4xCommands unavailable"));
+
+            SetupServerCod4xCommandSettings(new
+            {
+                schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion,
+                enabled = true,
+                commands = new
+                {
+                    portalpluginhealth = new
+                    {
+                        enabled = true,
+                        minPower = 74
+                    }
+                }
+            });
+
+            _mockRemoteFileClient.Setup(x => x.UploadAsync(
+                    It.IsAny<Stream>(),
+                    It.IsAny<string>(),
+                    It.IsAny<CancellationToken>()))
+                .Callback<Stream, string, CancellationToken>((content, remotePath, _) =>
+                {
+                    using var reader = new StreamReader(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+                    uploadedFiles[remotePath] = reader.ReadToEnd();
+                })
+                .Returns(Task.CompletedTask);
+
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
+            using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
+            Assert.False(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
+            Assert.Equal(98, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
+        }
+        finally
+        {
             TryDeleteFile(artifactPath);
         }
     }
@@ -1842,6 +2291,37 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             .ReturnsAsync(result);
     }
 
+    private void SetupGlobalCod4xCommandSettings(object settings)
+    {
+        var configuration = JsonSerializer.Serialize(settings);
+        var dto = new ConfigurationDto();
+        typeof(ConfigurationDto).GetProperty(nameof(ConfigurationDto.Namespace))!.SetValue(dto, Cod4xCommandSettingsConstants.Namespace);
+        typeof(ConfigurationDto).GetProperty(nameof(ConfigurationDto.Configuration))!.SetValue(dto, configuration);
+
+        _mockGlobalConfigurationsApi.Setup(x => x.GetConfiguration(
+                Cod4xCommandSettingsConstants.Namespace,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<ConfigurationDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<ConfigurationDto>(dto)));
+    }
+
+    private void SetupServerCod4xCommandSettings(object settings)
+    {
+        var configuration = JsonSerializer.Serialize(settings);
+        var dto = new ConfigurationDto();
+        typeof(ConfigurationDto).GetProperty(nameof(ConfigurationDto.Namespace))!.SetValue(dto, Cod4xCommandSettingsConstants.Namespace);
+        typeof(ConfigurationDto).GetProperty(nameof(ConfigurationDto.Configuration))!.SetValue(dto, configuration);
+
+        _mockGameServerConfigurationsApi.Setup(x => x.GetConfiguration(
+                _serverId,
+                Cod4xCommandSettingsConstants.Namespace,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<ConfigurationDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<ConfigurationDto>(dto)));
+    }
+
     private ServerContext CreateContext(string gameType = "CallOfDuty4x")
     {
         return new ServerContext
@@ -1870,6 +2350,13 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         return new ApiResult<string>(
             HttpStatusCode.OK,
             new ApiResponse<string>(value));
+    }
+
+    private static ApiResult<ConfigurationDto> CreateNotFoundConfigurationResult()
+    {
+        return new ApiResult<ConfigurationDto>(
+            HttpStatusCode.NotFound,
+            new ApiResponse<ConfigurationDto>(new ApiError("NOT_FOUND", "Not found")));
     }
 
     private static Cod4xPluginSettingsDocument DeserializeSettings(string payload)

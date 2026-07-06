@@ -20,7 +20,9 @@ using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Configurations;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xCommands;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Shared;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
@@ -68,6 +70,8 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private const string RuntimeConfigIngestApiResourceKey = "ingestApiResource";
     private const string RuntimeConfigGameTypeKey = "gameType";
     private const string RuntimeConfigRefreshIntervalSecondsKey = "refreshIntervalSeconds";
+    private const string RuntimeConfigPortalPluginHealthEnabledKey = "portalPluginHealthEnabled";
+    private const string RuntimeConfigPortalPluginHealthMinPowerKey = "portalPluginHealthMinPower";
     private const string RuntimeConfigTenantIdEnvironmentVariable = "COD4X_PLUGIN_TENANT_ID";
     private const string RuntimeConfigClientIdEnvironmentVariable = "COD4X_PLUGIN_CLIENT_ID";
     private const string RuntimeConfigClientSecretEnvironmentVariable = "COD4X_PLUGIN_CLIENT_SECRET";
@@ -76,6 +80,9 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private const string RuntimeConfigIngestBaseUrlEnvironmentVariable = "COD4X_PLUGIN_INGEST_BASE_URL";
     private const string RuntimeConfigIngestApiResourceEnvironmentVariable = "COD4X_PLUGIN_INGEST_API_RESOURCE";
     private const string RuntimeConfigRefreshIntervalSecondsEnvironmentVariable = "COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS";
+    private const string RuntimeConfigPortalPluginHealthEnabledEnvironmentVariable = "COD4X_PLUGIN_HEALTH_ENABLED";
+    private const string RuntimeConfigPortalPluginHealthMinPowerEnvironmentVariable = "COD4X_PLUGIN_HEALTH_MIN_POWER";
+    private const int PortalPluginHealthDefaultMinPower = 98;
 
     public CoD4xPluginLifecycleService(
         IServiceScopeFactory scopeFactory,
@@ -201,6 +208,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             try
             {
                 actionResult = await ExecuteActionAsync(
+                        repositoryApiClient,
                         context,
                         serversApiClient.CoD4xRcon.V1,
                         settings,
@@ -247,6 +255,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     }
 
     private async Task<ActionResult> ExecuteActionAsync(
+        IRepositoryApiClient repositoryApiClient,
         ServerContext context,
         ICoD4xRconApi coD4xRconApi,
         Cod4xPluginSettingsDocument settings,
@@ -256,14 +265,15 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     {
         return request.Action switch
         {
-            Cod4xPluginOperationAction.Install => await ExecuteInstallAsync(context, coD4xRconApi, settings, runtimeState, request, ct).ConfigureAwait(false),
-            Cod4xPluginOperationAction.Rollback => await ExecuteRollbackAsync(context, coD4xRconApi, settings, runtimeState, request, ct).ConfigureAwait(false),
+            Cod4xPluginOperationAction.Install => await ExecuteInstallAsync(repositoryApiClient, context, coD4xRconApi, settings, runtimeState, request, ct).ConfigureAwait(false),
+            Cod4xPluginOperationAction.Rollback => await ExecuteRollbackAsync(repositoryApiClient, context, coD4xRconApi, settings, runtimeState, request, ct).ConfigureAwait(false),
             Cod4xPluginOperationAction.Unload => await ExecuteUnloadAsync(context, coD4xRconApi, ct).ConfigureAwait(false),
             _ => ActionResult.Failure($"Unsupported CoD4x plugin lifecycle action '{request.Action}'.")
         };
     }
 
     private async Task<ActionResult> ExecuteInstallAsync(
+        IRepositoryApiClient repositoryApiClient,
         ServerContext context,
         ICoD4xRconApi coD4xRconApi,
         Cod4xPluginSettingsDocument settings,
@@ -315,7 +325,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         await TryBestEffortUnloadAsync(context, coD4xRconApi, ct).ConfigureAwait(false);
 
-        var uploadResult = await UploadPluginAssetsAsync(context, settings, request, targetVersion, ct).ConfigureAwait(false);
+        var uploadResult = await UploadPluginAssetsAsync(repositoryApiClient, context, settings, request, targetVersion, ct).ConfigureAwait(false);
         if (!uploadResult.IsSuccess)
         {
             uploadResult.RolloutStage = rolloutDecision.Stage;
@@ -356,6 +366,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     }
 
     private async Task<ActionResult> ExecuteRollbackAsync(
+        IRepositoryApiClient repositoryApiClient,
         ServerContext context,
         ICoD4xRconApi coD4xRconApi,
         Cod4xPluginSettingsDocument settings,
@@ -389,7 +400,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         await TryBestEffortUnloadAsync(context, coD4xRconApi, ct).ConfigureAwait(false);
 
-        var uploadResult = await UploadPluginAssetsAsync(context, settings, request, rollbackVersion, ct).ConfigureAwait(false);
+        var uploadResult = await UploadPluginAssetsAsync(repositoryApiClient, context, settings, request, rollbackVersion, ct).ConfigureAwait(false);
         if (!uploadResult.IsSuccess)
         {
             uploadResult.RolloutStage = rolloutDecision.Stage;
@@ -497,6 +508,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     }
 
     private async Task<ActionResult> UploadPluginAssetsAsync(
+        IRepositoryApiClient repositoryApiClient,
         ServerContext context,
         Cod4xPluginSettingsDocument settings,
         Cod4xPluginOperationRequest request,
@@ -532,7 +544,20 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             return ActionResult.Failure(extensionError);
         }
 
-        if (!TryBuildPluginRuntimeConfig(context, settings, request, out var runtimeConfig, out var runtimeConfigError))
+        var portalPluginHealthRuntimeConfig = await ResolvePortalPluginHealthCommandRuntimeConfigAsync(
+                repositoryApiClient,
+                context.ServerId,
+                settings.ExtensionData,
+                ct)
+            .ConfigureAwait(false);
+
+        if (!TryBuildPluginRuntimeConfig(
+                context,
+                settings,
+                request,
+                portalPluginHealthRuntimeConfig,
+                out var runtimeConfig,
+                out var runtimeConfigError))
         {
             return ActionResult.Failure(runtimeConfigError);
         }
@@ -583,6 +608,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         ServerContext context,
         Cod4xPluginSettingsDocument settings,
         Cod4xPluginOperationRequest request,
+        PortalPluginHealthCommandRuntimeConfig portalPluginHealthRuntimeConfig,
         out PluginRuntimeConfigDocument runtimeConfig,
         out string error)
     {
@@ -764,6 +790,28 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             Environment.GetEnvironmentVariable(RuntimeConfigRefreshIntervalSecondsEnvironmentVariable));
 
         runtimeConfig.RefreshIntervalSeconds = Math.Clamp(refreshIntervalSeconds ?? 120, 15, 900);
+
+        var portalPluginHealthEnabled = ResolveRuntimeConfigBoolValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigPortalPluginHealthEnabledKey,
+            _configuration[$"{RuntimeConfigSectionName}:PortalPluginHealthEnabled"],
+            Environment.GetEnvironmentVariable(RuntimeConfigPortalPluginHealthEnabledEnvironmentVariable));
+
+        runtimeConfig.PortalPluginHealthEnabled = portalPluginHealthEnabled ?? portalPluginHealthRuntimeConfig.Enabled;
+
+        var portalPluginHealthMinPower = ResolveRuntimeConfigIntValue(
+            request.ExtensionData,
+            settings.ExtensionData,
+            RuntimeConfigPortalPluginHealthMinPowerKey,
+            _configuration[$"{RuntimeConfigSectionName}:PortalPluginHealthMinPower"],
+            Environment.GetEnvironmentVariable(RuntimeConfigPortalPluginHealthMinPowerEnvironmentVariable));
+
+        runtimeConfig.PortalPluginHealthMinPower = Math.Clamp(
+            portalPluginHealthMinPower ?? portalPluginHealthRuntimeConfig.MinPower,
+            Cod4xCommandSettingsConstants.MinPower,
+            Cod4xCommandSettingsConstants.MaxPower);
+
         return true;
     }
 
@@ -822,6 +870,33 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         return null;
     }
 
+    private static bool? ResolveRuntimeConfigBoolValue(
+        IReadOnlyDictionary<string, JsonElement>? requestExtensionData,
+        IReadOnlyDictionary<string, JsonElement>? settingsExtensionData,
+        string key,
+        params string?[] additionalCandidates)
+    {
+        if (TryGetRuntimeConfigBoolValue(requestExtensionData, key, out var requestValue))
+        {
+            return requestValue;
+        }
+
+        if (TryGetRuntimeConfigBoolValue(settingsExtensionData, key, out var settingsValue))
+        {
+            return settingsValue;
+        }
+
+        foreach (var candidate in additionalCandidates)
+        {
+            if (TryParseBoolean(candidate, out var parsedCandidate))
+            {
+                return parsedCandidate;
+            }
+        }
+
+        return null;
+    }
+
     private static string? TryGetRuntimeConfigStringValue(IReadOnlyDictionary<string, JsonElement>? extensionData, string key)
     {
         if (!TryGetRuntimeConfigElement(extensionData, key, out var element))
@@ -856,6 +931,91 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         return false;
     }
 
+    private static bool TryGetRuntimeConfigBoolValue(IReadOnlyDictionary<string, JsonElement>? extensionData, string key, out bool value)
+    {
+        value = default;
+
+        if (!TryGetRuntimeConfigElement(extensionData, key, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.True)
+        {
+            value = true;
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.False)
+        {
+            value = false;
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            if (!element.TryGetInt32(out var numericValue))
+            {
+                return false;
+            }
+
+            if (numericValue == 0)
+            {
+                value = false;
+                return true;
+            }
+
+            if (numericValue == 1)
+            {
+                value = true;
+                return true;
+            }
+
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            return TryParseBoolean(element.GetString(), out value);
+        }
+
+        return false;
+    }
+
+    private static bool TryParseBoolean(string? candidate, out bool value)
+    {
+        value = default;
+
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        if (bool.TryParse(candidate, out value))
+        {
+            return true;
+        }
+
+        if (!int.TryParse(candidate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numericValue))
+        {
+            return false;
+        }
+
+        if (numericValue == 0)
+        {
+            value = false;
+            return true;
+        }
+
+        if (numericValue == 1)
+        {
+            value = true;
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryGetRuntimeConfigElement(
         IReadOnlyDictionary<string, JsonElement>? extensionData,
         string key,
@@ -880,6 +1040,172 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         }
 
         return TryGetPropertyCaseInsensitive(runtimeConfigElement, key, out value);
+    }
+
+    private async Task<PortalPluginHealthCommandRuntimeConfig> ResolvePortalPluginHealthCommandRuntimeConfigAsync(
+        IRepositoryApiClient repositoryApiClient,
+        Guid serverId,
+        IReadOnlyDictionary<string, JsonElement>? settingsExtensionData,
+        CancellationToken ct)
+    {
+        var persistedEnabled = ResolveRuntimeConfigBoolValue(
+            null,
+            settingsExtensionData,
+            RuntimeConfigPortalPluginHealthEnabledKey);
+
+        var persistedMinPower = ResolveRuntimeConfigIntValue(
+            null,
+            settingsExtensionData,
+            RuntimeConfigPortalPluginHealthMinPowerKey);
+
+        var effectiveEnabled = true;
+        var effectiveMinPower = PortalPluginHealthDefaultMinPower;
+
+        var globalFetch = await TryFetchCod4xCommandSettingsAsync(
+            () => repositoryApiClient.GlobalConfigurations.V1.GetConfiguration(Cod4xCommandSettingsConstants.Namespace, ct),
+            serverId,
+            "global").ConfigureAwait(false);
+
+        var serverFetch = await TryFetchCod4xCommandSettingsAsync(
+            () => repositoryApiClient.GameServerConfigurations.V1.GetConfiguration(serverId, Cod4xCommandSettingsConstants.Namespace, ct),
+            serverId,
+            "server").ConfigureAwait(false);
+
+        var globalEnabled = globalFetch.Success && globalFetch.Document?.Enabled == true;
+        var serverEnabled = serverFetch.Success && serverFetch.Document?.Enabled == true;
+
+        if (!globalFetch.Success || !serverFetch.Success)
+        {
+            return new PortalPluginHealthCommandRuntimeConfig(
+                persistedEnabled ?? false,
+                Math.Clamp(
+                    persistedMinPower ?? PortalPluginHealthDefaultMinPower,
+                    Cod4xCommandSettingsConstants.MinPower,
+                    Cod4xCommandSettingsConstants.MaxPower));
+        }
+
+        if (globalEnabled)
+        {
+            ApplyPortalPluginHealthCommandOverrides(globalFetch.Document, ref effectiveEnabled, ref effectiveMinPower);
+        }
+
+        if (serverEnabled)
+        {
+            ApplyPortalPluginHealthCommandOverrides(serverFetch.Document, ref effectiveEnabled, ref effectiveMinPower);
+        }
+
+        return new PortalPluginHealthCommandRuntimeConfig(effectiveEnabled, effectiveMinPower);
+    }
+
+    private async Task<Cod4xCommandSettingsFetchResult> TryFetchCod4xCommandSettingsAsync(
+        Func<Task<ApiResult<ConfigurationDto>>> fetch,
+        Guid serverId,
+        string scope)
+    {
+        ApiResult<ConfigurationDto> result;
+        try
+        {
+            result = await fetch().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "Failed to fetch {Scope} cod4xCommands settings for runtime config projection on {ServerId}",
+                scope,
+                serverId);
+            return Cod4xCommandSettingsFetchResult.Failed();
+        }
+
+        if (result.IsNotFound)
+        {
+            return Cod4xCommandSettingsFetchResult.NotConfigured();
+        }
+
+        if (!result.IsSuccess || result.Result?.Data is null)
+        {
+            _logger.LogDebug(
+                "Failed to fetch {Scope} cod4xCommands settings for runtime config projection on {ServerId}: status {StatusCode}",
+                scope,
+                serverId,
+                result.StatusCode);
+            return Cod4xCommandSettingsFetchResult.Failed();
+        }
+
+        var document = ParseCod4xCommandSettingsDocument(result.Result.Data.Configuration);
+        if (document is null)
+        {
+            _logger.LogDebug(
+                "Ignoring {Scope} cod4xCommands settings for runtime config projection on {ServerId}: invalid or unsupported payload",
+                scope,
+                serverId);
+            return Cod4xCommandSettingsFetchResult.Failed();
+        }
+
+        return Cod4xCommandSettingsFetchResult.Configured(document);
+    }
+
+    private static Cod4xCommandSettingsDocument? ParseCod4xCommandSettingsDocument(string? configuration)
+    {
+        if (string.IsNullOrWhiteSpace(configuration))
+        {
+            return null;
+        }
+
+        try
+        {
+            var document = JsonSerializer.Deserialize<Cod4xCommandSettingsDocument>(configuration, JsonOptions);
+            if (document is null)
+            {
+                return null;
+            }
+
+            if (!SchemaVersionSupport.IsSupported(document.SchemaVersion))
+            {
+                return null;
+            }
+
+            var validation = new Cod4xCommandSettingsValidator().Validate(document);
+            return validation.IsValid ? document : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static void ApplyPortalPluginHealthCommandOverrides(
+        Cod4xCommandSettingsDocument? document,
+        ref bool enabled,
+        ref int minPower)
+    {
+        if (document?.Commands is null)
+        {
+            return;
+        }
+
+        foreach (var commandOverride in document.Commands)
+        {
+            if (!string.Equals(commandOverride.Key, "portalpluginhealth", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (commandOverride.Value?.Enabled is bool commandEnabled)
+            {
+                enabled = commandEnabled;
+            }
+
+            if (commandOverride.Value?.MinPower is int commandMinPower)
+            {
+                minPower = Math.Clamp(
+                    commandMinPower,
+                    Cod4xCommandSettingsConstants.MinPower,
+                    Cod4xCommandSettingsConstants.MaxPower);
+            }
+
+            return;
+        }
     }
 
     private static void SanitizeSensitiveRuntimeConfigData(Cod4xPluginSettingsDocument settings)
@@ -946,7 +1272,9 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
                || string.Equals(key, RuntimeConfigIngestBaseUrlKey, StringComparison.OrdinalIgnoreCase)
                || string.Equals(key, RuntimeConfigIngestApiResourceKey, StringComparison.OrdinalIgnoreCase)
                || string.Equals(key, RuntimeConfigGameTypeKey, StringComparison.OrdinalIgnoreCase)
-               || string.Equals(key, RuntimeConfigRefreshIntervalSecondsKey, StringComparison.OrdinalIgnoreCase);
+             || string.Equals(key, RuntimeConfigRefreshIntervalSecondsKey, StringComparison.OrdinalIgnoreCase)
+             || string.Equals(key, RuntimeConfigPortalPluginHealthEnabledKey, StringComparison.OrdinalIgnoreCase)
+             || string.Equals(key, RuntimeConfigPortalPluginHealthMinPowerKey, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void RemoveCaseInsensitiveKeys(IDictionary<string, JsonElement> extensionData, string key)
@@ -2296,6 +2624,26 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         [JsonPropertyName("refreshIntervalSeconds")]
         public int RefreshIntervalSeconds { get; set; } = 120;
+
+        [JsonPropertyName("portalPluginHealthEnabled")]
+        public bool PortalPluginHealthEnabled { get; set; } = true;
+
+        [JsonPropertyName("portalPluginHealthMinPower")]
+        public int PortalPluginHealthMinPower { get; set; } = PortalPluginHealthDefaultMinPower;
+    }
+
+    private readonly record struct PortalPluginHealthCommandRuntimeConfig(bool Enabled, int MinPower);
+
+    private readonly record struct Cod4xCommandSettingsFetchResult(bool Success, Cod4xCommandSettingsDocument? Document)
+    {
+        public static Cod4xCommandSettingsFetchResult Configured(Cod4xCommandSettingsDocument document)
+            => new(true, document);
+
+        public static Cod4xCommandSettingsFetchResult NotConfigured()
+            => new(true, null);
+
+        public static Cod4xCommandSettingsFetchResult Failed()
+            => new(false, null);
     }
 
     private readonly record struct ArtifactBlobReference(

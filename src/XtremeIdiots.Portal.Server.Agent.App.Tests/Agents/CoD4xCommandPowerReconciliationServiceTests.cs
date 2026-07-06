@@ -253,6 +253,123 @@ public class CoD4xCommandPowerReconciliationServiceTests
     }
 
     [Fact]
+    public async Task ReconcileAsync_UpdatesPortalPluginHealthPower_WhenCommandIsListed()
+    {
+        // Arrange
+        SetupGlobalSettings(new
+        {
+            schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion,
+            enabled = true,
+            commands = new
+            {
+                portalpluginhealth = new { minPower = 70 }
+            }
+        });
+
+        SetupServerSettingsNotFound();
+
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminListCommands(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(
+                HttpStatusCode.OK,
+                new ApiResponse<string>("portalpluginhealth      98")));
+
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminChangeCommandPower(_serverId, It.IsAny<CoD4xAdminChangeCommandPowerRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(
+                HttpStatusCode.OK,
+                new ApiResponse<string>("changed required power of cmd: portalpluginhealth to new power: 70")));
+
+        var service = CreateService();
+
+        // Act
+        await service.ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        // Assert
+        _mockCoD4xRconApi.Verify(x => x.AdminChangeCommandPower(
+            _serverId,
+            It.Is<CoD4xAdminChangeCommandPowerRequestDto>(r => r.Command == "portalpluginhealth" && r.MinPower == 70),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_SetsPortalPluginHealthPower_WhenCommandIsNotListedButExplicitlyConfigured()
+    {
+        // Arrange
+        SetupGlobalSettings(new
+        {
+            schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion,
+            enabled = true,
+            commands = new
+            {
+                portalpluginhealth = new { minPower = 70 }
+            }
+        });
+
+        SetupServerSettingsNotFound();
+
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminListCommands(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(
+                HttpStatusCode.OK,
+                new ApiResponse<string>("kick                    35")));
+
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminChangeCommandPower(_serverId, It.IsAny<CoD4xAdminChangeCommandPowerRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(
+                HttpStatusCode.OK,
+                new ApiResponse<string>("changed required power")));
+
+        var service = CreateService();
+
+        // Act
+        await service.ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        // Assert
+        _mockCoD4xRconApi.Verify(x => x.AdminChangeCommandPower(
+            _serverId,
+            It.Is<CoD4xAdminChangeCommandPowerRequestDto>(r => r.Command == "portalpluginhealth" && r.MinPower == 70),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_DoesNotSetPortalPluginHealthPower_WhenCommandIsNotListedAndNotExplicitlyConfigured()
+    {
+        // Arrange
+        SetupGlobalSettings(new
+        {
+            schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion,
+            enabled = true,
+            commands = new { }
+        });
+
+        SetupServerSettingsNotFound();
+
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminListCommands(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(
+                HttpStatusCode.OK,
+                new ApiResponse<string>("kick                    35")));
+
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminChangeCommandPower(_serverId, It.IsAny<CoD4xAdminChangeCommandPowerRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(
+                HttpStatusCode.OK,
+                new ApiResponse<string>("changed required power")));
+
+        var service = CreateService();
+
+        // Act
+        await service.ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        // Assert
+        _mockCoD4xRconApi.Verify(x => x.AdminChangeCommandPower(
+            _serverId,
+            It.Is<CoD4xAdminChangeCommandPowerRequestDto>(r => r.Command == "portalpluginhealth"),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task ReconcileAsync_SetsPowerTo100_WhenCommandIsDisabledBySettings()
     {
         // Arrange
@@ -290,6 +407,40 @@ public class CoD4xCommandPowerReconciliationServiceTests
             _serverId,
             It.Is<CoD4xAdminChangeCommandPowerRequestDto>(r => r.Command == "kick" && r.MinPower == 100),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_LeavesPortalPluginHealthHidden_WhenExplicitlyDisabledAndNotListed()
+    {
+        // Arrange
+        SetupGlobalSettings(new
+        {
+            schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion,
+            enabled = true,
+            commands = new
+            {
+                portalpluginhealth = new { enabled = false }
+            }
+        });
+
+        SetupServerSettingsNotFound();
+
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminListCommands(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(
+                HttpStatusCode.OK,
+                new ApiResponse<string>("kick                    35")));
+
+        var service = CreateService();
+
+        // Act
+        await service.ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        // Assert
+        _mockCoD4xRconApi.Verify(x => x.AdminChangeCommandPower(
+            _serverId,
+            It.Is<CoD4xAdminChangeCommandPowerRequestDto>(r => r.Command == "portalpluginhealth"),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
