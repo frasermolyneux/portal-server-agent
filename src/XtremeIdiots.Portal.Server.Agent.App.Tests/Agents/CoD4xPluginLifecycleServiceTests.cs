@@ -353,13 +353,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
             Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
             using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
-            Assert.Equal("00000000-0000-0000-0000-000000000001", runtimeConfigDocument.RootElement.GetProperty("tenantId").GetString());
-            Assert.Equal("00000000-0000-0000-0000-000000000002", runtimeConfigDocument.RootElement.GetProperty("clientId").GetString());
-            Assert.Equal("unit-test-cod4x-plugin-secret", runtimeConfigDocument.RootElement.GetProperty("clientSecret").GetString());
-            Assert.Equal("https://portal-api.example.com/repository", runtimeConfigDocument.RootElement.GetProperty("repositoryApiBaseUrl").GetString());
-            Assert.Equal("api://portal-repository-api", runtimeConfigDocument.RootElement.GetProperty("repositoryApiResource").GetString());
             Assert.Equal("https://portal-api.example.com/ingest", runtimeConfigDocument.RootElement.GetProperty("ingestBaseUrl").GetString());
-            Assert.Equal("api://portal-server-events-api", runtimeConfigDocument.RootElement.GetProperty("ingestApiResource").GetString());
+            Assert.Equal("unit-test-cod4x-plugin-subscription-key", runtimeConfigDocument.RootElement.GetProperty("ingestSubscriptionKey").GetString());
             Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(_serverId.ToString("D"), runtimeConfigDocument.RootElement.GetProperty("gameServerId").GetString());
             Assert.Equal(120, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
@@ -658,7 +653,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     public async Task ExecuteAsync_InstallRequest_MissingRuntimeConfigSecret_SetsFailedState()
     {
         var artifactPath = CreateTemporaryArtifact(".so");
-        var previousRuntimeSecret = Environment.GetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET");
+        var previousRuntimeSecret = Environment.GetEnvironmentVariable("COD4X_PLUGIN_INGEST_SUBSCRIPTION_KEY");
         var settings = new Cod4xPluginSettingsDocument
         {
             SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
@@ -679,7 +674,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
         try
         {
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET", null);
+            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_SUBSCRIPTION_KEY", null);
             SetupConfiguration(settings);
 
             var persistedPayloads = new List<UpsertConfigurationDto>();
@@ -693,7 +688,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
             var service = CreateService(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
-                ["CoD4xPlugin:ClientSecret"] = null
+                ["CoD4xPlugin:IngestSubscriptionKey"] = null
             });
 
             await service.ExecuteAsync(CreateContext(), CancellationToken.None);
@@ -704,14 +699,14 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.NotNull(final.RuntimeState);
             Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
             Assert.Null(final.OperationRequest);
-            Assert.Contains("missing clientSecret", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("missing ingestSubscriptionKey", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
 
             _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
             _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET", previousRuntimeSecret);
+            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_SUBSCRIPTION_KEY", previousRuntimeSecret);
             TryDeleteFile(artifactPath);
         }
     }
@@ -741,13 +736,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                     ["artifactPath"] = ToJsonElement(artifactPath),
                     ["runtimeConfig"] = ToJsonElement(new
                     {
-                        tenantId = "11111111-1111-1111-1111-111111111111",
-                        clientId = "22222222-2222-2222-2222-222222222222",
-                        clientSecret = "request-extension-secret-should-be-ignored",
-                        repositoryApiBaseUrl = "https://override.example.com/repository/",
-                        repositoryApiResource = "api://override-repository-api",
                         ingestBaseUrl = "https://override.example.com/ingest/",
-                        ingestApiResource = "api://override-server-events-api",
+                        ingestSubscriptionKey = "request-extension-secret-should-be-ignored",
                         refreshIntervalSeconds = 45,
                         portalPluginHealthEnabled = false,
                         portalPluginHealthMinPower = 72
@@ -785,13 +775,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
             Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
             using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
-            Assert.Equal("11111111-1111-1111-1111-111111111111", runtimeConfigDocument.RootElement.GetProperty("tenantId").GetString());
-            Assert.Equal("22222222-2222-2222-2222-222222222222", runtimeConfigDocument.RootElement.GetProperty("clientId").GetString());
-            Assert.Equal("unit-test-cod4x-plugin-secret", runtimeConfigDocument.RootElement.GetProperty("clientSecret").GetString());
-            Assert.Equal("https://override.example.com/repository", runtimeConfigDocument.RootElement.GetProperty("repositoryApiBaseUrl").GetString());
-            Assert.Equal("api://override-repository-api", runtimeConfigDocument.RootElement.GetProperty("repositoryApiResource").GetString());
             Assert.Equal("https://override.example.com/ingest", runtimeConfigDocument.RootElement.GetProperty("ingestBaseUrl").GetString());
-            Assert.Equal("api://override-server-events-api", runtimeConfigDocument.RootElement.GetProperty("ingestApiResource").GetString());
+            Assert.Equal("unit-test-cod4x-plugin-subscription-key", runtimeConfigDocument.RootElement.GetProperty("ingestSubscriptionKey").GetString());
             Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(45, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
             Assert.False(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
@@ -812,13 +797,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         var artifactPath = CreateTemporaryArtifact(".so");
         var uploadedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        var previousTenant = Environment.GetEnvironmentVariable("COD4X_PLUGIN_TENANT_ID");
-        var previousClientId = Environment.GetEnvironmentVariable("COD4X_PLUGIN_CLIENT_ID");
-        var previousClientSecret = Environment.GetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET");
-        var previousBaseUrl = Environment.GetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_BASE_URL");
-        var previousAudience = Environment.GetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_RESOURCE");
         var previousIngestBaseUrl = Environment.GetEnvironmentVariable("COD4X_PLUGIN_INGEST_BASE_URL");
-        var previousIngestAudience = Environment.GetEnvironmentVariable("COD4X_PLUGIN_INGEST_API_RESOURCE");
+        var previousIngestSubscriptionKey = Environment.GetEnvironmentVariable("COD4X_PLUGIN_INGEST_SUBSCRIPTION_KEY");
         var previousRefreshInterval = Environment.GetEnvironmentVariable("COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS");
 
         var settings = new Cod4xPluginSettingsDocument
@@ -842,13 +822,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
         try
         {
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_TENANT_ID", "33333333-3333-3333-3333-333333333333");
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_CLIENT_ID", "44444444-4444-4444-4444-444444444444");
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET", "env-fallback-cod4x-plugin-secret");
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_BASE_URL", "https://env.example.com/repository/");
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_RESOURCE", "api://env-repository-api");
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_BASE_URL", "https://env.example.com/ingest/");
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_API_RESOURCE", "api://env-server-events-api");
+            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_SUBSCRIPTION_KEY", "env-fallback-cod4x-plugin-subscription-key");
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS", "300");
 
             SetupConfiguration(settings);
@@ -866,29 +841,17 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
             var service = CreateService(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
-                ["CoD4xPlugin:TenantId"] = null,
-                ["CoD4xPlugin:ClientId"] = null,
-                ["CoD4xPlugin:ClientSecret"] = null,
-                ["CoD4xPlugin:RepositoryApiBaseUrl"] = null,
-                ["CoD4xPlugin:RepositoryApiResource"] = null,
                 ["CoD4xPlugin:IngestBaseUrl"] = null,
-                ["CoD4xPlugin:IngestApiResource"] = null,
-                ["CoD4xPlugin:RefreshIntervalSeconds"] = null,
-                ["RepositoryApi:BaseUrl"] = null,
-                ["RepositoryApi:ApplicationAudience"] = null
+                ["CoD4xPlugin:IngestSubscriptionKey"] = null,
+                ["CoD4xPlugin:RefreshIntervalSeconds"] = null
             });
 
             await service.ExecuteAsync(CreateContext(), CancellationToken.None);
 
             Assert.True(uploadedFiles.TryGetValue("/fs_homepath/portal-cod4x-plugin.config.json", out var uploadedRuntimeConfig));
             using var runtimeConfigDocument = JsonDocument.Parse(uploadedRuntimeConfig);
-            Assert.Equal("33333333-3333-3333-3333-333333333333", runtimeConfigDocument.RootElement.GetProperty("tenantId").GetString());
-            Assert.Equal("44444444-4444-4444-4444-444444444444", runtimeConfigDocument.RootElement.GetProperty("clientId").GetString());
-            Assert.Equal("env-fallback-cod4x-plugin-secret", runtimeConfigDocument.RootElement.GetProperty("clientSecret").GetString());
-            Assert.Equal("https://env.example.com/repository", runtimeConfigDocument.RootElement.GetProperty("repositoryApiBaseUrl").GetString());
-            Assert.Equal("api://env-repository-api", runtimeConfigDocument.RootElement.GetProperty("repositoryApiResource").GetString());
             Assert.Equal("https://env.example.com/ingest", runtimeConfigDocument.RootElement.GetProperty("ingestBaseUrl").GetString());
-            Assert.Equal("api://env-server-events-api", runtimeConfigDocument.RootElement.GetProperty("ingestApiResource").GetString());
+            Assert.Equal("env-fallback-cod4x-plugin-subscription-key", runtimeConfigDocument.RootElement.GetProperty("ingestSubscriptionKey").GetString());
             Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(300, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
             Assert.True(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
@@ -896,13 +859,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_TENANT_ID", previousTenant);
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_CLIENT_ID", previousClientId);
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_CLIENT_SECRET", previousClientSecret);
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_BASE_URL", previousBaseUrl);
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_REPOSITORY_API_RESOURCE", previousAudience);
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_BASE_URL", previousIngestBaseUrl);
-            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_API_RESOURCE", previousIngestAudience);
+            Environment.SetEnvironmentVariable("COD4X_PLUGIN_INGEST_SUBSCRIPTION_KEY", previousIngestSubscriptionKey);
             Environment.SetEnvironmentVariable("COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS", previousRefreshInterval);
             TryDeleteFile(artifactPath);
         }
@@ -1461,7 +1419,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                 ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["artifactPath"] = ToJsonElement(artifactPath),
-                    ["clientSecret"] = ToJsonElement("top-level-secret-should-be-removed"),
+                    ["ingestSubscriptionKey"] = ToJsonElement("top-level-secret-should-be-removed"),
                     ["runtimeConfig"] = ToJsonElement("runtime-config-string-should-be-removed")
                 }
             }
@@ -1488,128 +1446,9 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.NotNull(initial.OperationRequest);
             Assert.NotNull(initial.OperationRequest!.ExtensionData);
             Assert.DoesNotContain(initial.OperationRequest.ExtensionData!.Keys, static key =>
-                string.Equals(key, "clientSecret", StringComparison.OrdinalIgnoreCase));
+                string.Equals(key, "ingestSubscriptionKey", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(initial.OperationRequest.ExtensionData.Keys, static key =>
                 string.Equals(key, "runtimeConfig", StringComparison.OrdinalIgnoreCase));
-        }
-        finally
-        {
-            TryDeleteFile(artifactPath);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_InstallRequest_InvalidTenantId_SetsFailedState()
-    {
-        var artifactPath = CreateTemporaryArtifact(".so");
-        var settings = new Cod4xPluginSettingsDocument
-        {
-            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
-            Enabled = true,
-            RuntimeState = new Cod4xPluginRuntimeState
-            {
-                CurrentVersion = "1.0.0"
-            },
-            OperationRequest = new Cod4xPluginOperationRequest
-            {
-                OperationId = "op-install-invalid-runtime-tenant-id",
-                Action = Cod4xPluginOperationAction.Install,
-                TargetVersion = "1.2.3",
-                RequestedBy = "tester",
-                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["artifactPath"] = ToJsonElement(artifactPath),
-                    ["runtimeConfig"] = ToJsonElement(new
-                    {
-                        tenantId = "not-a-guid"
-                    })
-                }
-            }
-        };
-
-        try
-        {
-            SetupConfiguration(settings);
-
-            var persistedPayloads = new List<UpsertConfigurationDto>();
-            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
-                    _serverId,
-                    Cod4xPluginSettingsConstants.Namespace,
-                    It.IsAny<UpsertConfigurationDto>(),
-                    It.IsAny<CancellationToken>()))
-                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
-                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
-
-            var service = CreateService();
-            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
-
-            Assert.True(persistedPayloads.Count >= 2);
-            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
-
-            Assert.NotNull(final.RuntimeState);
-            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
-            Assert.Contains("tenantId is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
-
-            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
-        finally
-        {
-            TryDeleteFile(artifactPath);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_InstallRequest_InvalidRepositoryApiBaseUrl_SetsFailedState()
-    {
-        var artifactPath = CreateTemporaryArtifact(".so");
-        var settings = new Cod4xPluginSettingsDocument
-        {
-            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
-            Enabled = true,
-            RuntimeState = new Cod4xPluginRuntimeState
-            {
-                CurrentVersion = "1.0.0"
-            },
-            OperationRequest = new Cod4xPluginOperationRequest
-            {
-                OperationId = "op-install-invalid-runtime-base-url",
-                Action = Cod4xPluginOperationAction.Install,
-                TargetVersion = "1.2.3",
-                RequestedBy = "tester",
-                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
-            }
-        };
-
-        try
-        {
-            SetupConfiguration(settings);
-
-            var persistedPayloads = new List<UpsertConfigurationDto>();
-            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
-                    _serverId,
-                    Cod4xPluginSettingsConstants.Namespace,
-                    It.IsAny<UpsertConfigurationDto>(),
-                    It.IsAny<CancellationToken>()))
-                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
-                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
-
-            var service = CreateService(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["CoD4xPlugin:RepositoryApiBaseUrl"] = "http://insecure.example.com/repository"
-            });
-
-            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
-
-            Assert.True(persistedPayloads.Count >= 2);
-            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
-
-            Assert.NotNull(final.RuntimeState);
-            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
-            Assert.Contains("repositoryApiBaseUrl is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
-
-            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         }
         finally
         {
@@ -1665,64 +1504,6 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.NotNull(final.RuntimeState);
             Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
             Assert.Contains("ingestBaseUrl is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
-
-            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-            _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
-        finally
-        {
-            TryDeleteFile(artifactPath);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_InstallRequest_InvalidIngestApiResource_SetsFailedState()
-    {
-        var artifactPath = CreateTemporaryArtifact(".so");
-        var settings = new Cod4xPluginSettingsDocument
-        {
-            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
-            Enabled = true,
-            RuntimeState = new Cod4xPluginRuntimeState
-            {
-                CurrentVersion = "1.0.0"
-            },
-            OperationRequest = new Cod4xPluginOperationRequest
-            {
-                OperationId = "op-install-invalid-ingest-api-resource",
-                Action = Cod4xPluginOperationAction.Install,
-                TargetVersion = "1.2.3",
-                RequestedBy = "tester",
-                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
-            }
-        };
-
-        try
-        {
-            SetupConfiguration(settings);
-
-            var persistedPayloads = new List<UpsertConfigurationDto>();
-            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
-                    _serverId,
-                    Cod4xPluginSettingsConstants.Namespace,
-                    It.IsAny<UpsertConfigurationDto>(),
-                    It.IsAny<CancellationToken>()))
-                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
-                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
-
-            var service = CreateService(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["CoD4xPlugin:IngestApiResource"] = "relative-resource"
-            });
-
-            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
-
-            Assert.True(persistedPayloads.Count >= 2);
-            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
-
-            Assert.NotNull(final.RuntimeState);
-            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
-            Assert.Contains("ingestApiResource is invalid", final.RuntimeState.LastError, StringComparison.OrdinalIgnoreCase);
 
             _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
             _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -2236,13 +2017,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     {
         var configurationValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
-            ["CoD4xPlugin:TenantId"] = "00000000-0000-0000-0000-000000000001",
-            ["CoD4xPlugin:ClientId"] = "00000000-0000-0000-0000-000000000002",
-            ["CoD4xPlugin:ClientSecret"] = "unit-test-cod4x-plugin-secret",
-            ["CoD4xPlugin:RepositoryApiBaseUrl"] = "https://portal-api.example.com/repository",
-            ["CoD4xPlugin:RepositoryApiResource"] = "api://portal-repository-api",
             ["CoD4xPlugin:IngestBaseUrl"] = "https://portal-api.example.com/ingest",
-            ["CoD4xPlugin:IngestApiResource"] = "api://portal-server-events-api",
+            ["CoD4xPlugin:IngestSubscriptionKey"] = "unit-test-cod4x-plugin-subscription-key",
             ["CoD4xPlugin:RefreshIntervalSeconds"] = "120"
         };
 

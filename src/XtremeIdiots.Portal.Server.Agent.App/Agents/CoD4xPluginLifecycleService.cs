@@ -61,24 +61,14 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private const string ExtensionKeyArtifactBlobPath = "artifactBlobPath";
     private const string ExtensionKeyRuntimeConfig = "runtimeConfig";
     private const string RuntimeConfigSectionName = "CoD4xPlugin";
-    private const string RuntimeConfigTenantIdKey = "tenantId";
-    private const string RuntimeConfigClientIdKey = "clientId";
-    private const string RuntimeConfigClientSecretKey = "clientSecret";
-    private const string RuntimeConfigRepositoryApiBaseUrlKey = "repositoryApiBaseUrl";
-    private const string RuntimeConfigRepositoryApiResourceKey = "repositoryApiResource";
     private const string RuntimeConfigIngestBaseUrlKey = "ingestBaseUrl";
-    private const string RuntimeConfigIngestApiResourceKey = "ingestApiResource";
+    private const string RuntimeConfigIngestSubscriptionKeyKey = "ingestSubscriptionKey";
     private const string RuntimeConfigGameTypeKey = "gameType";
     private const string RuntimeConfigRefreshIntervalSecondsKey = "refreshIntervalSeconds";
     private const string RuntimeConfigPortalPluginHealthEnabledKey = "portalPluginHealthEnabled";
     private const string RuntimeConfigPortalPluginHealthMinPowerKey = "portalPluginHealthMinPower";
-    private const string RuntimeConfigTenantIdEnvironmentVariable = "COD4X_PLUGIN_TENANT_ID";
-    private const string RuntimeConfigClientIdEnvironmentVariable = "COD4X_PLUGIN_CLIENT_ID";
-    private const string RuntimeConfigClientSecretEnvironmentVariable = "COD4X_PLUGIN_CLIENT_SECRET";
-    private const string RuntimeConfigRepositoryApiBaseUrlEnvironmentVariable = "COD4X_PLUGIN_REPOSITORY_API_BASE_URL";
-    private const string RuntimeConfigRepositoryApiResourceEnvironmentVariable = "COD4X_PLUGIN_REPOSITORY_API_RESOURCE";
     private const string RuntimeConfigIngestBaseUrlEnvironmentVariable = "COD4X_PLUGIN_INGEST_BASE_URL";
-    private const string RuntimeConfigIngestApiResourceEnvironmentVariable = "COD4X_PLUGIN_INGEST_API_RESOURCE";
+    private const string RuntimeConfigIngestSubscriptionKeyEnvironmentVariable = "COD4X_PLUGIN_INGEST_SUBSCRIPTION_KEY";
     private const string RuntimeConfigRefreshIntervalSecondsEnvironmentVariable = "COD4X_PLUGIN_REFRESH_INTERVAL_SECONDS";
     private const string RuntimeConfigPortalPluginHealthEnabledEnvironmentVariable = "COD4X_PLUGIN_HEALTH_ENABLED";
     private const string RuntimeConfigPortalPluginHealthMinPowerEnvironmentVariable = "COD4X_PLUGIN_HEALTH_MIN_POWER";
@@ -619,106 +609,6 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         error = string.Empty;
 
-        runtimeConfig.TenantId = ResolveRuntimeConfigStringValue(
-            request.ExtensionData,
-            settings.ExtensionData,
-            RuntimeConfigTenantIdKey,
-            _configuration[$"{RuntimeConfigSectionName}:TenantId"],
-            Environment.GetEnvironmentVariable(RuntimeConfigTenantIdEnvironmentVariable),
-            Environment.GetEnvironmentVariable("AZURE_TENANT_ID"));
-
-        if (string.IsNullOrWhiteSpace(runtimeConfig.TenantId))
-        {
-            error = "Generated plugin runtime config is missing tenantId.";
-            return false;
-        }
-
-        if (!Guid.TryParse(runtimeConfig.TenantId, out var tenantId))
-        {
-            error = "Generated plugin runtime config tenantId is invalid. Expected a GUID.";
-            return false;
-        }
-
-        runtimeConfig.TenantId = tenantId.ToString("D", CultureInfo.InvariantCulture);
-
-        runtimeConfig.ClientId = ResolveRuntimeConfigStringValue(
-            request.ExtensionData,
-            settings.ExtensionData,
-            RuntimeConfigClientIdKey,
-            _configuration[$"{RuntimeConfigSectionName}:ClientId"],
-            Environment.GetEnvironmentVariable(RuntimeConfigClientIdEnvironmentVariable));
-
-        if (string.IsNullOrWhiteSpace(runtimeConfig.ClientId))
-        {
-            error = "Generated plugin runtime config is missing clientId.";
-            return false;
-        }
-
-        if (!Guid.TryParse(runtimeConfig.ClientId, out var clientId))
-        {
-            error = "Generated plugin runtime config clientId is invalid. Expected a GUID.";
-            return false;
-        }
-
-        runtimeConfig.ClientId = clientId.ToString("D", CultureInfo.InvariantCulture);
-
-        runtimeConfig.ClientSecret = ResolveRuntimeConfigStringValue(
-            null,
-            null,
-            RuntimeConfigClientSecretKey,
-            _configuration[$"{RuntimeConfigSectionName}:ClientSecret"],
-            Environment.GetEnvironmentVariable(RuntimeConfigClientSecretEnvironmentVariable));
-
-        if (string.IsNullOrWhiteSpace(runtimeConfig.ClientSecret))
-        {
-            error = "Generated plugin runtime config is missing clientSecret.";
-            return false;
-        }
-
-        runtimeConfig.RepositoryApiBaseUrl = ResolveRuntimeConfigStringValue(
-            request.ExtensionData,
-            settings.ExtensionData,
-            RuntimeConfigRepositoryApiBaseUrlKey,
-            _configuration[$"{RuntimeConfigSectionName}:RepositoryApiBaseUrl"],
-            _configuration["RepositoryApi:BaseUrl"],
-            Environment.GetEnvironmentVariable(RuntimeConfigRepositoryApiBaseUrlEnvironmentVariable));
-
-        if (string.IsNullOrWhiteSpace(runtimeConfig.RepositoryApiBaseUrl))
-        {
-            error = "Generated plugin runtime config is missing repositoryApiBaseUrl.";
-            return false;
-        }
-
-        runtimeConfig.RepositoryApiBaseUrl = runtimeConfig.RepositoryApiBaseUrl.TrimEnd('/');
-
-        if (!Uri.TryCreate(runtimeConfig.RepositoryApiBaseUrl, UriKind.Absolute, out var repositoryApiBaseUri)
-            || !string.Equals(repositoryApiBaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-        {
-            error = "Generated plugin runtime config repositoryApiBaseUrl is invalid. Expected an absolute HTTPS URI.";
-            return false;
-        }
-
-        runtimeConfig.RepositoryApiResource = ResolveRuntimeConfigStringValue(
-            request.ExtensionData,
-            settings.ExtensionData,
-            RuntimeConfigRepositoryApiResourceKey,
-            _configuration[$"{RuntimeConfigSectionName}:RepositoryApiResource"],
-            _configuration["RepositoryApi:ApplicationAudience"],
-            Environment.GetEnvironmentVariable(RuntimeConfigRepositoryApiResourceEnvironmentVariable));
-
-        if (string.IsNullOrWhiteSpace(runtimeConfig.RepositoryApiResource))
-        {
-            error = "Generated plugin runtime config is missing repositoryApiResource.";
-            return false;
-        }
-
-        if (!Uri.TryCreate(runtimeConfig.RepositoryApiResource, UriKind.Absolute, out var repositoryApiResourceUri)
-            || repositoryApiResourceUri.IsFile)
-        {
-            error = "Generated plugin runtime config repositoryApiResource is invalid. Expected an absolute URI.";
-            return false;
-        }
-
         runtimeConfig.IngestBaseUrl = ResolveRuntimeConfigStringValue(
             request.ExtensionData,
             settings.ExtensionData,
@@ -741,23 +631,16 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             return false;
         }
 
-        runtimeConfig.IngestApiResource = ResolveRuntimeConfigStringValue(
-            request.ExtensionData,
-            settings.ExtensionData,
-            RuntimeConfigIngestApiResourceKey,
-            _configuration[$"{RuntimeConfigSectionName}:IngestApiResource"],
-            Environment.GetEnvironmentVariable(RuntimeConfigIngestApiResourceEnvironmentVariable));
+        runtimeConfig.IngestSubscriptionKey = ResolveRuntimeConfigStringValue(
+            null,
+            null,
+            RuntimeConfigIngestSubscriptionKeyKey,
+            _configuration[$"{RuntimeConfigSectionName}:IngestSubscriptionKey"],
+            Environment.GetEnvironmentVariable(RuntimeConfigIngestSubscriptionKeyEnvironmentVariable));
 
-        if (string.IsNullOrWhiteSpace(runtimeConfig.IngestApiResource))
+        if (string.IsNullOrWhiteSpace(runtimeConfig.IngestSubscriptionKey))
         {
-            error = "Generated plugin runtime config is missing ingestApiResource.";
-            return false;
-        }
-
-        if (!Uri.TryCreate(runtimeConfig.IngestApiResource, UriKind.Absolute, out var ingestApiResourceUri)
-            || ingestApiResourceUri.IsFile)
-        {
-            error = "Generated plugin runtime config ingestApiResource is invalid. Expected an absolute URI.";
+            error = "Generated plugin runtime config is missing ingestSubscriptionKey.";
             return false;
         }
 
@@ -1223,7 +1106,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
     private static void SanitizeSensitiveRuntimeConfigData(IDictionary<string, JsonElement> extensionData)
     {
-        RemoveCaseInsensitiveKeys(extensionData, RuntimeConfigClientSecretKey);
+        RemoveCaseInsensitiveKeys(extensionData, RuntimeConfigIngestSubscriptionKeyKey);
 
         var runtimeConfigKey = GetCaseInsensitiveKey(extensionData, ExtensionKeyRuntimeConfig);
         if (runtimeConfigKey is null)
@@ -1241,7 +1124,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         var sanitizedRuntimeConfig = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
         foreach (var property in runtimeConfigElement.EnumerateObject())
         {
-            if (string.Equals(property.Name, RuntimeConfigClientSecretKey, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(property.Name, RuntimeConfigIngestSubscriptionKeyKey, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -1265,12 +1148,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
     private static bool IsPersistableRuntimeConfigKey(string key)
     {
-        return string.Equals(key, RuntimeConfigTenantIdKey, StringComparison.OrdinalIgnoreCase)
-               || string.Equals(key, RuntimeConfigClientIdKey, StringComparison.OrdinalIgnoreCase)
-               || string.Equals(key, RuntimeConfigRepositoryApiBaseUrlKey, StringComparison.OrdinalIgnoreCase)
-               || string.Equals(key, RuntimeConfigRepositoryApiResourceKey, StringComparison.OrdinalIgnoreCase)
-               || string.Equals(key, RuntimeConfigIngestBaseUrlKey, StringComparison.OrdinalIgnoreCase)
-               || string.Equals(key, RuntimeConfigIngestApiResourceKey, StringComparison.OrdinalIgnoreCase)
+        return string.Equals(key, RuntimeConfigIngestBaseUrlKey, StringComparison.OrdinalIgnoreCase)
                || string.Equals(key, RuntimeConfigGameTypeKey, StringComparison.OrdinalIgnoreCase)
              || string.Equals(key, RuntimeConfigRefreshIntervalSecondsKey, StringComparison.OrdinalIgnoreCase)
              || string.Equals(key, RuntimeConfigPortalPluginHealthEnabledKey, StringComparison.OrdinalIgnoreCase)
@@ -2595,26 +2473,11 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
     private sealed class PluginRuntimeConfigDocument
     {
-        [JsonPropertyName("tenantId")]
-        public string TenantId { get; set; } = string.Empty;
-
-        [JsonPropertyName("clientId")]
-        public string ClientId { get; set; } = string.Empty;
-
-        [JsonPropertyName("clientSecret")]
-        public string ClientSecret { get; set; } = string.Empty;
-
-        [JsonPropertyName("repositoryApiBaseUrl")]
-        public string RepositoryApiBaseUrl { get; set; } = string.Empty;
-
-        [JsonPropertyName("repositoryApiResource")]
-        public string RepositoryApiResource { get; set; } = string.Empty;
-
         [JsonPropertyName("ingestBaseUrl")]
         public string IngestBaseUrl { get; set; } = string.Empty;
 
-        [JsonPropertyName("ingestApiResource")]
-        public string IngestApiResource { get; set; } = string.Empty;
+        [JsonPropertyName("ingestSubscriptionKey")]
+        public string IngestSubscriptionKey { get; set; } = string.Empty;
 
         [JsonPropertyName("gameType")]
         public string GameType { get; set; } = string.Empty;
