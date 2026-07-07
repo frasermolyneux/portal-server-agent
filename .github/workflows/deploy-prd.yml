@@ -212,6 +212,9 @@ jobs:
   #        az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
   #        exit 1
 
+   #&&
+      #(needs.terraform-plan-and-apply-dev.result == 'success' || github.event_name == 'schedule')
+
   terraform-plan-and-apply-prd:
     permissions:
       contents: read
@@ -225,8 +228,7 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-prd
     if: |
-      !failure() && !cancelled() #&&
-      #(needs.terraform-plan-and-apply-dev.result == 'success' || github.event_name == 'schedule')
+      !failure() && !cancelled()
     steps:
       - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
         if: needs.detect-changes.outputs.terraform == 'true'
@@ -267,6 +269,9 @@ jobs:
       resource_group_name: ${{ steps.terraform-output-prd.outputs.resource_group_name }}
       acr_login_server: ${{ steps.terraform-output-prd.outputs.acr_login_server }}
 
+      #&&
+      #(needs.container-deploy-dev.result == 'success' || github.event_name == 'schedule')
+      
   container-deploy-prd:
     permissions:
       contents: read
@@ -281,8 +286,7 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-prd
     if: |
-      !failure() && !cancelled() #&&
-      #(needs.container-deploy-dev.result == 'success' || github.event_name == 'schedule')
+      !failure() && !cancelled() 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
