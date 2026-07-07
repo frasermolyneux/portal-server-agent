@@ -65,152 +65,152 @@ jobs:
           dotnet-version: 10.0.x
           src-folder: "src"
 
-  terraform-plan-and-apply-dev:
-    if: github.event_name != 'schedule'
-    permissions:
-      contents: read
-      id-token: write
-    environment: Development
-    needs:
-      - detect-changes
-      - terraform-state-check-dev
-    runs-on: ubuntu-latest
-    concurrency:
-      group: ${{ github.repository }}-dev
-    steps:
-      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
-        if: needs.detect-changes.outputs.terraform == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true'
-        with:
-          terraform-folder: "terraform"
-          terraform-var-file: "tfvars/dev.tfvars"
-          terraform-backend-file: "backends/dev.backend.hcl"
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  #terraform-plan-and-apply-dev:
+  #  if: github.event_name != 'schedule'
+  #  permissions:
+  #    contents: read
+  #    id-token: write
+  #  environment: Development
+  #  needs:
+  #    - detect-changes
+  #    - terraform-state-check-dev
+  #  runs-on: ubuntu-latest
+  #  concurrency:
+  #    group: ${{ github.repository }}-dev
+  #  steps:
+  #    - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
+  #      if: needs.detect-changes.outputs.terraform == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true'
+  #      with:
+  #        terraform-folder: "terraform"
+  #        terraform-var-file: "tfvars/dev.tfvars"
+  #        terraform-backend-file: "backends/dev.backend.hcl"
+  #        AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  #        AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  #        AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+#
+  #    - uses: frasermolyneux/actions/terraform-output@terraform-output/v1.0
+  #      if: needs.detect-changes.outputs.terraform != 'true' && needs.terraform-state-check-dev.outputs.state_tainted != 'true'
+  #      with:
+  #        terraform-folder: "terraform"
+  #        terraform-var-file: "tfvars/dev.tfvars"
+  #        terraform-backend-file: "backends/dev.backend.hcl"
+  #        AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  #        AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  #        AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+#
+  #    - id: terraform-output-dev
+  #      shell: bash
+  #      run: |
+  #        cd terraform
+  #        echo "container_app_name=$(terraform output -raw container_app_name)" >> $GITHUB_OUTPUT
+  #        echo "resource_group_name=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+  #        echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+  #      env:
+  #        ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  #        ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  #        ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  #        ARM_USE_AZUREAD: true
+  #        ARM_USE_OIDC: true
+#
+  #  outputs:
+  #    container_app_name: ${{ steps.terraform-output-dev.outputs.container_app_name }}
+  #    resource_group_name: ${{ steps.terraform-output-dev.outputs.resource_group_name }}
+  #    acr_login_server: ${{ steps.terraform-output-dev.outputs.acr_login_server }}
 
-      - uses: frasermolyneux/actions/terraform-output@terraform-output/v1.0
-        if: needs.detect-changes.outputs.terraform != 'true' && needs.terraform-state-check-dev.outputs.state_tainted != 'true'
-        with:
-          terraform-folder: "terraform"
-          terraform-var-file: "tfvars/dev.tfvars"
-          terraform-backend-file: "backends/dev.backend.hcl"
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - id: terraform-output-dev
-        shell: bash
-        run: |
-          cd terraform
-          echo "container_app_name=$(terraform output -raw container_app_name)" >> $GITHUB_OUTPUT
-          echo "resource_group_name=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
-          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
-        env:
-          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          ARM_USE_AZUREAD: true
-          ARM_USE_OIDC: true
-
-    outputs:
-      container_app_name: ${{ steps.terraform-output-dev.outputs.container_app_name }}
-      resource_group_name: ${{ steps.terraform-output-dev.outputs.resource_group_name }}
-      acr_login_server: ${{ steps.terraform-output-dev.outputs.acr_login_server }}
-
-  container-deploy-dev:
-    if: github.event_name != 'schedule'
-    permissions:
-      contents: read
-      id-token: write
-    environment: Development
-    needs:
-      - detect-changes
-      - build-and-test
-      - terraform-plan-and-apply-dev
-    runs-on: ubuntu-latest
-    concurrency:
-      group: ${{ github.repository }}-dev
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-
-      - name: Azure Login
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: ACR Login
-        run: az acr login --name ${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}
-
-      - name: Docker Build and Push
-        run: |
-          IMAGE="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
-          IMAGE_LATEST="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:latest"
-          docker build -t "$IMAGE" -t "$IMAGE_LATEST" -f src/Dockerfile src/
-          docker push "$IMAGE"
-          docker push "$IMAGE_LATEST"
-
-      - name: Update Container App
-        run: |
-          az containerapp update \
-            --name ${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }} \
-            --resource-group ${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }} \
-            --image "${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
-
-      # Container Apps `update` returns when the new revision is *created*, not when it
-      # is *healthy*. Without this gate, a startup crash (e.g. unhandled exception in
-      # Program.cs) leaves the new revision Failed while the previous revision
-      # silently continues serving traffic — the deploy workflow reports success and
-      # we run on stale code until someone notices on a status dashboard.
-      #
-      # Equivalent in spirit to `wait-for-version` for App Services / Function Apps.
-      # Cannot use the same composite directly because the Container App ingress is
-      # internal-only (external_enabled = false), so the GH runner cannot reach the
-      # /info endpoint. Polls the Azure control plane instead — the same signal the
-      # portal uses to flag failed revisions.
-      - name: Wait for new revision to reach Running
-        shell: pwsh
-        run: |
-          $appName = "${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }}"
-          $rg = "${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }}"
-          $expectedSha = "${{ github.sha }}"
-
-          $latestRevision = az containerapp show --name $appName --resource-group $rg --query "properties.latestRevisionName" -o tsv
-          if (-not $latestRevision) { Write-Error "Could not read latestRevisionName"; exit 1 }
-          Write-Host "Newest revision after update: $latestRevision"
-
-          # Sanity: confirm the revision actually picked up our newly-pushed image,
-          # not a stale one (e.g. ACR push race).
-          $revisionImage = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.template.containers[0].image" -o tsv
-          if ($revisionImage -notlike "*:$expectedSha") {
-            Write-Error "Revision $latestRevision is running image '$revisionImage', expected tag :$expectedSha"
-            exit 1
-          }
-
-          $timeoutSeconds = 300
-          $start = Get-Date
-          while (((Get-Date) - $start).TotalSeconds -lt $timeoutSeconds) {
-            $running = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.runningState" -o tsv
-            $health  = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.healthState" -o tsv
-            Write-Host ("[{0:HH:mm:ss}] runningState={1} healthState={2}" -f (Get-Date), $running, $health)
-
-            if (($running -in @("Running","RunningAtMaxScale","ScaledToZero")) -and ($health -eq "Healthy" -or $health -eq "None")) {
-              Write-Host "Revision $latestRevision is Running."
-              exit 0
-            }
-            if ($running -eq "Failed" -or $health -eq "Unhealthy") {
-              Write-Host "::error::Revision $latestRevision failed to start. Recent container logs:"
-              az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
-              exit 1
-            }
-
-            Start-Sleep -Seconds 10
-          }
-
-          Write-Host "::error::Timed out after $timeoutSeconds s waiting for revision $latestRevision. Recent container logs:"
-          az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
-          exit 1
+  #container-deploy-dev:
+  #  if: github.event_name != 'schedule'
+  #  permissions:
+  #    contents: read
+  #    id-token: write
+  #  environment: Development
+  #  needs:
+  #    - detect-changes
+  #    - build-and-test
+  #    - terraform-plan-and-apply-dev
+  #  runs-on: ubuntu-latest
+  #  concurrency:
+  #    group: ${{ github.repository }}-dev
+  #  steps:
+  #    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+#
+  #    - name: Azure Login
+  #      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43
+  #      with:
+  #        client-id: ${{ vars.AZURE_CLIENT_ID }}
+  #        tenant-id: ${{ vars.AZURE_TENANT_ID }}
+  #        subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+#
+  #    - name: ACR Login
+  #      run: az acr login --name ${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}
+#
+  #    - name: Docker Build and Push
+  #      run: |
+  #        IMAGE="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
+  #        IMAGE_LATEST="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:latest"
+  #        docker build -t "$IMAGE" -t "$IMAGE_LATEST" -f src/Dockerfile src/
+  #        docker push "$IMAGE"
+  #        docker push "$IMAGE_LATEST"
+#
+  #    - name: Update Container App
+  #      run: |
+  #        az containerapp update \
+  #          --name ${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }} \
+  #          --resource-group ${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }} \
+  #          --image "${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
+#
+  #    # Container Apps `update` returns when the new revision is *created*, not when it
+  #    # is *healthy*. Without this gate, a startup crash (e.g. unhandled exception in
+  #    # Program.cs) leaves the new revision Failed while the previous revision
+  #    # silently continues serving traffic — the deploy workflow reports success and
+  #    # we run on stale code until someone notices on a status dashboard.
+  #    #
+  #    # Equivalent in spirit to `wait-for-version` for App Services / Function Apps.
+  #    # Cannot use the same composite directly because the Container App ingress is
+  #    # internal-only (external_enabled = false), so the GH runner cannot reach the
+  #    # /info endpoint. Polls the Azure control plane instead — the same signal the
+  #    # portal uses to flag failed revisions.
+  #    - name: Wait for new revision to reach Running
+  #      shell: pwsh
+  #      run: |
+  #        $appName = "${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }}"
+  #        $rg = "${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }}"
+  #        $expectedSha = "${{ github.sha }}"
+#
+  #        $latestRevision = az containerapp show --name $appName --resource-group $rg --query "properties.latestRevisionName" -o tsv
+  #        if (-not $latestRevision) { Write-Error "Could not read latestRevisionName"; exit 1 }
+  #        Write-Host "Newest revision after update: $latestRevision"
+#
+  #        # Sanity: confirm the revision actually picked up our newly-pushed image,
+  #        # not a stale one (e.g. ACR push race).
+  #        $revisionImage = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.template.containers[0].image" -o tsv
+  #        if ($revisionImage -notlike "*:$expectedSha") {
+  #          Write-Error "Revision $latestRevision is running image '$revisionImage', expected tag :$expectedSha"
+  #          exit 1
+  #        }
+#
+  #        $timeoutSeconds = 300
+  #        $start = Get-Date
+  #        while (((Get-Date) - $start).TotalSeconds -lt $timeoutSeconds) {
+  #          $running = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.runningState" -o tsv
+  #          $health  = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.healthState" -o tsv
+  #          Write-Host ("[{0:HH:mm:ss}] runningState={1} healthState={2}" -f (Get-Date), $running, $health)
+#
+  #          if (($running -in @("Running","RunningAtMaxScale","ScaledToZero")) -and ($health -eq "Healthy" -or $health -eq "None")) {
+  #            Write-Host "Revision $latestRevision is Running."
+  #            exit 0
+  #          }
+  #          if ($running -eq "Failed" -or $health -eq "Unhealthy") {
+  #            Write-Host "::error::Revision $latestRevision failed to start. Recent container logs:"
+  #            az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
+  #            exit 1
+  #          }
+#
+  #          Start-Sleep -Seconds 10
+  #        }
+#
+  #        Write-Host "::error::Timed out after $timeoutSeconds s waiting for revision $latestRevision. Recent container logs:"
+  #        az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
+  #        exit 1
 
   terraform-plan-and-apply-prd:
     permissions:
@@ -220,7 +220,7 @@ jobs:
     needs:
       - detect-changes
       - build-and-test
-      - terraform-plan-and-apply-dev
+      #- terraform-plan-and-apply-dev
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.repository }}-prd
@@ -275,7 +275,7 @@ jobs:
     needs:
       - detect-changes
       - build-and-test
-      - container-deploy-dev
+      #- container-deploy-dev
       - terraform-plan-and-apply-prd
     runs-on: ubuntu-latest
     concurrency:
