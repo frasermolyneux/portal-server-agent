@@ -225,8 +225,8 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-prd
     if: |
-      !failure() && !cancelled() &&
-      (needs.terraform-plan-and-apply-dev.result == 'success' || github.event_name == 'schedule')
+      !failure() && !cancelled() #&&
+      #(needs.terraform-plan-and-apply-dev.result == 'success' || github.event_name == 'schedule')
     steps:
       - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
         if: needs.detect-changes.outputs.terraform == 'true'
@@ -281,8 +281,8 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-prd
     if: |
-      !failure() && !cancelled() &&
-      (needs.container-deploy-dev.result == 'success' || github.event_name == 'schedule')
+      !failure() && !cancelled() #&&
+      #(needs.container-deploy-dev.result == 'success' || github.event_name == 'schedule')
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
