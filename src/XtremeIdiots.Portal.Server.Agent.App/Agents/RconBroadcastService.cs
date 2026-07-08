@@ -33,10 +33,10 @@ public sealed class RconBroadcastService : IRconBroadcastService
 
         if (string.Equals(gameType, CallOfDuty4xGameType, StringComparison.OrdinalIgnoreCase))
         {
-            // CoD4x broadcasts use the console-say command, which is the game-specific
-            // say variant exposed by the CoD4x RCON API.
+            // CoD4x broadcasts use the standard say command so they share the same
+            // operator-event telemetry as the other game types' broadcasts.
             var result = await serversApiClient.CoD4xRcon.V1
-                .ConSay(serverId, new CoD4xMessageRequestDto { Message = message }, ct)
+                .Say(serverId, new CoD4xMessageRequestDto { Message = message }, ct)
                 .ConfigureAwait(false);
             return Normalize(result);
         }

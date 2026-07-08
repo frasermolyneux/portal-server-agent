@@ -38,7 +38,7 @@ public class RconBroadcastServiceTests
         _mockServersApiClient.Setup(x => x.Cod5Rcon).Returns(_mockVersionedCod5RconApi.Object);
 
         _mockCoD4xRconApi
-            .Setup(x => x.ConSay(It.IsAny<Guid>(), It.IsAny<CoD4xMessageRequestDto>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.Say(It.IsAny<Guid>(), It.IsAny<CoD4xMessageRequestDto>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult<string>(HttpStatusCode.OK));
         _mockCod2RconApi
             .Setup(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()))
@@ -59,7 +59,7 @@ public class RconBroadcastServiceTests
     }
 
     [Fact]
-    public async Task SayAsync_CoD4x_RoutesToConSayAndNotOtherGames()
+    public async Task SayAsync_CoD4x_RoutesToSayAndNotOtherGames()
     {
         var service = CreateService();
 
@@ -67,7 +67,7 @@ public class RconBroadcastServiceTests
 
         Assert.True(result.IsSuccess);
         _mockCoD4xRconApi.Verify(
-            x => x.ConSay(_serverId, It.Is<CoD4xMessageRequestDto>(r => r.Message == "hello"), It.IsAny<CancellationToken>()),
+            x => x.Say(_serverId, It.Is<CoD4xMessageRequestDto>(r => r.Message == "hello"), It.IsAny<CancellationToken>()),
             Times.Once);
         _mockCod2RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod4RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -85,7 +85,7 @@ public class RconBroadcastServiceTests
         _mockCod2RconApi.Verify(
             x => x.Say(_serverId, It.Is<SayRequest>(r => r.Message == "hello"), It.IsAny<CancellationToken>()),
             Times.Once);
-        _mockCoD4xRconApi.Verify(x => x.ConSay(It.IsAny<Guid>(), It.IsAny<CoD4xMessageRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<CoD4xMessageRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod4RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod5RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -129,7 +129,7 @@ public class RconBroadcastServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(HttpStatusCode.BadRequest, result.StatusCode);
-        _mockCoD4xRconApi.Verify(x => x.ConSay(It.IsAny<Guid>(), It.IsAny<CoD4xMessageRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<CoD4xMessageRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod2RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod4RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod5RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
