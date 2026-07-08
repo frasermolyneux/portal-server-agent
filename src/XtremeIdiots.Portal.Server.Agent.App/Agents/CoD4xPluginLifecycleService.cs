@@ -133,6 +133,16 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         if (!TryNormalizeAndValidateRequest(settings.OperationRequest, out var request, out var validationError))
         {
+            // No pending operation request. The CoD4x loadplugin command is not persistent, so a
+            // game-server restart unloads the plugin. Reconcile drift by verifying the plugin is
+            // still loaded and re-issuing loadplugin if it is not.
+            await TryReconcilePluginDriftAsync(
+                    repositoryApiClient,
+                    context,
+                    serversApiClient.CoD4xRcon.V1,
+                    settings,
+                    ct)
+                .ConfigureAwait(false);
             return;
         }
 
@@ -242,6 +252,267 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         {
             CompleteOperation(context.ServerId, request.OperationId);
         }
+    }
+
+    private const string ReconcileOperationIdPrefix = "reconcile:";
+    private const string ReconcileNextAttemptExtensionKey = "reconcileNextAttemptUtc";
+    private const string ReconcileFailureCountExtensionKey = "reconcileConsecutiveFailures";
+    private static readonly TimeSpan ReconcileBaseBackoff = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan ReconcileMaxBackoff = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Reconciles CoD4x plugin drift when no operation request is queued. The CoD4x
+    /// <c>loadplugin</c> command is not persistent, so a game-server restart unloads the plugin.
+    /// When the agent believes a version should be loaded (<c>RuntimeState.CurrentVersion</c>),
+    /// this verifies the plugin is actually loaded and re-issues <c>loadplugin</c> if it is not.
+    /// The plugin binary is left on disk by a restart, so no re-upload is required. Backoff/attempt
+    /// state is tracked in <c>RuntimeState.ExtensionData</c> (agent-owned; no settings contract change).
+    /// </summary>
+    private async Task TryReconcilePluginDriftAsync(
+        IRepositoryApiClient repositoryApiClient,
+        ServerContext context,
+        ICoD4xRconApi coD4xRconApi,
+        Cod4xPluginSettingsDocument settings,
+        CancellationToken ct)
+    {
+        // Explicit server-level disable stops reconciliation. A null Enabled inherits the global
+        // default, but a server that has an installed RuntimeState.CurrentVersion was only reached
+        // there via an operator-approved install operation, so it is treated as implicitly enabled
+        // for self-heal purposes (an operator disables by queuing an Unload, which clears CurrentVersion).
+        if (settings.Enabled == false)
+        {
+            return;
+        }
+
+        var runtimeState = settings.RuntimeState;
+        var currentVersion = runtimeState?.CurrentVersion?.Trim();
+
+        // No version is believed loaded (never installed, or last operation was an unload).
+        if (runtimeState is null || string.IsNullOrWhiteSpace(currentVersion))
+        {
+            return;
+        }
+
+        if (currentVersion.Length > Cod4xPluginSettingsConstants.MaxVersionLength || !IsValidVersionToken(currentVersion))
+        {
+            return;
+        }
+
+        var reconcileOperationId = string.Concat(ReconcileOperationIdPrefix, currentVersion);
+        if (!TryBeginOperation(context.ServerId, reconcileOperationId))
+        {
+            return;
+        }
+
+        try
+        {
+            if (TryGetReconcileNextAttemptUtc(runtimeState, out var nextAttemptUtc)
+                && DateTimeOffset.UtcNow < nextAttemptUtc)
+            {
+                return;
+            }
+
+            var (probeState, _) = await ProbePluginStateAsync(context, coD4xRconApi, currentVersion, ct).ConfigureAwait(false);
+
+            // Transient RCON/server outage - do not treat as drift, do not inflate backoff. A genuinely
+            // unloaded plugin will be detected on a later tick once the server is reachable again.
+            if (probeState == PluginProbeState.Unreachable)
+            {
+                _logger.LogDebug(
+                    "[{Title}] CoD4x plugin drift check skipped - server RCON is currently unreachable",
+                    context.Title);
+                return;
+            }
+
+            if (probeState == PluginProbeState.Healthy)
+            {
+                // Plugin is loaded and reports the expected version - clear any prior backoff/error state.
+                var cleared = ClearReconcileState(runtimeState);
+                if (!string.IsNullOrEmpty(runtimeState.LastError))
+                {
+                    runtimeState.LastError = null;
+                    cleared = true;
+                }
+
+                if (cleared)
+                {
+                    await PersistReconcileStateAsync(repositoryApiClient, context, settings, ct).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            _logger.LogWarning(
+                "[{Title}] CoD4x plugin drift detected - expected version {Version} is not loaded; attempting reload",
+                context.Title,
+                currentVersion);
+
+            var loadResult = await coD4xRconApi.LoadPlugin(
+                    context.ServerId,
+                    new CoD4xPluginRequestDto { PluginName = PluginName },
+                    ct)
+                .ConfigureAwait(false);
+
+            PluginProbeState postLoadState = PluginProbeState.Unreachable;
+            PluginHealthResult? postLoadHealth = null;
+            if (loadResult.IsSuccess)
+            {
+                (postLoadState, postLoadHealth) = await ProbePluginStateAsync(context, coD4xRconApi, currentVersion, ct).ConfigureAwait(false);
+            }
+
+            if (postLoadState == PluginProbeState.Healthy)
+            {
+                ClearReconcileState(runtimeState);
+                runtimeState.LastError = null;
+                _logger.LogInformation(
+                    "[{Title}] CoD4x plugin recovered via drift reconciliation to version {Version}",
+                    context.Title,
+                    currentVersion);
+            }
+            else
+            {
+                var failureCount = IncrementReconcileFailureState(runtimeState);
+                var error = loadResult.IsSuccess
+                    ? postLoadHealth?.ErrorMessage ?? "Plugin health check failed after drift reload."
+                    : BuildApiFailureMessage("loadplugin (drift reconcile)", loadResult);
+                runtimeState.LastError = Truncate(error, Cod4xPluginSettingsConstants.MaxLastErrorLength);
+                _logger.LogWarning(
+                    "[{Title}] CoD4x plugin drift reload attempt #{Attempt} failed: {Error}",
+                    context.Title,
+                    failureCount,
+                    error);
+            }
+
+            await PersistReconcileStateAsync(repositoryApiClient, context, settings, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "[{Title}] CoD4x plugin drift reconciliation failed with an unexpected exception",
+                context.Title);
+        }
+        finally
+        {
+            CompleteOperation(context.ServerId, reconcileOperationId);
+        }
+    }
+
+    /// <summary>
+    /// Persists agent-owned reconcile state, guarding against clobbering an <c>OperationRequest</c>
+    /// that an operator (e.g. portal-web) may have queued since this tick loaded the configuration.
+    /// The persist writes the whole namespace document with a null <c>OperationRequest</c>, so if a
+    /// request has since appeared it is left for the next tick to execute rather than silently dropped.
+    /// </summary>
+    private async Task PersistReconcileStateAsync(
+        IRepositoryApiClient repositoryApiClient,
+        ServerContext context,
+        Cod4xPluginSettingsDocument settings,
+        CancellationToken ct)
+    {
+        if (await HasPendingOperationRequestAsync(repositoryApiClient, context.ServerId, ct).ConfigureAwait(false))
+        {
+            _logger.LogDebug(
+                "[{Title}] Skipping CoD4x plugin drift-reconcile persist - an operation request was queued concurrently",
+                context.Title);
+            return;
+        }
+
+        _ = await TryPersistSettingsAsync(repositoryApiClient, context.ServerId, settings, ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> HasPendingOperationRequestAsync(
+        IRepositoryApiClient repositoryApiClient,
+        Guid serverId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var configurationsResult = await repositoryApiClient.GameServerConfigurations.V1
+                .GetConfigurations(serverId, ct)
+                .ConfigureAwait(false);
+
+            var latestConfiguration = configurationsResult.Result?.Data?.Items?.FirstOrDefault(static config =>
+                string.Equals(config.Namespace, Cod4xPluginSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
+
+            if (latestConfiguration is null || string.IsNullOrWhiteSpace(latestConfiguration.Configuration))
+            {
+                return false;
+            }
+
+            return TryDeserializeSettings(latestConfiguration.Configuration, out var latestSettings)
+                && latestSettings?.OperationRequest is not null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Fail closed: if we cannot confirm the current state, skip the persist rather than risk a clobber.
+            _logger.LogDebug(
+                ex,
+                "Failed to re-check pending CoD4x plugin operation request for server {ServerId}; skipping drift-reconcile persist",
+                serverId);
+            return true;
+        }
+    }
+
+    private static bool TryGetReconcileNextAttemptUtc(Cod4xPluginRuntimeState runtimeState, out DateTimeOffset nextAttemptUtc)
+    {
+        nextAttemptUtc = default;
+
+        if (runtimeState.ExtensionData is null
+            || !runtimeState.ExtensionData.TryGetValue(ReconcileNextAttemptExtensionKey, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.String && element.TryGetDateTimeOffset(out var parsed))
+        {
+            nextAttemptUtc = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int GetReconcileFailureCount(Cod4xPluginRuntimeState runtimeState)
+    {
+        if (runtimeState.ExtensionData is not null
+            && runtimeState.ExtensionData.TryGetValue(ReconcileFailureCountExtensionKey, out var element)
+            && element.ValueKind == JsonValueKind.Number
+            && element.TryGetInt32(out var value)
+            && value > 0)
+        {
+            return value;
+        }
+
+        return 0;
+    }
+
+    private static int IncrementReconcileFailureState(Cod4xPluginRuntimeState runtimeState)
+    {
+        var failureCount = GetReconcileFailureCount(runtimeState) + 1;
+
+        var backoffMinutes = Math.Min(
+            ReconcileMaxBackoff.TotalMinutes,
+            ReconcileBaseBackoff.TotalMinutes * Math.Pow(2, Math.Min(failureCount - 1, 20)));
+        var nextAttemptUtc = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(backoffMinutes);
+
+        runtimeState.ExtensionData ??= new Dictionary<string, JsonElement>();
+        runtimeState.ExtensionData[ReconcileFailureCountExtensionKey] = JsonSerializer.SerializeToElement(failureCount, JsonOptions);
+        runtimeState.ExtensionData[ReconcileNextAttemptExtensionKey] = JsonSerializer.SerializeToElement(nextAttemptUtc, JsonOptions);
+
+        return failureCount;
+    }
+
+    private static bool ClearReconcileState(Cod4xPluginRuntimeState runtimeState)
+    {
+        if (runtimeState.ExtensionData is null)
+        {
+            return false;
+        }
+
+        var removed = runtimeState.ExtensionData.Remove(ReconcileFailureCountExtensionKey);
+        removed |= runtimeState.ExtensionData.Remove(ReconcileNextAttemptExtensionKey);
+        return removed;
     }
 
     private async Task<ActionResult> ExecuteActionAsync(
@@ -451,6 +722,23 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         string expectedVersion,
         CancellationToken ct)
     {
+        var (_, health) = await ProbePluginStateAsync(context, coD4xRconApi, expectedVersion, ct).ConfigureAwait(false);
+        return health;
+    }
+
+    /// <summary>
+    /// Probes the loaded-plugin state via the <c>pluginInfo</c> RCON command, distinguishing a
+    /// transient RCON/server outage (<see cref="PluginProbeState.Unreachable"/>) from genuine drift
+    /// where the server responded but the expected plugin/version is not loaded
+    /// (<see cref="PluginProbeState.Drifted"/>). Drift reconciliation uses this distinction to avoid
+    /// counting outages toward backoff, while install/rollback only care about the health result.
+    /// </summary>
+    private async Task<(PluginProbeState State, PluginHealthResult Health)> ProbePluginStateAsync(
+        ServerContext context,
+        ICoD4xRconApi coD4xRconApi,
+        string expectedVersion,
+        CancellationToken ct)
+    {
         var pluginInfoResult = await coD4xRconApi.PluginInfo(
             context.ServerId,
             new CoD4xPluginRequestDto { PluginName = PluginName },
@@ -458,24 +746,27 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         if (!pluginInfoResult.IsSuccess)
         {
-            return PluginHealthResult.Failure(BuildApiFailureMessage("plugin info", pluginInfoResult));
+            return (PluginProbeState.Unreachable, PluginHealthResult.Failure(BuildApiFailureMessage("plugin info", pluginInfoResult)));
         }
 
         var pluginInfo = pluginInfoResult.Result?.Data;
         if (string.IsNullOrWhiteSpace(pluginInfo))
         {
-            return PluginHealthResult.Failure("Plugin health check did not return plugin info output.");
+            return (PluginProbeState.Drifted, PluginHealthResult.Failure("Plugin health check did not return plugin info output."));
         }
 
         if (!pluginInfo.Contains(expectedVersion, StringComparison.OrdinalIgnoreCase))
         {
-            return PluginHealthResult.Failure(
-                $"Plugin health check did not report expected version '{expectedVersion}'.",
-                details: Truncate(pluginInfo, Cod4xPluginSettingsConstants.MaxLastErrorLength));
+            return (
+                PluginProbeState.Drifted,
+                PluginHealthResult.Failure(
+                    $"Plugin health check did not report expected version '{expectedVersion}'.",
+                    details: Truncate(pluginInfo, Cod4xPluginSettingsConstants.MaxLastErrorLength)));
         }
 
-        return PluginHealthResult.Success(
-            details: Truncate(pluginInfo, Cod4xPluginSettingsConstants.MaxLastErrorLength));
+        return (
+            PluginProbeState.Healthy,
+            PluginHealthResult.Success(details: Truncate(pluginInfo, Cod4xPluginSettingsConstants.MaxLastErrorLength)));
     }
 
     private async Task TryBestEffortUnloadAsync(
@@ -2413,6 +2704,13 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         public string? RolloutStage { get; set; }
 
         public bool? RolloutGatePassed { get; set; }
+    }
+
+    private enum PluginProbeState
+    {
+        Unreachable = 0,
+        Drifted = 1,
+        Healthy = 2
     }
 
     private sealed class PluginHealthResult

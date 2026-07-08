@@ -138,16 +138,13 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteAsync_NoOperationRequest_DoesNotPersistOrInvokeRcon()
+    public async Task ExecuteAsync_NoOperationRequest_WhenNoCurrentVersion_DoesNothing()
     {
         var settings = new Cod4xPluginSettingsDocument
         {
             SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
             Enabled = true,
-            RuntimeState = new Cod4xPluginRuntimeState
-            {
-                CurrentVersion = "1.0.0"
-            }
+            RuntimeState = new Cod4xPluginRuntimeState()
         };
 
         SetupConfiguration(settings);
@@ -157,7 +154,261 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
         _mockGameServerConfigurationsApi.Verify(x => x.UpsertConfiguration(
             It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.PluginInfo(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoOperationRequest_WhenPluginHealthy_VerifiesWithoutReloadOrPersist()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                // Matches the default PluginInfo mock output "portal-cod4x-plugin version 1.2.3".
+                CurrentVersion = "1.2.3"
+            }
+        };
+
+        SetupConfiguration(settings);
+        var service = CreateService();
+
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockGameServerConfigurationsApi.Verify(x => x.UpsertConfiguration(
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoOperationRequest_WhenDisabled_DoesNothing()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = false,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3"
+            }
+        };
+
+        SetupConfiguration(settings);
+        var service = CreateService();
+
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        _mockCoD4xRconApi.Verify(x => x.PluginInfo(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoOperationRequest_WhenPluginNotLoaded_ReloadsAndRecovers()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3",
+                LastOperationStatus = Cod4xPluginOperationStatus.Succeeded,
+                LastError = "stale error from a previous cycle"
+            }
+        };
+
+        SetupConfiguration(settings);
+
+        // Drift: first health check reports the plugin is not loaded; after loadplugin it recovers.
+        _mockCoD4xRconApi.SetupSequence(x => x.PluginInfo(
+                _serverId,
+                It.IsAny<CoD4xPluginRequestDto>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessResult("Total of 0 loaded plugins."))
+            .ReturnsAsync(SuccessResult("portal-cod4x-plugin version 1.2.3"));
+
+        UpsertConfigurationDto? upsertPayload = null;
+        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                _serverId,
+                Cod4xPluginSettingsConstants.Namespace,
+                It.IsAny<UpsertConfigurationDto>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => upsertPayload = dto)
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+
+        Assert.NotNull(upsertPayload);
+        var persisted = DeserializeSettings(upsertPayload!.Configuration);
+        Assert.NotNull(persisted.RuntimeState);
+        Assert.Equal("1.2.3", persisted.RuntimeState!.CurrentVersion);
+        Assert.Null(persisted.RuntimeState.LastError);
+        Assert.True(persisted.RuntimeState.ExtensionData is null
+            || !persisted.RuntimeState.ExtensionData.ContainsKey("reconcileConsecutiveFailures"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoOperationRequest_WhenReloadDoesNotRecover_PersistsBackoffState()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3"
+            }
+        };
+
+        SetupConfiguration(settings);
+
+        // Plugin never reports the expected version, even after loadplugin.
+        _mockCoD4xRconApi.Setup(x => x.PluginInfo(
+                _serverId,
+                It.IsAny<CoD4xPluginRequestDto>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessResult("Total of 0 loaded plugins."));
+
+        UpsertConfigurationDto? upsertPayload = null;
+        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                _serverId,
+                Cod4xPluginSettingsConstants.Namespace,
+                It.IsAny<UpsertConfigurationDto>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => upsertPayload = dto)
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+
+        Assert.NotNull(upsertPayload);
+        var persisted = DeserializeSettings(upsertPayload!.Configuration);
+        Assert.NotNull(persisted.RuntimeState);
+        Assert.NotNull(persisted.RuntimeState!.LastError);
+        Assert.NotNull(persisted.RuntimeState.ExtensionData);
+        Assert.True(persisted.RuntimeState.ExtensionData!.TryGetValue("reconcileConsecutiveFailures", out var failures));
+        Assert.Equal(1, failures.GetInt32());
+        Assert.True(persisted.RuntimeState.ExtensionData.ContainsKey("reconcileNextAttemptUtc"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoOperationRequest_WhenBackoffActive_SkipsHealthCheck()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3",
+                ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["reconcileConsecutiveFailures"] = ToJsonElement(2),
+                    ["reconcileNextAttemptUtc"] = ToJsonElement(DateTimeOffset.UtcNow.AddMinutes(10))
+                }
+            }
+        };
+
+        SetupConfiguration(settings);
+        var service = CreateService();
+
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        _mockCoD4xRconApi.Verify(x => x.PluginInfo(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockGameServerConfigurationsApi.Verify(x => x.UpsertConfiguration(
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoOperationRequest_WhenRconUnreachable_DoesNotReloadOrPersist()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3"
+            }
+        };
+
+        SetupConfiguration(settings);
+
+        // Server/RCON unreachable - PluginInfo returns a failed ApiResult (not an exception).
+        _mockCoD4xRconApi.Setup(x => x.PluginInfo(
+                _serverId,
+                It.IsAny<CoD4xPluginRequestDto>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailureResult(HttpStatusCode.BadGateway, "RCON_UNAVAILABLE", "server unreachable"));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        // Unreachable must not be treated as drift: no reload attempt and no backoff persist.
+        _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockGameServerConfigurationsApi.Verify(x => x.UpsertConfiguration(
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoOperationRequest_WhenOperationQueuedConcurrently_SkipsDriftPersist()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3"
+            }
+        };
+
+        // A newer snapshot that includes an operation request queued (e.g. by portal-web) mid-tick.
+        var settingsWithQueuedRequest = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState
+            {
+                CurrentVersion = "1.2.3"
+            },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-queued-concurrently",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "1.3.0"
+            }
+        };
+
+        // First read (ExecuteAsync) has no request so reconcile runs; the re-read before persist sees the queued request.
+        _mockGameServerConfigurationsApi.SetupSequence(x => x.GetConfigurations(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BuildConfigurationsResult(settings))
+            .ReturnsAsync(BuildConfigurationsResult(settingsWithQueuedRequest));
+
+        // Drift so reconcile attempts a reload and would otherwise persist backoff state.
+        _mockCoD4xRconApi.Setup(x => x.PluginInfo(
+                _serverId,
+                It.IsAny<CoD4xPluginRequestDto>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessResult("Total of 0 loaded plugins."));
+
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockGameServerConfigurationsApi.Verify(x => x.UpsertConfiguration(
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -2054,17 +2305,20 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
     private void SetupConfiguration(Cod4xPluginSettingsDocument settings)
     {
+        _mockGameServerConfigurationsApi.Setup(x => x.GetConfigurations(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BuildConfigurationsResult(settings));
+    }
+
+    private static ApiResult<CollectionModel<ConfigurationDto>> BuildConfigurationsResult(Cod4xPluginSettingsDocument settings)
+    {
         var configuration = JsonSerializer.Serialize(settings, JsonOptions);
         var dto = new ConfigurationDto();
         typeof(ConfigurationDto).GetProperty(nameof(ConfigurationDto.Namespace))!.SetValue(dto, Cod4xPluginSettingsConstants.Namespace);
         typeof(ConfigurationDto).GetProperty(nameof(ConfigurationDto.Configuration))!.SetValue(dto, configuration);
 
-        var result = new ApiResult<CollectionModel<ConfigurationDto>>(
+        return new ApiResult<CollectionModel<ConfigurationDto>>(
             HttpStatusCode.OK,
             new ApiResponse<CollectionModel<ConfigurationDto>>(new CollectionModel<ConfigurationDto>(new[] { dto })));
-
-        _mockGameServerConfigurationsApi.Setup(x => x.GetConfigurations(_serverId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(result);
     }
 
     private void SetupGlobalCod4xCommandSettings(object settings)
@@ -2126,6 +2380,13 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         return new ApiResult<string>(
             HttpStatusCode.OK,
             new ApiResponse<string>(value));
+    }
+
+    private static ApiResult<string> FailureResult(HttpStatusCode statusCode, string code, string message)
+    {
+        return new ApiResult<string>(
+            statusCode,
+            new ApiResponse<string>(new ApiError(code, message)));
     }
 
     private static ApiResult<ConfigurationDto> CreateNotFoundConfigurationResult()
