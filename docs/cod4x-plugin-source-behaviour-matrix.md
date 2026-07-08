@@ -10,17 +10,17 @@ This matrix defines runtime ownership when `IsCod4xPluginSourceEnabled` is enabl
 
 ## Agent Matrix
 
-| Behaviour                              | CoD4x + Plugin Enabled | CoD4x + Plugin Disabled   | Non-CoD4x      |
-| -------------------------------------- | ---------------------- | ------------------------- | -------------- |
-| Log tailing / parse loop               | Enabled                | Enabled                   | Enabled        |
-| Parsed event publish (non-chat)        | Suppressed             | Enabled                   | Enabled        |
-| Chat message publish                   | Enabled                | Enabled                   | Enabled        |
-| Server status publish                  | Suppressed             | Enabled                   | Enabled        |
-| Player IP resolved publish (RCON sync) | Suppressed             | Enabled                   | Enabled        |
-| Startup online broadcast (RCON `say`)  | Suppressed             | Enabled                   | Not applicable |
-| Scheduled broadcasts (RCON `say`)      | Suppressed             | Enabled (when configured) | Not applicable |
-| Ban file check and publish             | Enabled                | Enabled                   | Enabled        |
-| Lock lease + offset persistence        | Enabled                | Enabled                   | Enabled        |
+| Behaviour                              | CoD4x + Plugin Enabled    | CoD4x + Plugin Disabled   | Non-CoD4x      |
+| -------------------------------------- | ------------------------- | ------------------------- | -------------- |
+| Log tailing / parse loop               | Enabled                   | Enabled                   | Enabled        |
+| Parsed event publish (non-chat)        | Suppressed                | Enabled                   | Enabled        |
+| Chat message publish                   | Enabled                   | Enabled                   | Enabled        |
+| Server status publish                  | Suppressed                | Enabled                   | Enabled        |
+| Player IP resolved publish (RCON sync) | Suppressed                | Enabled                   | Enabled        |
+| Startup online broadcast (RCON `say`)  | Enabled                   | Enabled                   | Not applicable |
+| Scheduled broadcasts (RCON `say`)      | Enabled (when configured) | Enabled (when configured) | Not applicable |
+| Ban file check and publish             | Enabled                   | Enabled                   | Enabled        |
+| Lock lease + offset persistence        | Enabled                   | Enabled                   | Enabled        |
 
 ## Processor Matrix (portal-server-events)
 

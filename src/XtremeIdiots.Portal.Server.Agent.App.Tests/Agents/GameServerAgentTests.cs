@@ -790,7 +790,7 @@ public class GameServerAgentTests
     }
 
     [Fact]
-    public async Task RunAsync_PluginSourceEnabled_DoesNotSendStartupOrScheduledBroadcasts()
+    public async Task RunAsync_PluginSourceEnabled_StillSendsBroadcasts()
     {
         var context = _testContext with
         {
@@ -816,7 +816,12 @@ public class GameServerAgentTests
 
         await agent.RunAsync(cts.Token);
 
-        _mockBroadcastService.Verify(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        // Broadcasts are owned by the agent for CoD4x regardless of the plugin-source flag.
+        // Assert the scheduled message body specifically (only the scheduled path emits "message-1")
+        // so this proves scheduled broadcasts are no longer suppressed, not just the startup one.
+        _mockBroadcastService.Verify(
+            r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.Is<string>(m => m.Contains("message-1")), It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
     }
 
     [Fact]

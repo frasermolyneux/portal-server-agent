@@ -309,11 +309,6 @@ public sealed class GameServerAgent
             return;
         }
 
-        if (_context.IsCod4xPluginSourceEnabled)
-        {
-            return;
-        }
-
         var broadcastSettings = _context.Broadcasts;
         if (!broadcastSettings.Enabled)
         {
@@ -369,11 +364,6 @@ public sealed class GameServerAgent
     private async Task SendStartupOnlineBroadcastAsync(CancellationToken ct)
     {
         if (!IsBroadcastSupportedForCurrentServer())
-        {
-            return;
-        }
-
-        if (_context.IsCod4xPluginSourceEnabled)
         {
             return;
         }
