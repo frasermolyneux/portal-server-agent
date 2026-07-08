@@ -291,9 +291,20 @@ public sealed class GameServerAgent
         }
     }
 
+    private static readonly HashSet<string> BroadcastSupportedGameTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CallOfDuty2",
+        "CallOfDuty4",
+        "CallOfDuty4x",
+        "CallOfDuty5"
+    };
+
+    private bool IsBroadcastSupportedForCurrentServer()
+        => BroadcastSupportedGameTypes.Contains(_context.GameType);
+
     private async Task SendScheduledBroadcastAsync(CancellationToken ct)
     {
-        if (!string.Equals(_context.GameType, Cod4xCvarProbe.Cod4xGameType, StringComparison.OrdinalIgnoreCase))
+        if (!IsBroadcastSupportedForCurrentServer())
         {
             return;
         }
@@ -332,7 +343,7 @@ public sealed class GameServerAgent
 
         try
         {
-            result = await _broadcastService.SayAsync(_context.ServerId, message, ct);
+            result = await _broadcastService.SayAsync(_context.ServerId, _context.GameType, message, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -357,7 +368,7 @@ public sealed class GameServerAgent
 
     private async Task SendStartupOnlineBroadcastAsync(CancellationToken ct)
     {
-        if (!string.Equals(_context.GameType, Cod4xCvarProbe.Cod4xGameType, StringComparison.OrdinalIgnoreCase))
+        if (!IsBroadcastSupportedForCurrentServer())
         {
             return;
         }
@@ -377,7 +388,7 @@ public sealed class GameServerAgent
 
         try
         {
-            var result = await _broadcastService.SayAsync(_context.ServerId, message, ct);
+            var result = await _broadcastService.SayAsync(_context.ServerId, _context.GameType, message, ct);
             if (!result.IsSuccess)
             {
                 _logger.LogWarning(
