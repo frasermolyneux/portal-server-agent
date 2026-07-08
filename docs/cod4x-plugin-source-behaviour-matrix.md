@@ -29,7 +29,12 @@ These are downstream command/welcome ownership rules used with the same plugin-s
 | Behaviour                              | CoD4x + Plugin Enabled | CoD4x + Plugin Disabled | Non-CoD4x |
 | -------------------------------------- | ---------------------- | ----------------------- | --------- |
 | Chat command execution in processor    | Suppressed             | Enabled                 | Enabled   |
-| Welcome message execution in processor | Suppressed             | Enabled                 | Enabled   |
+| Welcome message execution in processor | Enabled                | Enabled                 | Enabled   |
+
+> Welcome messages always execute in `portal-server-events` regardless of the plugin-source flag:
+> the plugin only *raises* the connect event; the welcome-message orchestration stays in the
+> processor. The plugin's once-per-connection guard (emit on first `OnClientEnterWorld`, reset on
+> `OnPlayerDC`) ensures exactly one connect event — and therefore one welcome — per connection.
 
 ## Operational Notes
 
