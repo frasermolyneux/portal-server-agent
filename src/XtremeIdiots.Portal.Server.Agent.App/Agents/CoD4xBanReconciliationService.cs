@@ -18,6 +18,7 @@ public sealed class CoD4xBanReconciliationService(
 {
     private const int ActiveBanPageSize = 200;
     private const string PortalBanReasonMarker = "[PORTAL-BAN]";
+    private const string PortalAutomationReasonMarker = "[PORTAL-AUTOMATION]";
 
     public async Task ReconcileAsync(Guid serverId, string? gameType, CancellationToken ct = default)
         => await ReconcileAsync(serverId, gameType, isCod4xPluginSourceEnabled: false, ct).ConfigureAwait(false);
@@ -164,7 +165,8 @@ public sealed class CoD4xBanReconciliationService(
                 continue;
             }
 
-            if (isCod4xPluginSourceEnabled && IsPortalManagedBan(serverBan.Value))
+            if (IsPortalAutomationBan(serverBan.Value)
+                || (isCod4xPluginSourceEnabled && IsPortalManagedBan(serverBan.Value)))
             {
                 continue;
             }
@@ -224,6 +226,10 @@ public sealed class CoD4xBanReconciliationService(
     private static bool IsPortalManagedBan(CoD4xBanEntryDto banEntry)
         => !string.IsNullOrWhiteSpace(banEntry.Reason)
             && banEntry.Reason.Contains(PortalBanReasonMarker, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPortalAutomationBan(CoD4xBanEntryDto banEntry)
+        => !string.IsNullOrWhiteSpace(banEntry.Reason)
+            && banEntry.Reason.Contains(PortalAutomationReasonMarker, StringComparison.OrdinalIgnoreCase);
 
     private async Task ReapplyPortalOnlyBansAsync(
         Guid serverId,

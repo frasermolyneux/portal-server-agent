@@ -653,6 +653,87 @@ public class CoD4xBanReconciliationServiceTests
     }
 
     [Fact]
+    public async Task ReconcileAsync_SkipsImportForPortalAutomationBanWithoutPluginSource()
+    {
+        _mockCoD4xRconApi.Setup(c => c.DumpBanList(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanListResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xBanListResponseDto>(new CoD4xBanListResponseDto
+                {
+                    Entries =
+                    [
+                        new CoD4xBanEntryDto
+                        {
+                            PlayerIdentifier = "portal-automation-player",
+                            Nick = "PortalAutomation",
+                            Expire = "Never",
+                            Reason = "[PORTAL-AUTOMATION] VPN:vpn VPN Protection"
+                        }
+                    ],
+                    ActiveBanCount = 1,
+                    RawResponse = string.Empty
+                })));
+
+        _mockAdminActionsApi.Setup(a => a.GetAdminActions(
+                GameType.CallOfDuty4x,
+                null,
+                null,
+                AdminActionFilter.ActiveBans,
+                0,
+                It.IsAny<int>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<AdminActionDto>>(
+                HttpStatusCode.OK,
+                new ApiResponse<CollectionModel<AdminActionDto>>(new CollectionModel<AdminActionDto>
+                {
+                    Items = []
+                })));
+
+        var service = CreateService();
+
+        await service.ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        _mockPlayersApi.Verify(p => p.HeadPlayerByGameType(GameType.CallOfDuty4x, It.IsAny<string>()), Times.Never);
+        _mockAdminActionsApi.Verify(a => a.CreateAdminAction(It.IsAny<CreateAdminActionDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_ImportsRegularPortalBanWithoutPluginSource()
+    {
+        _mockCoD4xRconApi.Setup(c => c.DumpBanList(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xBanListResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xBanListResponseDto>(new CoD4xBanListResponseDto
+                {
+                    Entries =
+                    [
+                        new CoD4xBanEntryDto
+                        {
+                            PlayerIdentifier = "regular-portal-ban-player",
+                            Nick = "RegularPortalBan",
+                            Expire = "Never",
+                            Reason = "[PORTAL-BAN] synced from portal"
+                        }
+                    ],
+                    ActiveBanCount = 1,
+                    RawResponse = string.Empty
+                })));
+        _mockAdminActionsApi.Setup(a => a.GetAdminActions(GameType.CallOfDuty4x, null, null, AdminActionFilter.ActiveBans, 0, It.IsAny<int>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<AdminActionDto>>(HttpStatusCode.OK, new ApiResponse<CollectionModel<AdminActionDto>>(new CollectionModel<AdminActionDto> { Items = [] })));
+        _mockPlayersApi.Setup(p => p.HeadPlayerByGameType(GameType.CallOfDuty4x, "regular-portal-ban-player")).ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+        _mockPlayersApi.Setup(p => p.GetPlayerByGameType(GameType.CallOfDuty4x, "regular-portal-ban-player", PlayerEntityOptions.None))
+            .ReturnsAsync(new ApiResult<PlayerDto>(HttpStatusCode.OK, new ApiResponse<PlayerDto>(CreatePlayerDto(Guid.Parse("87878787-8787-8787-8787-878787878787"), "regular-portal-ban-player"))));
+        _mockAdminActionsApi.Setup(a => a.GetAdminActions(GameType.CallOfDuty4x, Guid.Parse("87878787-8787-8787-8787-878787878787"), null, AdminActionFilter.ActiveBans, 0, 1, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<AdminActionDto>>(HttpStatusCode.OK, new ApiResponse<CollectionModel<AdminActionDto>>(new CollectionModel<AdminActionDto> { Items = [] })));
+        _mockAdminActionsApi.Setup(a => a.CreateAdminAction(It.IsAny<CreateAdminActionDto>(), It.IsAny<CancellationToken>())).ReturnsAsync(new ApiResult(HttpStatusCode.OK, new ApiResponse()));
+
+        await CreateService().ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        _mockAdminActionsApi.Verify(a => a.CreateAdminAction(It.IsAny<CreateAdminActionDto>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task ReconcileAsync_ImportsServerOnlyTimedBanIntoPortalAsTempBan()
     {
         // Arrange
