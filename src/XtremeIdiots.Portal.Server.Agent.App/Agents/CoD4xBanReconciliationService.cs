@@ -3,7 +3,6 @@ using MX.Api.Abstractions;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
-using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.AdminActions;
 using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.Players;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
@@ -17,6 +16,11 @@ public sealed class CoD4xBanReconciliationService(
     ILogger<CoD4xBanReconciliationService> logger) : ICoD4xBanReconciliationService
 {
     private const int ActiveBanPageSize = 200;
+    private const int LegacyCoD4xIdentifierLength = 13;
+    private const int CanonicalPuidSearchPrefixLength = 11;
+    private const int LegacyCoD4xIdentifierPrefix = 4;
+    private const int CanonicalPuidSearchPageSize = 20;
+    private const string RconDumpBanListSource = "RconDumpbanlist";
     private const string PortalBanReasonMarker = "[PORTAL-BAN]";
     private const string PortalAutomationReasonMarker = "[PORTAL-AUTOMATION]";
 
@@ -171,48 +175,36 @@ public sealed class CoD4xBanReconciliationService(
                 continue;
             }
 
-            var playerIdentifier = serverBan.Key;
+            var playerIdentifier = await ResolveCanonicalPlayerIdentifierAsync(serverBan.Key, ct).ConfigureAwait(false);
+            if (playerIdentifier is null)
+            {
+                continue;
+            }
+
+            if (portalActiveBansByIdentifier.ContainsKey(playerIdentifier))
+            {
+                continue;
+            }
+
             var playerName = string.IsNullOrWhiteSpace(serverBan.Value.Nick)
                 ? playerIdentifier
                 : serverBan.Value.Nick.Trim();
 
-            var playerId = await GetOrCreatePlayerIdAsync(playerIdentifier, playerName, ct).ConfigureAwait(false);
-            if (!playerId.HasValue)
-            {
-                continue;
-            }
+            var (isTemporary, expires) = ResolveBanDetails(serverBan.Value);
+            var reason = string.IsNullOrWhiteSpace(serverBan.Value.Reason)
+                ? "Imported from server RCON dumpbanlist"
+                : serverBan.Value.Reason.Trim();
 
-            var hasActiveBan = await HasActiveBanAsync(playerId.Value, ct).ConfigureAwait(false);
-            if (!hasActiveBan.HasValue)
-            {
-                logger.LogWarning(
-                    "Skipping CoD4x ban import for {PlayerIdentifier}: could not determine existing active-ban state",
-                    playerIdentifier);
-                continue;
-            }
-
-            if (hasActiveBan.Value)
-            {
-                continue;
-            }
-
-            var (actionType, expires) = ResolveAdminActionFromDumpBanEntry(serverBan.Value);
-            var createDto = new CreateAdminActionDto(playerId.Value, actionType, "Imported from server RCON dumpbanlist")
-            {
-                Expires = expires
-            };
-
-            var createResult = await repositoryApiClient.AdminActions.V1
-                .CreateAdminAction(createDto, ct)
-                .ConfigureAwait(false);
-
-            if (!createResult.IsSuccess)
-            {
-                logger.LogWarning("Failed to import CoD4x server ban for {PlayerIdentifier}: status {StatusCode}",
-                    playerIdentifier,
-                    createResult.StatusCode);
-                continue;
-            }
+            await TryPublishBanAppliedAsync(
+                serverId,
+                nameof(GameType.CallOfDuty4x),
+                playerIdentifier,
+                playerName,
+                isTemporary,
+                expires,
+                RconDumpBanListSource,
+                reason,
+                ct).ConfigureAwait(false);
 
             importedCount++;
         }
@@ -347,62 +339,101 @@ public sealed class CoD4xBanReconciliationService(
         }
     }
 
-    private async Task<Guid?> GetOrCreatePlayerIdAsync(
-        string playerIdentifier,
-        string playerName,
-        CancellationToken ct)
+    private async Task<string?> ResolveCanonicalPlayerIdentifierAsync(string playerIdentifier, CancellationToken ct)
     {
-        var headResult = await repositoryApiClient.Players.V1
-            .HeadPlayerByGameType(GameType.CallOfDuty4x, playerIdentifier)
-            .ConfigureAwait(false);
-
-        if (headResult.IsNotFound)
+        if (!IsLegacyCoD4xIdentifier(playerIdentifier))
         {
-            var createResult = await repositoryApiClient.Players.V1
-                .CreatePlayer(new CreatePlayerDto(playerName, playerIdentifier, GameType.CallOfDuty4x))
+            return playerIdentifier;
+        }
+
+        var searchPrefix = GetCanonicalPuidSearchPrefix(playerIdentifier);
+        if (searchPrefix is null)
+        {
+            return null;
+        }
+
+        var matchingPlayers = new List<PlayerDto>();
+        var skip = 0;
+
+        while (true)
+        {
+            var playersResult = await repositoryApiClient.Players.V1
+                .GetPlayers(
+                    GameType.CallOfDuty4x,
+                    PlayersFilter.UsernameAndGuid,
+                    searchPrefix,
+                    skip,
+                    CanonicalPuidSearchPageSize,
+                    null,
+                    PlayerEntityOptions.None)
                 .ConfigureAwait(false);
 
-            if (!createResult.IsSuccess && !createResult.IsConflict)
+            if (!playersResult.IsSuccess || playersResult.Result?.Data?.Items is null)
             {
-                logger.LogWarning("Failed to create player during CoD4x ban import for {PlayerIdentifier}: status {StatusCode}",
-                    playerIdentifier,
-                    createResult.StatusCode);
+                logger.LogWarning("Could not search for canonical PUID during CoD4x ban import for legacy identifier {PlayerIdentifier}", playerIdentifier);
                 return null;
             }
+
+            var pageItems = playersResult.Result.Data.Items.ToList();
+            matchingPlayers.AddRange(pageItems.Where(player => MatchesLegacyCoD4xIdentifier(player.Guid, playerIdentifier)));
+
+            if (matchingPlayers.Count > 1 || pageItems.Count < CanonicalPuidSearchPageSize)
+            {
+                break;
+            }
+
+            skip += pageItems.Count;
         }
 
-        var playerResult = await repositoryApiClient.Players.V1
-            .GetPlayerByGameType(GameType.CallOfDuty4x, playerIdentifier, PlayerEntityOptions.None)
-            .ConfigureAwait(false);
-
-        if (!playerResult.IsSuccess || playerResult.Result?.Data is null)
+        if (matchingPlayers.Count != 1)
         {
-            logger.LogWarning("Could not resolve player during CoD4x ban import for {PlayerIdentifier}", playerIdentifier);
+            logger.LogWarning(
+                "Skipping CoD4x ban import for legacy identifier {PlayerIdentifier}: found {CandidateCount} matching canonical PUIDs",
+                playerIdentifier,
+                matchingPlayers.Count);
             return null;
         }
 
-        return playerResult.Result.Data.PlayerId;
+        return matchingPlayers[0].Guid;
     }
 
-    private async Task<bool?> HasActiveBanAsync(Guid playerId, CancellationToken ct)
+    private static bool IsLegacyCoD4xIdentifier(string playerIdentifier)
+        => playerIdentifier.Length == LegacyCoD4xIdentifierLength && playerIdentifier.All(char.IsAsciiDigit);
+
+    private static string? GetCanonicalPuidSearchPrefix(string legacyIdentifier)
     {
-        var activeBansResult = await repositoryApiClient.AdminActions.V1
-            .GetAdminActions(GameType.CallOfDuty4x, playerId, null, AdminActionFilter.ActiveBans, 0, 1, null, ct)
-            .ConfigureAwait(false);
-
-        if (!activeBansResult.IsSuccess)
+        if (!System.Numerics.BigInteger.TryParse(legacyIdentifier, out var legacyValue))
         {
             return null;
         }
 
-        return activeBansResult.Result?.Data?.Items?.Any() == true;
+        var legacyPayloadMask = (System.Numerics.BigInteger.One << 40) - 1;
+        var canonicalPuidLowerBound = (legacyValue & legacyPayloadMask) << 24;
+        var canonicalPuid = canonicalPuidLowerBound.ToString();
+
+        return canonicalPuid.Length < CanonicalPuidSearchPrefixLength
+            ? null
+            : canonicalPuid[..CanonicalPuidSearchPrefixLength];
     }
 
-    private static (AdminActionType ActionType, DateTime? Expires) ResolveAdminActionFromDumpBanEntry(CoD4xBanEntryDto entry)
+    private static bool MatchesLegacyCoD4xIdentifier(string canonicalPuid, string legacyIdentifier)
+    {
+        if (!System.Numerics.BigInteger.TryParse(canonicalPuid, out var puid) ||
+            !System.Numerics.BigInteger.TryParse(legacyIdentifier, out var legacy))
+        {
+            return false;
+        }
+
+        var legacyPayloadMask = (System.Numerics.BigInteger.One << 40) - 1;
+        var derivedLegacy = ((System.Numerics.BigInteger)LegacyCoD4xIdentifierPrefix << 40) | (puid >> 24);
+        return derivedLegacy == legacy && (legacy & legacyPayloadMask) == (puid >> 24);
+    }
+
+    private static (bool IsTemporary, DateTime? Expires) ResolveBanDetails(CoD4xBanEntryDto entry)
     {
         if (string.Equals(entry.Expire, "Never", StringComparison.OrdinalIgnoreCase))
         {
-            return (AdminActionType.Ban, null);
+            return (false, null);
         }
 
         if (DateTime.TryParse(
@@ -411,10 +442,10 @@ public sealed class CoD4xBanReconciliationService(
             System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
             out var expiresUtc))
         {
-            return (AdminActionType.TempBan, expiresUtc);
+            return (true, expiresUtc);
         }
 
-        return (AdminActionType.Ban, null);
+        return (false, null);
     }
 
     private async Task TryPublishBanAppliedAsync(
