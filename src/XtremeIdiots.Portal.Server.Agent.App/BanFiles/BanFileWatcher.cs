@@ -120,8 +120,16 @@ public sealed class BanFileWatcher : IBanFileWatcher
         // for the append-only ingest, and its LastPushedETag tells us whether the
         // central blob still needs propagating to this server.
         var existingMonitor = await GetExistingMonitorAsync(context.ServerId, ct).ConfigureAwait(false);
-        var lastKnownSize = existingMonitor?.RemoteFileSize ?? 0;
+        var activePathChanged = existingMonitor is not null
+            && !string.Equals(existingMonitor.RemoteFilePath, resolvedPath.Path, StringComparison.Ordinal);
+        var lastKnownSize = activePathChanged ? 0 : existingMonitor?.RemoteFileSize ?? 0;
         var monitorIdForLogs = existingMonitor?.BanFileMonitorId.ToString() ?? "(new)";
+
+        if (activePathChanged)
+        {
+            _scheduledPushes.TryRemove(laneKey, out _);
+            _countCache.TryRemove(laneKey, out _);
+        }
 
         IReadOnlyList<DetectedBanEntry> detectedBans = [];
         long? finalSize = null;
@@ -297,7 +305,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
             ResolvedForMod = resolvedPath.ResolvedForMod,
             RemoteFileSize = finalSize,
             LastPushUtc = pushedAt,
-            LastPushedETag = pushedEtag,
+            LastPushedETag = activePathChanged && pushedEtag is null ? string.Empty : pushedEtag,
             LastPushedSize = pushedSize,
             LastCentralBlobETag = centralEtag,
             LastCentralBlobUtc = centralEtagSeenAt,
@@ -395,13 +403,37 @@ public sealed class BanFileWatcher : IBanFileWatcher
         await using (central)
         {
             var nowUtc = DateTime.UtcNow;
+            var hasUnreconciledImport = existingMonitor?.LastImportUtc is not null
+                && (existingMonitor.LastPushUtc is null || existingMonitor.LastImportUtc > existingMonitor.LastPushUtc);
             var lastPushedEtag = existingMonitor?.LastPushedETag;
-            var alreadyPushed = string.Equals(lastPushedEtag, central.ETag, StringComparison.Ordinal);
+            var alreadyPushed = string.Equals(existingMonitor?.RemoteFilePath, resolvedPath.Path, StringComparison.Ordinal)
+                && string.Equals(lastPushedEtag, central.ETag, StringComparison.Ordinal);
 
-            if (alreadyPushed)
+            if (alreadyPushed && !hasUnreconciledImport)
             {
                 _scheduledPushes.TryRemove(laneKey, out _);
                 return PushOutcome.NoPush(central.ETag, nowUtc);
+            }
+
+            if (hasUnreconciledImport)
+            {
+                string remoteContent;
+                await using (var stream = await remoteClient.OpenReadAsync(resolvedPath.Path, 0, ct).ConfigureAwait(false))
+                using (var reader = new StreamReader(stream))
+                {
+                    remoteContent = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+                }
+
+                var remoteUntaggedGuids = ParseBanLines(remoteContent)
+                    .Select(entry => entry.PlayerGuid)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var canonicalGuids = ReadBanGuids(central.Content);
+
+                if (!remoteUntaggedGuids.IsSubsetOf(canonicalGuids))
+                {
+                    _scheduledPushes.TryRemove(laneKey, out _);
+                    return PushOutcome.NoPush(central.ETag, nowUtc);
+                }
             }
 
             // ETag-jittered scheduling: spread fleet-wide pushes after a portal-sync regen
@@ -448,9 +480,11 @@ public sealed class BanFileWatcher : IBanFileWatcher
 
             try
             {
+                central.Content.Position = 0;
                 await remoteClient.UploadAsync(central.Content, resolvedPath.Path, ct).ConfigureAwait(false);
 
                 _scheduledPushes.TryRemove(laneKey, out _);
+                _countCache.TryRemove(laneKey, out _);
                 _logger.LogInformation(
                     "[{Title}] Pushed central ban file ({Length} bytes, ETag {ETag}) to {Path}",
                     context.Title, central.Length, central.ETag, resolvedPath.Path);
@@ -466,6 +500,25 @@ public sealed class BanFileWatcher : IBanFileWatcher
                 return PushOutcome.NoPush(central.ETag, nowUtc);
             }
         }
+    }
+
+    private static HashSet<string> ReadBanGuids(Stream content)
+    {
+        content.Position = 0;
+        using var reader = new StreamReader(content, leaveOpen: true);
+        var guids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rawLine in reader.ReadToEnd().Split('\n'))
+        {
+            var trimmed = rawLine.Trim();
+            var separatorIndex = trimmed.IndexOf(' ');
+            if (separatorIndex > 0)
+            {
+                guids.Add(trimmed[..separatorIndex]);
+            }
+        }
+
+        return guids;
     }
 
     /// <summary>
