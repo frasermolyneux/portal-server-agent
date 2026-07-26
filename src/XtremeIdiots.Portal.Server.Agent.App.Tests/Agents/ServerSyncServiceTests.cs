@@ -397,6 +397,40 @@ public class ServerSyncServiceTests
     }
 
     [Fact]
+    public async Task SyncAsync_WhenCoD4xStatusFails_StillRunsBanReconciliation()
+    {
+        // A failed CoD4x status call must not skip the ban reconcile: the reconcile issues its own
+        // independent dumpbanlist RCON call and is required to import server-side bans into the
+        // portal, so it must run even when the player-status fetch returns no data.
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(
+                HttpStatusCode.InternalServerError,
+                new ApiResponse<CoD4xStatusResponseDto>(new ApiError("SERVER_ERROR", "Internal error"))));
+
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var service = CreateService(includeCoD4xReconciliationService: true);
+
+        await service.SyncAsync(_serverId, _mockParser.Object, "CallOfDuty4x", true);
+
+        _mockCoD4xReconciliationService.Verify(x => x.ReconcileAsync(
+            _serverId,
+            "CallOfDuty4x",
+            true,
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        _mockCoD4xAdminReconciliationService.Verify(x => x.ReconcileAsync(
+            _serverId,
+            "CallOfDuty4x",
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        _mockCoD4xCommandPowerReconciliationService.Verify(x => x.ReconcileAsync(
+            _serverId,
+            "CallOfDuty4x",
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task SyncAsync_DoesNotThrow_WhenCoD4xReconciliationServiceIsNotRegistered()
     {
         var rconStatus = new CoD4xStatusResponseDto { Players = [] };

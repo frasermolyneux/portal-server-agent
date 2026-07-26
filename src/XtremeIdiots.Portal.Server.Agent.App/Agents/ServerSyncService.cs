@@ -62,6 +62,13 @@ public sealed class ServerSyncService : IServerSyncService
             if (rconPlayers is null)
             {
                 await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
+
+                // The CoD4x reconciles issue their own independent RCON commands (dumpbanlist,
+                // admin/command-power) and do not depend on the player-status result. Run them even
+                // when the status fetch failed or returned no players, so a flaky status call never
+                // starves server -> portal ban import.
+                await RunCoD4xReconciliationAsync(scope, serverId, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false);
+
                 return ipResolvedEvents;
             }
 
@@ -144,30 +151,9 @@ public sealed class ServerSyncService : IServerSyncService
                 serverId, added, updated, staleSlots.Count, ipResolvedEvents.Count);
 
             // Query protocol for server metadata and player scores
-            await SyncQueryAsync(scope, serverId, parser, ct);
+            await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
 
-            if (IsCoD4xGameType(gameType))
-            {
-                var reconciliationService = scope.ServiceProvider.GetService<ICoD4xBanReconciliationService>();
-                if (reconciliationService is not null)
-                {
-                    await reconciliationService
-                        .ReconcileAsync(serverId, gameType, isCod4xPluginSourceEnabled, ct)
-                        .ConfigureAwait(false);
-                }
-
-                var adminReconciliationService = scope.ServiceProvider.GetService<ICoD4xAdminReconciliationService>();
-                if (adminReconciliationService is not null)
-                {
-                    await adminReconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
-                }
-
-                var commandPowerReconciliationService = scope.ServiceProvider.GetService<ICoD4xCommandPowerReconciliationService>();
-                if (commandPowerReconciliationService is not null)
-                {
-                    await commandPowerReconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
-                }
-            }
+            await RunCoD4xReconciliationAsync(scope, serverId, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -175,6 +161,46 @@ public sealed class ServerSyncService : IServerSyncService
         }
 
         return ipResolvedEvents;
+    }
+
+    /// <summary>
+    /// Runs the CoD4x ban, admin, and command-power reconciles. These issue their own independent
+    /// RCON commands (e.g. <c>dumpbanlist</c>) and do not depend on the player-status sync, so they
+    /// are invoked on every sync path — including when the status fetch failed or returned no
+    /// players — to guarantee server-side bans are imported into the portal. No-op for non-CoD4x
+    /// game types.
+    /// </summary>
+    private async Task RunCoD4xReconciliationAsync(
+        IServiceScope scope,
+        Guid serverId,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        CancellationToken ct)
+    {
+        if (!IsCoD4xGameType(gameType))
+        {
+            return;
+        }
+
+        var reconciliationService = scope.ServiceProvider.GetService<ICoD4xBanReconciliationService>();
+        if (reconciliationService is not null)
+        {
+            await reconciliationService
+                .ReconcileAsync(serverId, gameType, isCod4xPluginSourceEnabled, ct)
+                .ConfigureAwait(false);
+        }
+
+        var adminReconciliationService = scope.ServiceProvider.GetService<ICoD4xAdminReconciliationService>();
+        if (adminReconciliationService is not null)
+        {
+            await adminReconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
+        }
+
+        var commandPowerReconciliationService = scope.ServiceProvider.GetService<ICoD4xCommandPowerReconciliationService>();
+        if (commandPowerReconciliationService is not null)
+        {
+            await commandPowerReconciliationService.ReconcileAsync(serverId, gameType, ct).ConfigureAwait(false);
+        }
     }
 
     private async Task<(bool IsSupportedGameType, IReadOnlyList<RconPlayerSnapshot>? Players)> TryGetRconPlayersAsync(
