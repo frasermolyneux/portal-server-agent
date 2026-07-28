@@ -1,4 +1,4 @@
-﻿namespace XtremeIdiots.Portal.Server.Agent.App.Tests;
+namespace XtremeIdiots.Portal.Server.Agent.App.Tests;
 
 public class UnitTest1
 {
