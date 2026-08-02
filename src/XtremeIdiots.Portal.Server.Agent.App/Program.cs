@@ -75,7 +75,9 @@ builder.Services.AddServiceProfiler();
 // Repository API client
 builder.Services.AddRepositoryApiClient(options => options
     .WithBaseUrl(builder.Configuration["RepositoryApi:BaseUrl"]!)
-    .WithEntraIdAuthentication(builder.Configuration["RepositoryApi:ApplicationAudience"]!));
+    .WithEntraIdAuthentication(builder.Configuration["RepositoryApi:ApplicationAudience"]!)
+    .WithCachePartition("portal-server-agent")
+    .WithCaching(c => c.UseLibraryDefaults()));
 
 // Servers Integration API client (for RCON sync)
 builder.Services.AddServersApiClient(options => options
