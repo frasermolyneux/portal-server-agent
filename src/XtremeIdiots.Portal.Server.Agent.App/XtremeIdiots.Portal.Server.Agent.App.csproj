@@ -28,7 +28,7 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
     <PackageReference Include="MX.Observability.ApplicationInsights.AspNetCore" Version="1.1.28" />
     <PackageReference Include="Polly.Core" Version="8.7.0" />
-    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Abstractions.V1" Version="4.1.14" />
     <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1" Version="4.1.14" />
     <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.V1" Version="4.2.22" />
