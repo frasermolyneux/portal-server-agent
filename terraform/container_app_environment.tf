@@ -5,6 +5,7 @@ resource "azurerm_container_app_environment" "env" {
   location            = data.azurerm_resource_group.rg.location
 
   log_analytics_workspace_id = data.azurerm_application_insights.app_insights.workspace_id
+  logs_destination           = "log-analytics"
 
   tags = var.tags
 }
