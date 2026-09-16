@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 using Azure;
@@ -21,6 +22,7 @@ public sealed class BlobOffsetStore : IOffsetStore
 
     private readonly BlobContainerClient _container;
     private readonly ILogger<BlobOffsetStore> _logger;
+    private readonly ConcurrentDictionary<Guid, PersistedOffset> _persistedOffsets = new();
 
     public BlobOffsetStore(BlobServiceClient blobServiceClient, ILogger<BlobOffsetStore> logger)
     {
@@ -32,6 +34,13 @@ public sealed class BlobOffsetStore : IOffsetStore
     /// <inheritdoc />
     public async Task SaveOffsetAsync(Guid serverId, long offset, string filePath, CancellationToken ct = default)
     {
+        var persistedOffset = new PersistedOffset(offset, filePath);
+        if (_persistedOffsets.TryGetValue(serverId, out var previousOffset)
+            && previousOffset == persistedOffset)
+        {
+            return;
+        }
+
         try
         {
             var blobName = $"offsets/{serverId}.json";
@@ -48,6 +57,7 @@ public sealed class BlobOffsetStore : IOffsetStore
             using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
 
             await blob.UploadAsync(stream, overwrite: true, cancellationToken: ct);
+            _persistedOffsets[serverId] = persistedOffset;
 
             _logger.LogDebug("Saved offset {Offset} for server {ServerId} at {FilePath}",
                 offset, serverId, filePath);
@@ -68,18 +78,30 @@ public sealed class BlobOffsetStore : IOffsetStore
 
             var response = await blob.DownloadContentAsync(ct);
             var json = response.Value.Content.ToString();
+            var savedOffset = JsonSerializer.Deserialize<SavedOffset>(json, JsonOptions);
 
-            return JsonSerializer.Deserialize<SavedOffset>(json, JsonOptions);
+            if (savedOffset is null)
+            {
+                _persistedOffsets.TryRemove(serverId, out _);
+                return null;
+            }
+
+            _persistedOffsets[serverId] = new PersistedOffset(savedOffset.Offset, savedOffset.FilePath);
+            return savedOffset;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
+            _persistedOffsets.TryRemove(serverId, out _);
             _logger.LogDebug("No saved offset found for server {ServerId} — starting from end of file", serverId);
             return null;
         }
         catch (Exception ex)
         {
+            _persistedOffsets.TryRemove(serverId, out _);
             _logger.LogError(ex, "Failed to read offset for server {ServerId} — starting from end of file", serverId);
             return null;
         }
     }
+
+    private sealed record PersistedOffset(long Offset, string FilePath);
 }

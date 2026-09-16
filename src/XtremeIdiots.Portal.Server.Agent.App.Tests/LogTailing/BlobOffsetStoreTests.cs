@@ -69,6 +69,60 @@ public class BlobOffsetStoreTests
     }
 
     [Fact]
+    public async Task SaveOffsetAsync_WhenOffsetAndFilePathAreUnchanged_SkipsDuplicateUpload()
+    {
+        var serverId = Guid.NewGuid();
+
+        _mockBlobClient
+            .Setup(b => b.UploadAsync(It.IsAny<Stream>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<Response<BlobContentInfo>>());
+
+        await _store.SaveOffsetAsync(serverId, 450000, "/main/games_mp.log");
+        await _store.SaveOffsetAsync(serverId, 450000, "/main/games_mp.log");
+
+        _mockBlobClient.Verify(
+            b => b.UploadAsync(It.IsAny<Stream>(), true, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Theory]
+    [InlineData(450001, "/main/games_mp.log")]
+    [InlineData(450000, "/main/console.log")]
+    public async Task SaveOffsetAsync_WhenOffsetOrFilePathChanges_UploadsAgain(long offset, string filePath)
+    {
+        var serverId = Guid.NewGuid();
+
+        _mockBlobClient
+            .Setup(b => b.UploadAsync(It.IsAny<Stream>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<Response<BlobContentInfo>>());
+
+        await _store.SaveOffsetAsync(serverId, 450000, "/main/games_mp.log");
+        await _store.SaveOffsetAsync(serverId, offset, filePath);
+
+        _mockBlobClient.Verify(
+            b => b.UploadAsync(It.IsAny<Stream>(), true, It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task SaveOffsetAsync_WhenUploadFails_RetriesUnchangedOffset()
+    {
+        var serverId = Guid.NewGuid();
+
+        _mockBlobClient
+            .SetupSequence(b => b.UploadAsync(It.IsAny<Stream>(), true, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new RequestFailedException(500, "InternalServerError"))
+            .ReturnsAsync(Mock.Of<Response<BlobContentInfo>>());
+
+        await _store.SaveOffsetAsync(serverId, 450000, "/main/games_mp.log");
+        await _store.SaveOffsetAsync(serverId, 450000, "/main/games_mp.log");
+
+        _mockBlobClient.Verify(
+            b => b.UploadAsync(It.IsAny<Stream>(), true, It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Fact]
     public async Task GetOffsetAsync_WhenBlobExists_ReturnsSavedOffset()
     {
         var serverId = Guid.NewGuid();
@@ -88,6 +142,28 @@ public class BlobOffsetStoreTests
         Assert.Equal(123456, result.Offset);
         Assert.Equal("/logs/game.log", result.FilePath);
         Assert.Equal(new DateTime(2026, 4, 5, 10, 0, 0, DateTimeKind.Utc), result.SavedAtUtc);
+    }
+
+    [Fact]
+    public async Task GetOffsetAsync_WhenBlobExists_SkipsUploadOfUnchangedOffset()
+    {
+        var serverId = Guid.NewGuid();
+        var savedJson = /*lang=json,strict*/ """{"offset":123456,"filePath":"/logs/game.log","savedAtUtc":"2026-04-05T10:00:00Z"}""";
+        var binaryData = new BinaryData(Encoding.UTF8.GetBytes(savedJson));
+
+        var mockResponse = new Mock<Response>();
+        var downloadResult = BlobsModelFactory.BlobDownloadResult(content: binaryData);
+
+        _mockBlobClient
+            .Setup(b => b.DownloadContentAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Response.FromValue(downloadResult, mockResponse.Object));
+
+        await _store.GetOffsetAsync(serverId);
+        await _store.SaveOffsetAsync(serverId, 123456, "/logs/game.log");
+
+        _mockBlobClient.Verify(
+            b => b.UploadAsync(It.IsAny<Stream>(), true, It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
