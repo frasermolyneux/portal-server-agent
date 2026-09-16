@@ -37,6 +37,14 @@
     <None Include="Agents\Fixtures\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="..\XtremeIdiots.Portal.Server.Agent.App\appsettings.json"
+          Link="Configuration\Fixtures\appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\XtremeIdiots.Portal.Server.Agent.App\Program.cs"
+          Link="Configuration\Fixtures\Program.cs">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
