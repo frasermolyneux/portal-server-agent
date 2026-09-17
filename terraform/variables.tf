@@ -5,7 +5,14 @@ variable "workload_name" {
 }
 
 variable "environment" {
-  default = "dev"
+  description = "Deployment environment."
+  type        = string
+  default     = "dev"
+
+  validation {
+    condition     = contains(["dev", "prd"], var.environment)
+    error_message = "environment must be either dev or prd."
+  }
 }
 
 variable "location" {
@@ -13,6 +20,19 @@ variable "location" {
 }
 
 variable "subscription_id" {}
+
+variable "image_repository" {
+  description = "Environment-specific ACR repository used for portal-server-agent images."
+  type        = string
+
+  validation {
+    condition = (
+      (var.environment == "dev" && var.image_repository == "portal-server-agent-dev") ||
+      (var.environment == "prd" && var.image_repository == "portal-server-agent")
+    )
+    error_message = "image_repository must be portal-server-agent-dev for dev and portal-server-agent for prd."
+  }
+}
 
 variable "platform_workloads_state" {
   description = "Backend config for platform-workloads remote state (used to read workload resource groups/backends)"

@@ -12,7 +12,7 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-ci@dotnet-ci/v2
+      - uses: frasermolyneux/actions/dotnet-ci@fb9ca8274d10c678b4de479068fb1aed90ae6ed1
         with:
           dotnet-version: 10.0.x
           src-folder: "src"
@@ -27,7 +27,7 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-dev
     steps:
-      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@6302bef1311daa00b8dd792212bd6529adc17786
         with:
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/dev.tfvars"
@@ -42,7 +42,10 @@ jobs:
           cd terraform
           echo "container_app_name=$(terraform output -raw container_app_name)" >> $GITHUB_OUTPUT
           echo "resource_group_name=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+          echo "acr_name=$(terraform output -raw acr_name)" >> $GITHUB_OUTPUT
+          echo "acr_subscription_id=$(terraform output -raw acr_subscription_id)" >> $GITHUB_OUTPUT
           echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+          echo "image_repository=$(terraform output -raw image_repository)" >> $GITHUB_OUTPUT
         env:
           ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -53,7 +56,10 @@ jobs:
     outputs:
       container_app_name: ${{ steps.terraform-output.outputs.container_app_name }}
       resource_group_name: ${{ steps.terraform-output.outputs.resource_group_name }}
+      acr_name: ${{ steps.terraform-output.outputs.acr_name }}
+      acr_subscription_id: ${{ steps.terraform-output.outputs.acr_subscription_id }}
       acr_login_server: ${{ steps.terraform-output.outputs.acr_login_server }}
+      image_repository: ${{ steps.terraform-output.outputs.image_repository }}
 
   container-deploy-dev:
     permissions:
@@ -75,12 +81,12 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: ACR Login
-        run: az acr login --name ${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}
+        run: az acr login --name ${{ needs.terraform-plan-and-apply-dev.outputs.acr_name }} --subscription ${{ needs.terraform-plan-and-apply-dev.outputs.acr_subscription_id }}
 
       - name: Docker Build and Push
         run: |
-          IMAGE="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
-          IMAGE_LATEST="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:latest"
+          IMAGE="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/${{ needs.terraform-plan-and-apply-dev.outputs.image_repository }}:${{ github.sha }}"
+          IMAGE_LATEST="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/${{ needs.terraform-plan-and-apply-dev.outputs.image_repository }}:latest"
           docker build -t "$IMAGE" -t "$IMAGE_LATEST" -f src/Dockerfile src/
           docker push "$IMAGE"
           docker push "$IMAGE_LATEST"
@@ -90,7 +96,7 @@ jobs:
           az containerapp update \
             --name ${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }} \
             --resource-group ${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }} \
-            --image "${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
+            --image "${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/${{ needs.terraform-plan-and-apply-dev.outputs.image_repository }}:${{ github.sha }}"
 
       # Container Apps `update` returns when the new revision is *created*, not when it
       # is *healthy*. Without this gate, a startup crash leaves the new revision Failed

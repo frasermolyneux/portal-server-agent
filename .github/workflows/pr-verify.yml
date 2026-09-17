@@ -24,7 +24,7 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-ci@dotnet-ci/v2
+      - uses: frasermolyneux/actions/dotnet-ci@fb9ca8274d10c678b4de479068fb1aed90ae6ed1
         with:
           dotnet-version: 10.0.x
           src-folder: "src"
@@ -45,7 +45,7 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: frasermolyneux/actions/terraform-plan@terraform-plan/v1.4
+      - uses: frasermolyneux/actions/terraform-plan@6302bef1311daa00b8dd792212bd6529adc17786
         with:
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/dev.tfvars"
@@ -66,7 +66,7 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-dev
     steps:
-      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@6302bef1311daa00b8dd792212bd6529adc17786
         with:
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/dev.tfvars"
@@ -81,7 +81,10 @@ jobs:
           cd terraform
           echo "container_app_name=$(terraform output -raw container_app_name)" >> $GITHUB_OUTPUT
           echo "resource_group_name=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+          echo "acr_name=$(terraform output -raw acr_name)" >> $GITHUB_OUTPUT
+          echo "acr_subscription_id=$(terraform output -raw acr_subscription_id)" >> $GITHUB_OUTPUT
           echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+          echo "image_repository=$(terraform output -raw image_repository)" >> $GITHUB_OUTPUT
         env:
           ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -92,7 +95,10 @@ jobs:
     outputs:
       container_app_name: ${{ steps.terraform-output.outputs.container_app_name }}
       resource_group_name: ${{ steps.terraform-output.outputs.resource_group_name }}
+      acr_name: ${{ steps.terraform-output.outputs.acr_name }}
+      acr_subscription_id: ${{ steps.terraform-output.outputs.acr_subscription_id }}
       acr_login_server: ${{ steps.terraform-output.outputs.acr_login_server }}
+      image_repository: ${{ steps.terraform-output.outputs.image_repository }}
 
   container-deploy-dev:
     permissions:
@@ -116,12 +122,12 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: ACR Login
-        run: az acr login --name ${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}
+        run: az acr login --name ${{ needs.terraform-plan-and-apply-dev.outputs.acr_name }} --subscription ${{ needs.terraform-plan-and-apply-dev.outputs.acr_subscription_id }}
 
       - name: Docker Build and Push
         run: |
-          IMAGE="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
-          IMAGE_LATEST="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:latest"
+          IMAGE="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/${{ needs.terraform-plan-and-apply-dev.outputs.image_repository }}:${{ github.sha }}"
+          IMAGE_LATEST="${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/${{ needs.terraform-plan-and-apply-dev.outputs.image_repository }}:latest"
           docker build -t "$IMAGE" -t "$IMAGE_LATEST" -f src/Dockerfile src/
           docker push "$IMAGE"
           docker push "$IMAGE_LATEST"
@@ -131,7 +137,48 @@ jobs:
           az containerapp update \
             --name ${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }} \
             --resource-group ${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }} \
-            --image "${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/portal-server-agent:${{ github.sha }}"
+            --image "${{ needs.terraform-plan-and-apply-dev.outputs.acr_login_server }}/${{ needs.terraform-plan-and-apply-dev.outputs.image_repository }}:${{ github.sha }}"
+
+      - name: Wait for new revision to reach Running
+        shell: pwsh
+        run: |
+          $appName = "${{ needs.terraform-plan-and-apply-dev.outputs.container_app_name }}"
+          $rg = "${{ needs.terraform-plan-and-apply-dev.outputs.resource_group_name }}"
+          $expectedSha = "${{ github.sha }}"
+
+          $latestRevision = az containerapp show --name $appName --resource-group $rg --query "properties.latestRevisionName" -o tsv
+          if (-not $latestRevision) { Write-Error "Could not read latestRevisionName"; exit 1 }
+          Write-Host "Newest revision after update: $latestRevision"
+
+          $revisionImage = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.template.containers[0].image" -o tsv
+          if ($revisionImage -notlike "*:$expectedSha") {
+            Write-Error "Revision $latestRevision is running image '$revisionImage', expected tag :$expectedSha"
+            exit 1
+          }
+
+          $timeoutSeconds = 300
+          $start = Get-Date
+          while (((Get-Date) - $start).TotalSeconds -lt $timeoutSeconds) {
+            $running = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.runningState" -o tsv
+            $health = az containerapp revision show --name $appName --resource-group $rg --revision $latestRevision --query "properties.healthState" -o tsv
+            Write-Host ("[{0:HH:mm:ss}] runningState={1} healthState={2}" -f (Get-Date), $running, $health)
+
+            if (($running -in @("Running", "RunningAtMaxScale", "ScaledToZero")) -and ($health -eq "Healthy" -or $health -eq "None")) {
+              Write-Host "Revision $latestRevision is Running."
+              exit 0
+            }
+            if ($running -eq "Failed" -or $health -eq "Unhealthy") {
+              Write-Host "::error::Revision $latestRevision failed to start. Recent container logs:"
+              az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
+              exit 1
+            }
+
+            Start-Sleep -Seconds 10
+          }
+
+          Write-Host "::error::Timed out after $timeoutSeconds s waiting for revision $latestRevision. Recent container logs:"
+          az containerapp logs show --name $appName --resource-group $rg --revision $latestRevision --tail 200 --format text
+          exit 1
 
   terraform-plan-prd:
     permissions:
@@ -149,7 +196,7 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: frasermolyneux/actions/terraform-plan@terraform-plan/v1.4
+      - uses: frasermolyneux/actions/terraform-plan@6302bef1311daa00b8dd792212bd6529adc17786
         with:
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/prd.tfvars"

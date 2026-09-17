@@ -22,7 +22,9 @@ locals {
   app_insights = data.terraform_remote_state.portal_core.outputs.app_insights
   servicebus   = data.terraform_remote_state.portal_core.outputs.servicebus_namespace
 
-  acr = data.terraform_remote_state.platform_registry.outputs.acr
+  acr                 = data.terraform_remote_state.platform_registry.outputs.acr
+  acr_subscription_id = split("/", local.acr.id)[2]
+  image_repository    = var.image_repository
 
   ban_files_storage = data.terraform_remote_state.portal_core.outputs.ban_files_storage
 

@@ -14,6 +14,18 @@ output "acr_login_server" {
   value = local.acr.login_server
 }
 
+output "acr_name" {
+  value = local.acr.name
+}
+
+output "acr_subscription_id" {
+  value = local.acr_subscription_id
+}
+
+output "image_repository" {
+  value = local.image_repository
+}
+
 output "storage_blob_endpoint" {
   value = azurerm_storage_account.agent_storage.primary_blob_endpoint
 }

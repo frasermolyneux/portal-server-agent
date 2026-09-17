@@ -1,6 +1,7 @@
-workload_name = "portal-server-agent"
-environment   = "prd"
-location      = "uksouth"
+workload_name    = "portal-server-agent"
+environment      = "prd"
+location         = "uksouth"
+image_repository = "portal-server-agent"
 
 subscription_id = "32444f38-32f4-409f-889c-8e8aa2b5b4d1"
 

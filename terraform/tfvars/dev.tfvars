@@ -1,6 +1,7 @@
-workload_name = "portal-server-agent"
-environment   = "dev"
-location      = "swedencentral"
+workload_name    = "portal-server-agent"
+environment      = "dev"
+location         = "swedencentral"
+image_repository = "portal-server-agent-dev"
 
 subscription_id = "6cad03c1-9e98-4160-8ebe-64dd30f1bbc7"
 
@@ -41,8 +42,8 @@ portal_core_state = {
 }
 
 platform_registry_state = {
-  resource_group_name  = "rg-tf-platform-registry-dev-uksouth-01"
-  storage_account_name = "sa51a3686234c8"
+  resource_group_name  = "rg-tf-platform-registry-prd-uksouth-01"
+  storage_account_name = "sa258ed87734b4"
   container_name       = "tfstate"
   key                  = "terraform.tfstate"
   subscription_id      = "7760848c-794d-4a19-8cb2-52f71a21ac2b"
