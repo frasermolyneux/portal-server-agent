@@ -35,8 +35,16 @@ internal sealed class SftpAuthentication : IDisposable
             _ => throw new InvalidOperationException($"Unsupported SFTP authentication type '{authenticationType}'."),
         };
 
-        var connectionInfo = new ConnectionInfo(hostname, port, username, authenticationMethod);
-        return new SftpAuthentication(connectionInfo, authenticationMethod);
+        try
+        {
+            var connectionInfo = new ConnectionInfo(hostname, port, username, authenticationMethod);
+            return new SftpAuthentication(connectionInfo, authenticationMethod);
+        }
+        catch
+        {
+            authenticationMethod.Dispose();
+            throw;
+        }
     }
 
     public void Dispose() => _authenticationMethod.Dispose();

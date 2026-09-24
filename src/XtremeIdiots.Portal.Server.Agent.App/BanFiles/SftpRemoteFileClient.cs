@@ -131,13 +131,24 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
 
     public async ValueTask DisposeAsync()
     {
-        if (_client.IsConnected)
+        try
         {
-            await Task.Run(() => _client.Disconnect()).ConfigureAwait(false);
+            if (_client.IsConnected)
+            {
+                await Task.Run(() => _client.Disconnect()).ConfigureAwait(false);
+            }
         }
-
-        _client.Dispose();
-        _authentication.Dispose();
+        finally
+        {
+            try
+            {
+                _client.Dispose();
+            }
+            finally
+            {
+                _authentication.Dispose();
+            }
+        }
     }
 
     private static string NormalizeFingerprint(string value)

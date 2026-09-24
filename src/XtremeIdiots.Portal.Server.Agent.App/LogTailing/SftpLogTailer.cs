@@ -204,36 +204,35 @@ public sealed class SftpLogTailer : ILogTailer
 
     public async ValueTask DisposeAsync()
     {
-        if (_logStream is not null)
+        try
         {
-            _logStream.Dispose();
-            _logStream = null;
-        }
-
-        if (_client is not null)
-        {
-            _logger.LogInformation("Disposing SFTP log tailer");
-
-            if (_client.IsConnected)
+            if (_logStream is not null)
             {
-                await Task.Run(() => _client.Disconnect()).ConfigureAwait(false);
+                _logStream.Dispose();
+                _logStream = null;
             }
 
-            _client.Dispose();
-            _client = null;
-        }
+            if (_client is not null)
+            {
+                _logger.LogInformation("Disposing SFTP log tailer");
 
-        _authentication?.Dispose();
-        _authentication = null;
+                if (_client.IsConnected)
+                {
+                    await Task.Run(() => _client.Disconnect()).ConfigureAwait(false);
+                }
+            }
+        }
+        finally
+        {
+            DisposeConnection();
+        }
     }
 
     private async Task EstablishConnectionAsync(CancellationToken ct)
     {
         _logStream?.Dispose();
         _logStream = null;
-        _client?.Dispose();
-        _authentication?.Dispose();
-        _authentication = null;
+        DisposeConnection();
 
         var expectedFingerprint = NormalizeFingerprint(_config!.HostKeyFingerprint!);
         _hostKeyValidated = false;
@@ -327,5 +326,19 @@ public sealed class SftpLogTailer : ILogTailer
         }
 
         return builder.ToString();
+    }
+
+    private void DisposeConnection()
+    {
+        try
+        {
+            _client?.Dispose();
+        }
+        finally
+        {
+            _client = null;
+            _authentication?.Dispose();
+            _authentication = null;
+        }
     }
 }

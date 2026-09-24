@@ -66,4 +66,18 @@ public class SftpAuthenticationTests
 
         Assert.Equal("The SFTP private key is required for private-key authentication.", exception.Message);
     }
+
+    [Fact]
+    public void Create_WithMissingHostname_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            SftpAuthentication.Create(
+                null!,
+                22,
+                "demo",
+                SftpAuthenticationType.Password,
+                "secret",
+                null,
+                null));
+    }
 }
