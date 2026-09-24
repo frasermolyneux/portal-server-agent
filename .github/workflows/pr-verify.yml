@@ -45,22 +45,6 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
-
-      - name: Release stale Terraform state lock
-        working-directory: terraform
-        run: |
-          terraform init -backend-config="backends/dev.backend.hcl" -input=false
-          terraform force-unlock -force 7a0563e0-c9ee-82b6-e0a3-fe908e6e6fc9
-        env:
-          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
-          ARM_USE_AZUREAD: true
-          ARM_USE_OIDC: true
-
       - uses: frasermolyneux/actions/terraform-plan@6302bef1311daa00b8dd792212bd6529adc17786
         with:
           terraform-folder: "terraform"
