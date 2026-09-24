@@ -266,15 +266,21 @@ public sealed class SftpLogTailer : ILogTailer
             args.CanTrust = _hostKeyValidated;
         };
 
-        await Task.Run(() => _client.Connect(), ct).ConfigureAwait(false);
-
-        if (!_hostKeyValidated)
+        try
         {
-            _client.Dispose();
-            _client = null;
-            throw new InvalidOperationException(
-                $"SFTP host key verification failed for '{_config.Hostname}:{_config.Port}'. " +
-                $"Expected '{expectedFingerprint}', actual '{_actualHostKeyFingerprint ?? "unknown"}'.");
+            await Task.Run(() => _client.Connect(), ct).ConfigureAwait(false);
+
+            if (!_hostKeyValidated)
+            {
+                throw new InvalidOperationException(
+                    $"SFTP host key verification failed for '{_config.Hostname}:{_config.Port}'. " +
+                    $"Expected '{expectedFingerprint}', actual '{_actualHostKeyFingerprint ?? "unknown"}'.");
+            }
+        }
+        catch
+        {
+            DisposeConnection();
+            throw;
         }
     }
 

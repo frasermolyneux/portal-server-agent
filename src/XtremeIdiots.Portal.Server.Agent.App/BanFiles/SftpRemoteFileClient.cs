@@ -15,6 +15,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
     private readonly string _expectedHostKey;
 
     private bool _hostKeyValidated;
+    private bool _disposed;
     private string? _actualHostKey;
 
     public SftpRemoteFileClient(ServerContext context)
@@ -55,12 +56,20 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
     {
         _hostKeyValidated = false;
         _actualHostKey = null;
-        await Task.Run(() => _client.Connect(), ct).ConfigureAwait(false);
-
-        if (!_hostKeyValidated)
+        try
         {
-            throw new InvalidOperationException(
-                $"SFTP host key verification failed. Expected '{_expectedHostKey}', actual '{_actualHostKey ?? "unknown"}'.");
+            await Task.Run(() => _client.Connect(), ct).ConfigureAwait(false);
+
+            if (!_hostKeyValidated)
+            {
+                throw new InvalidOperationException(
+                    $"SFTP host key verification failed. Expected '{_expectedHostKey}', actual '{_actualHostKey ?? "unknown"}'.");
+            }
+        }
+        catch
+        {
+            DisposeResources();
+            throw;
         }
     }
 
@@ -131,6 +140,11 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         try
         {
             if (_client.IsConnected)
@@ -140,14 +154,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         }
         finally
         {
-            try
-            {
-                _client.Dispose();
-            }
-            finally
-            {
-                _authentication.Dispose();
-            }
+            DisposeResources();
         }
     }
 
@@ -163,5 +170,23 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         }
 
         return builder.ToString();
+    }
+
+    private void DisposeResources()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        try
+        {
+            _client.Dispose();
+        }
+        finally
+        {
+            _authentication.Dispose();
+        }
     }
 }
