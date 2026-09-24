@@ -13,6 +13,7 @@ using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
 
@@ -79,9 +80,46 @@ public class GameServerAgentTests
             .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
     }
 
-    private GameServerAgent CreateAgent() =>
-        new(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+    private GameServerAgent CreateAgent() => CreateAgent(_testContext);
+
+    private GameServerAgent CreateAgent(ServerContext context) =>
+        new(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
+
+    [Fact]
+    public async Task RunAsync_WithSftpPrivateKey_PassesAuthenticationSettingsToTailer()
+    {
+        var context = _testContext with
+        {
+            FileTransportEnabled = true,
+            FileTransportType = FileTransportTypes.Sftp,
+            FileTransportHostname = "sftp.example.com",
+            FileTransportPort = 22,
+            FileTransportUsername = "sftp-user",
+            FileTransportPassword = string.Empty,
+            FileTransportHostKeyFingerprint = "AA:BB",
+            FileTransportAuthenticationType = SftpAuthenticationType.PrivateKey,
+            FileTransportPrivateKey = "k",
+            FileTransportPrivateKeyPassphrase = "p"
+        };
+        FileTransportTailerConfig? capturedConfig = null;
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(context.ServerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer
+            .Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Callback<FileTransportTailerConfig, long?, CancellationToken>((config, _, _) => capturedConfig = config)
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await CreateAgent(context).RunAsync(cts.Token);
+
+        Assert.NotNull(capturedConfig);
+        Assert.Equal(SftpAuthenticationType.PrivateKey, capturedConfig.AuthenticationType);
+        Assert.Equal("k", capturedConfig.PrivateKey);
+        Assert.Equal("p", capturedConfig.PrivateKeyPassphrase);
+    }
 
     [Fact]
     public async Task RunAsync_PublishesServerConnectedOnStart()
@@ -1066,4 +1104,3 @@ public class GameServerAgentTests
             Times.Never);
     }
 }
-

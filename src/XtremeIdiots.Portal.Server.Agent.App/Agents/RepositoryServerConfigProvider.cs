@@ -10,6 +10,7 @@ using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Agent;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.BanFiles;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Broadcasts;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Shared;
 using RepositoryFileTransportType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.FileTransportType;
 using RepositoryGameServerFilter = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameServerFilter;
@@ -84,7 +85,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
                 if (!TryGetStringValue(configs, transportNamespace, "hostname", out var transportHostname) ||
                     !TryGetStringValue(configs, transportNamespace, "username", out var transportUsername) ||
-                    !TryGetStringValue(configs, transportNamespace, "password", out var transportPassword) ||
                     !TryGetIntValue(configs, transportNamespace, "port", out var transportPort))
                 {
                     _logger.LogWarning(
@@ -93,10 +93,51 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     continue;
                 }
 
+                var transportPassword = string.Empty;
                 string? sftpHostKeyFingerprint = null;
+                var sftpAuthenticationType = SftpAuthenticationType.Password;
+                string? sftpPrivateKey = null;
+                string? sftpPrivateKeyPassphrase = null;
                 if (string.Equals(resolvedTransportType, FileTransportTypes.Sftp, StringComparison.OrdinalIgnoreCase))
                 {
                     _ = TryGetStringValue(configs, transportNamespace, "hostKeyFingerprint", out sftpHostKeyFingerprint);
+
+                    if (TryGetStringValue(configs, transportNamespace, "authenticationType", out var authenticationTypeValue)
+                        && (!Enum.TryParse(authenticationTypeValue, ignoreCase: true, out sftpAuthenticationType)
+                            || !Enum.IsDefined(sftpAuthenticationType)))
+                    {
+                        _logger.LogWarning(
+                            "Skipping server {ServerId} ({Title}) — invalid SFTP authentication type '{AuthenticationType}'",
+                            dto.GameServerId, dto.Title, authenticationTypeValue);
+                        continue;
+                    }
+
+                    if (sftpAuthenticationType == SftpAuthenticationType.PrivateKey)
+                    {
+                        if (!TryGetStringValue(configs, transportNamespace, "privateKey", out sftpPrivateKey))
+                        {
+                            _logger.LogWarning(
+                                "Skipping server {ServerId} ({Title}) — missing SFTP private key",
+                                dto.GameServerId, dto.Title);
+                            continue;
+                        }
+
+                        _ = TryGetStringValue(configs, transportNamespace, "privateKeyPassphrase", out sftpPrivateKeyPassphrase);
+                    }
+                    else if (!TryGetStringValue(configs, transportNamespace, "password", out transportPassword))
+                    {
+                        _logger.LogWarning(
+                            "Skipping server {ServerId} ({Title}) — missing SFTP password",
+                            dto.GameServerId, dto.Title);
+                        continue;
+                    }
+                }
+                else if (!TryGetStringValue(configs, transportNamespace, "password", out transportPassword))
+                {
+                    _logger.LogWarning(
+                        "Skipping server {ServerId} ({Title}) — missing FTP password",
+                        dto.GameServerId, dto.Title);
+                    continue;
                 }
 
                 if (!TryGetStringValue(configs, "rcon", "password", out var rconPassword))
@@ -151,6 +192,15 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 configHashInputs[$"{transportNamespace}.port"] = transportPort.ToString();
                 configHashInputs[$"{transportNamespace}.username"] = transportUsername;
                 configHashInputs[$"{transportNamespace}.password"] = transportPassword;
+                configHashInputs[$"{transportNamespace}.authenticationType"] = sftpAuthenticationType.ToString();
+                if (!string.IsNullOrWhiteSpace(sftpPrivateKey))
+                {
+                    configHashInputs[$"{transportNamespace}.privateKey"] = sftpPrivateKey;
+                }
+                if (!string.IsNullOrWhiteSpace(sftpPrivateKeyPassphrase))
+                {
+                    configHashInputs[$"{transportNamespace}.privateKeyPassphrase"] = sftpPrivateKeyPassphrase;
+                }
                 if (!string.IsNullOrWhiteSpace(sftpHostKeyFingerprint))
                 {
                     configHashInputs[$"{transportNamespace}.hostKeyFingerprint"] = sftpHostKeyFingerprint;
@@ -179,6 +229,9 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     FileTransportUsername = transportUsername,
                     FileTransportPassword = transportPassword,
                     FileTransportHostKeyFingerprint = sftpHostKeyFingerprint,
+                    FileTransportAuthenticationType = sftpAuthenticationType,
+                    FileTransportPrivateKey = sftpPrivateKey,
+                    FileTransportPrivateKeyPassphrase = sftpPrivateKeyPassphrase,
                     LogFilePath = agentSettings.LogFilePath,
                     Hostname = dto.Hostname,
                     QueryPort = dto.QueryPort,

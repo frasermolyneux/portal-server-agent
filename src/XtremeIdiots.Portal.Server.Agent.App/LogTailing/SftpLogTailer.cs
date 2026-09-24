@@ -6,6 +6,8 @@ using Renci.SshNet;
 using Renci.SshNet.Common;
 using Renci.SshNet.Sftp;
 
+using XtremeIdiots.Portal.Server.Agent.App.FileTransport;
+
 namespace XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 
 /// <summary>
@@ -22,6 +24,7 @@ public sealed class SftpLogTailer : ILogTailer
 
     private readonly ILogger<SftpLogTailer> _logger;
     private SftpClient? _client;
+    private SftpAuthentication? _authentication;
     private SftpFileStream? _logStream;
     private FileTransportTailerConfig? _config;
     private long _lastFileSize;
@@ -219,6 +222,9 @@ public sealed class SftpLogTailer : ILogTailer
             _client.Dispose();
             _client = null;
         }
+
+        _authentication?.Dispose();
+        _authentication = null;
     }
 
     private async Task EstablishConnectionAsync(CancellationToken ct)
@@ -226,12 +232,32 @@ public sealed class SftpLogTailer : ILogTailer
         _logStream?.Dispose();
         _logStream = null;
         _client?.Dispose();
+        _authentication?.Dispose();
+        _authentication = null;
 
         var expectedFingerprint = NormalizeFingerprint(_config!.HostKeyFingerprint!);
         _hostKeyValidated = false;
         _actualHostKeyFingerprint = null;
 
-        _client = new SftpClient(_config.Hostname, _config.Port, _config.Username, _config.Password);
+        _authentication = SftpAuthentication.Create(
+            _config.Hostname,
+            _config.Port,
+            _config.Username,
+            _config.AuthenticationType,
+            _config.Password,
+            _config.PrivateKey,
+            _config.PrivateKeyPassphrase);
+        try
+        {
+            _client = new SftpClient(_authentication.ConnectionInfo);
+        }
+        catch
+        {
+            _authentication.Dispose();
+            _authentication = null;
+            throw;
+        }
+
         _client.KeepAliveInterval = KeepAliveInterval;
         _client.HostKeyReceived += (_, args) =>
         {

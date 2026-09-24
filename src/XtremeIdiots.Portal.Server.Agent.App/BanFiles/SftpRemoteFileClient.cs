@@ -4,12 +4,14 @@ using Renci.SshNet;
 using Renci.SshNet.Common;
 
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.FileTransport;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 
 public sealed class SftpRemoteFileClient : IRemoteFileClient
 {
     private readonly SftpClient _client;
+    private readonly SftpAuthentication _authentication;
     private readonly string _expectedHostKey;
 
     private bool _hostKeyValidated;
@@ -23,11 +25,23 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         }
 
         _expectedHostKey = NormalizeFingerprint(context.FileTransportHostKeyFingerprint);
-        _client = new SftpClient(
+        _authentication = SftpAuthentication.Create(
             context.EffectiveFileTransportHostname,
             context.EffectiveFileTransportPort,
             context.EffectiveFileTransportUsername,
-            context.EffectiveFileTransportPassword);
+            context.FileTransportAuthenticationType,
+            context.EffectiveFileTransportPassword,
+            context.FileTransportPrivateKey,
+            context.FileTransportPrivateKeyPassphrase);
+        try
+        {
+            _client = new SftpClient(_authentication.ConnectionInfo);
+        }
+        catch
+        {
+            _authentication.Dispose();
+            throw;
+        }
 
         _client.HostKeyReceived += (_, args) =>
         {
@@ -123,6 +137,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         }
 
         _client.Dispose();
+        _authentication.Dispose();
     }
 
     private static string NormalizeFingerprint(string value)

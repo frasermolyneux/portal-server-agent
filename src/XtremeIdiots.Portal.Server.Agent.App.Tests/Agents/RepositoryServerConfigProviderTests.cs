@@ -14,6 +14,7 @@ using XtremeIdiots.Portal.Repository.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
 using RepositoryGameServerFilter = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameServerFilter;
 using RepositoryGameType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameType;
 
@@ -133,6 +134,87 @@ public class RepositoryServerConfigProviderTests
         Assert.Equal("sftp-user", server.EffectiveFileTransportUsername);
         Assert.Equal("sftp-pass", server.EffectiveFileTransportPassword);
         Assert.Equal("aa:bb:cc", server.FileTransportHostKeyFingerprint);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_MapsSftpPrivateKeyAuthentication()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(
+            serverId,
+            "SFTP Private Key Server",
+            RepositoryGameType.CallOfDuty4,
+            hostname: "game.example.com",
+            queryPort: 28960,
+            fileTransportType: "sftp",
+            fileTransportEnabled: true);
+
+        SetupApiSuccess([dto]);
+        SetupConfigApi(serverId, new[]
+        {
+            CreateConfigDto("sftp", new
+            {
+                hostname = "sftp.example.com",
+                port = 22,
+                username = "sftp-user",
+                authenticationType = "PrivateKey",
+                privateKey = "k",
+                privateKeyPassphrase = "p",
+                hostKeyFingerprint = "aa:bb:cc"
+            }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+        });
+
+        var result = await CreateProvider().GetAgentEnabledServersAsync(CancellationToken.None);
+
+        var server = Assert.Single(result);
+        Assert.Equal(SftpAuthenticationType.PrivateKey, server.FileTransportAuthenticationType);
+        Assert.Equal("k", server.FileTransportPrivateKey);
+        Assert.Equal("p", server.FileTransportPrivateKeyPassphrase);
+        Assert.Equal(string.Empty, server.EffectiveFileTransportPassword);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_PrivateKeyChanges_ChangeConfigHash()
+    {
+        var serverId = Guid.NewGuid();
+        var dto = CreateGameServerDto(
+            serverId,
+            "SFTP Private Key Hash",
+            RepositoryGameType.CallOfDuty4,
+            hostname: "game.example.com",
+            queryPort: 28960,
+            fileTransportType: "sftp",
+            fileTransportEnabled: true);
+        SetupApiSuccess([dto]);
+
+        SetupPrivateKeyConfig("k1");
+        var provider = CreateProvider();
+        var first = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        SetupPrivateKeyConfig("k2");
+        var second = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
+
+        Assert.NotEqual(first.Single().ConfigHash, second.Single().ConfigHash);
+
+        void SetupPrivateKeyConfig(string privateKey)
+        {
+            SetupConfigApi(serverId, new[]
+            {
+                CreateConfigDto("sftp", new
+                {
+                    hostname = "sftp.example.com",
+                    port = 22,
+                    username = "sftp-user",
+                    authenticationType = "PrivateKey",
+                    privateKey,
+                    hostKeyFingerprint = "aa:bb:cc"
+                }),
+                CreateConfigDto("rcon", new { password = "secret" }),
+                CreateConfigDto("agent", new { logFilePath = "/logs/games_mp.log" })
+            });
+        }
     }
 
     [Fact]

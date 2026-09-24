@@ -1,3 +1,5 @@
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
+
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
 public static class FileTransportTypes
@@ -64,6 +66,21 @@ public sealed record ServerContext
     public string? FileTransportUsername { get; init; }
     public string? FileTransportPassword { get; init; }
     public string? FileTransportHostKeyFingerprint { get; init; }
+
+    /// <summary>
+    /// The authentication mode used for SFTP connections.
+    /// </summary>
+    public SftpAuthenticationType FileTransportAuthenticationType { get; init; } = SftpAuthenticationType.Password;
+
+    /// <summary>
+    /// The SFTP private key in PEM format.
+    /// </summary>
+    public string? FileTransportPrivateKey { get; init; }
+
+    /// <summary>
+    /// The optional passphrase for the SFTP private key.
+    /// </summary>
+    public string? FileTransportPrivateKeyPassphrase { get; init; }
 
     // Agent config (from "agent" config namespace)
     public required string? LogFilePath { get; init; }

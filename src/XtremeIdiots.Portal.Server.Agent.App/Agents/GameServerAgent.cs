@@ -155,6 +155,9 @@ public sealed class GameServerAgent
                 Username = _context.EffectiveFileTransportUsername,
                 Password = _context.EffectiveFileTransportPassword,
                 HostKeyFingerprint = _context.FileTransportHostKeyFingerprint,
+                AuthenticationType = _context.FileTransportAuthenticationType,
+                PrivateKey = _context.FileTransportPrivateKey,
+                PrivateKeyPassphrase = _context.FileTransportPrivateKeyPassphrase,
                 FilePath = _context.LogFilePath ?? throw new InvalidOperationException("LogFilePath not set")
             };
 
