@@ -4,15 +4,18 @@ using Renci.SshNet;
 using Renci.SshNet.Common;
 
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.FileTransport;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 
 public sealed class SftpRemoteFileClient : IRemoteFileClient
 {
     private readonly SftpClient _client;
+    private readonly SftpAuthentication _authentication;
     private readonly string _expectedHostKey;
 
     private bool _hostKeyValidated;
+    private bool _disposed;
     private string? _actualHostKey;
 
     public SftpRemoteFileClient(ServerContext context)
@@ -23,11 +26,23 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         }
 
         _expectedHostKey = NormalizeFingerprint(context.FileTransportHostKeyFingerprint);
-        _client = new SftpClient(
+        _authentication = SftpAuthentication.Create(
             context.EffectiveFileTransportHostname,
             context.EffectiveFileTransportPort,
             context.EffectiveFileTransportUsername,
-            context.EffectiveFileTransportPassword);
+            context.FileTransportAuthenticationType,
+            context.EffectiveFileTransportPassword,
+            context.FileTransportPrivateKey,
+            context.FileTransportPrivateKeyPassphrase);
+        try
+        {
+            _client = new SftpClient(_authentication.ConnectionInfo);
+        }
+        catch
+        {
+            _authentication.Dispose();
+            throw;
+        }
 
         _client.HostKeyReceived += (_, args) =>
         {
@@ -41,12 +56,20 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
     {
         _hostKeyValidated = false;
         _actualHostKey = null;
-        await Task.Run(() => _client.Connect(), ct).ConfigureAwait(false);
-
-        if (!_hostKeyValidated)
+        try
         {
-            throw new InvalidOperationException(
-                $"SFTP host key verification failed. Expected '{_expectedHostKey}', actual '{_actualHostKey ?? "unknown"}'.");
+            await Task.Run(() => _client.Connect(), ct).ConfigureAwait(false);
+
+            if (!_hostKeyValidated)
+            {
+                throw new InvalidOperationException(
+                    $"SFTP host key verification failed. Expected '{_expectedHostKey}', actual '{_actualHostKey ?? "unknown"}'.");
+            }
+        }
+        catch
+        {
+            DisposeResources();
+            throw;
         }
     }
 
@@ -117,12 +140,22 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
 
     public async ValueTask DisposeAsync()
     {
-        if (_client.IsConnected)
+        if (_disposed)
         {
-            await Task.Run(() => _client.Disconnect()).ConfigureAwait(false);
+            return;
         }
 
-        _client.Dispose();
+        try
+        {
+            if (_client.IsConnected)
+            {
+                await Task.Run(() => _client.Disconnect()).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            DisposeResources();
+        }
     }
 
     private static string NormalizeFingerprint(string value)
@@ -137,5 +170,23 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         }
 
         return builder.ToString();
+    }
+
+    private void DisposeResources()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        try
+        {
+            _client.Dispose();
+        }
+        finally
+        {
+            _authentication.Dispose();
+        }
     }
 }

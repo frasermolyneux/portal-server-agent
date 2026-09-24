@@ -1,3 +1,5 @@
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
+
 namespace XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 
 /// <summary>
@@ -34,6 +36,21 @@ public sealed record FileTransportTailerConfig
     /// The expected host key fingerprint for SFTP transport.
     /// </summary>
     public string? HostKeyFingerprint { get; init; }
+
+    /// <summary>
+    /// The SFTP client authentication mode.
+    /// </summary>
+    public SftpAuthenticationType AuthenticationType { get; init; } = SftpAuthenticationType.Password;
+
+    /// <summary>
+    /// The SFTP private key in PEM format.
+    /// </summary>
+    public string? PrivateKey { get; init; }
+
+    /// <summary>
+    /// The optional passphrase for the SFTP private key.
+    /// </summary>
+    public string? PrivateKeyPassphrase { get; init; }
 
     /// <summary>
     /// The remote path to the log file to tail.
