@@ -230,9 +230,15 @@ public sealed class SftpLogTailer : ILogTailer
 
     private async Task EstablishConnectionAsync(CancellationToken ct)
     {
-        _logStream?.Dispose();
-        _logStream = null;
-        DisposeConnection();
+        try
+        {
+            _logStream?.Dispose();
+        }
+        finally
+        {
+            _logStream = null;
+            DisposeConnection();
+        }
 
         var expectedFingerprint = NormalizeFingerprint(_config!.HostKeyFingerprint!);
         _hostKeyValidated = false;
