@@ -19,13 +19,15 @@ jobs:
   build-and-test:
     permissions:
       contents: read
-      id-token: write
-      pull-requests: write
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    outputs:
+      test_report: ${{ steps.shared-tests-1.outputs.test-report }}
     steps:
-      - uses: frasermolyneux/actions/dotnet-ci@fb9ca8274d10c678b4de479068fb1aed90ae6ed1
+      - id: shared-tests-1
+        uses: frasermolyneux/actions/dotnet-ci@43f7ef20fa9a18564aee2860c8ade81e13715654 # dotnet-ci/v2.1
         with:
+          test-reporting: "true"
           dotnet-version: 10.0.x
           src-folder: "src"
 
@@ -204,3 +206,18 @@ jobs:
           AZURE_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+  test-results:
+    name: Test results summary
+    if: always() && github.event.pull_request.draft == false
+    needs: [build-and-test]
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    concurrency:
+      group: test-results-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: frasermolyneux/actions/test-results-summary@43f7ef20fa9a18564aee2860c8ade81e13715654 # test-results-summary/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
