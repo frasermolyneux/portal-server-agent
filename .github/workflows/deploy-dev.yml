@@ -12,8 +12,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-ci@fb9ca8274d10c678b4de479068fb1aed90ae6ed1
+      - uses: frasermolyneux/actions/dotnet-ci@dotnet-ci/v2.1
         with:
+          test-reporting: "true"
           dotnet-version: 10.0.x
           src-folder: "src"
 
