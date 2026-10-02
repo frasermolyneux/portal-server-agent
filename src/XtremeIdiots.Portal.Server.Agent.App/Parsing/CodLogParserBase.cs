@@ -46,7 +46,6 @@ public abstract class CodLogParserBase : ILogParser
 
     private readonly Dictionary<int, PlayerInfo> _slotMap = new();
     private string? _currentMap;
-    private string? _currentGameType;
     private string? _serverTitle;
     private string? _serverMod;
     private int? _maxPlayers;
@@ -106,7 +105,6 @@ public abstract class CodLogParserBase : ILogParser
     {
         _slotMap.Clear();
         _currentMap = null;
-        _currentGameType = null;
         _serverTitle = null;
         _serverMod = null;
         _maxPlayers = null;
@@ -201,11 +199,6 @@ public abstract class CodLogParserBase : ILogParser
         if (mapName is not null)
         {
             _currentMap = mapName;
-        }
-
-        if (gameType is not null)
-        {
-            _currentGameType = gameType;
         }
 
         if (mapName is not null && gameType is not null)

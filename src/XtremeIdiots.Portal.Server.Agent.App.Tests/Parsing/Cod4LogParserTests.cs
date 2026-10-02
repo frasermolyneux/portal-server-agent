@@ -65,6 +65,28 @@ public sealed class Cod4LogParserTests
     }
 
     [Fact]
+    public void ParseLine_InitGameAcrossMapChangesAndReset_ReturnsCurrentMapAndGameType()
+    {
+        var firstMapChange = Assert.IsType<MapChangeEvent>(
+            _parser.ParseLine(@"  0:00 InitGame: \mapname\mp_crash\g_gametype\tdm"));
+        Assert.Equal("mp_crash", firstMapChange.MapName);
+        Assert.Equal("tdm", firstMapChange.GameType);
+
+        var nextMapChange = Assert.IsType<MapChangeEvent>(
+            _parser.ParseLine(@"  2:00 InitGame: \mapname\mp_crossfire\g_gametype\sd"));
+        Assert.Equal("mp_crossfire", nextMapChange.MapName);
+        Assert.Equal("sd", nextMapChange.GameType);
+
+        _parser.Reset();
+
+        var mapChangeAfterReset = Assert.IsType<MapChangeEvent>(
+            _parser.ParseLine(@"  4:00 InitGame: \mapname\mp_backlot\g_gametype\dom"));
+        Assert.Equal("mp_backlot", mapChangeAfterReset.MapName);
+        Assert.Equal("dom", mapChangeAfterReset.GameType);
+        Assert.Equal("mp_backlot", _parser.CurrentMap);
+    }
+
+    [Fact]
     public void ParseLine_InitGame_ClearsSlotMap()
     {
         // Join two players
