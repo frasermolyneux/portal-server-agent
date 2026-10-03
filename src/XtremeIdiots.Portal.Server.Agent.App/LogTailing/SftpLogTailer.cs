@@ -23,9 +23,13 @@ public sealed class SftpLogTailer : ILogTailer
     internal static readonly TimeSpan RotationCheckInterval = TimeSpan.FromSeconds(30);
 
     private readonly ILogger<SftpLogTailer> _logger;
+    private readonly Func<bool>? _isConnectedOverride;
+    private readonly Func<string, CancellationToken, Task<long>>? _getFileSizeOverride;
+    private readonly Func<string, CancellationToken, Task<Stream>>? _openLogStreamOverride;
+    private readonly Func<CancellationToken, Task>? _reconnectOverride;
     private SftpClient? _client;
     private SftpAuthentication? _authentication;
-    private SftpFileStream? _logStream;
+    private Stream? _logStream;
     private FileTransportTailerConfig? _config;
     private long _lastFileSize;
     private string _partialLine = string.Empty;
@@ -40,7 +44,27 @@ public sealed class SftpLogTailer : ILogTailer
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public bool IsConnected => _client?.IsConnected == true;
+    internal SftpLogTailer(
+        ILogger<SftpLogTailer> logger,
+        FileTransportTailerConfig config,
+        Stream logStream,
+        long offset,
+        Func<bool> isConnected,
+        Func<string, CancellationToken, Task<long>> getFileSize,
+        Func<string, CancellationToken, Task<Stream>> openLogStream,
+        Func<CancellationToken, Task> reconnect)
+        : this(logger)
+    {
+        _config = config;
+        _logStream = logStream;
+        _lastFileSize = offset;
+        _isConnectedOverride = isConnected;
+        _getFileSizeOverride = getFileSize;
+        _openLogStreamOverride = openLogStream;
+        _reconnectOverride = reconnect;
+    }
+
+    public bool IsConnected => _isConnectedOverride?.Invoke() ?? (_client?.IsConnected == true);
 
     public long CurrentOffset => _lastFileSize;
 
@@ -119,7 +143,7 @@ public sealed class SftpLogTailer : ILogTailer
                     _partialLine = string.Empty;
                     statSize = null;
 
-                    _logStream?.Dispose();
+                    await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
                     _logStream = null;
                     await OpenLogStreamAsync(_config.FilePath, ct).ConfigureAwait(false);
                 }
@@ -157,7 +181,7 @@ public sealed class SftpLogTailer : ILogTailer
                     "Rename-rotation suspected for {FilePath}: stat shows {StatSize} bytes but stream returned 0; reopening handle",
                     _config.FilePath, statSize.Value);
 
-                _logStream?.Dispose();
+                await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
                 _logStream = null;
                 await OpenLogStreamAsync(_config.FilePath, ct).ConfigureAwait(false);
             }
@@ -179,7 +203,7 @@ public sealed class SftpLogTailer : ILogTailer
         catch (SftpPathNotFoundException ex)
         {
             _logger.LogError(ex, "SFTP path not found while polling {FilePath}, will attempt reconnect", _config.FilePath);
-            _logStream?.Dispose();
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;
             await ReconnectAsync(ct).ConfigureAwait(false);
             return Array.Empty<string>();
@@ -187,7 +211,7 @@ public sealed class SftpLogTailer : ILogTailer
         catch (SshException ex)
         {
             _logger.LogError(ex, "SFTP error while polling {FilePath}, will attempt reconnect", _config.FilePath);
-            _logStream?.Dispose();
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;
             await ReconnectAsync(ct).ConfigureAwait(false);
             return Array.Empty<string>();
@@ -195,7 +219,7 @@ public sealed class SftpLogTailer : ILogTailer
         catch (IOException ex)
         {
             _logger.LogError(ex, "IO error while polling {FilePath}, will attempt reconnect", _config.FilePath);
-            _logStream?.Dispose();
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;
             await ReconnectAsync(ct).ConfigureAwait(false);
             return Array.Empty<string>();
@@ -208,7 +232,7 @@ public sealed class SftpLogTailer : ILogTailer
         {
             if (_logStream is not null)
             {
-                _logStream.Dispose();
+                await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
                 _logStream = null;
             }
 
@@ -232,7 +256,7 @@ public sealed class SftpLogTailer : ILogTailer
     {
         try
         {
-            _logStream?.Dispose();
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
         }
         finally
         {
@@ -292,6 +316,12 @@ public sealed class SftpLogTailer : ILogTailer
 
     private async Task ReconnectAsync(CancellationToken ct)
     {
+        if (_reconnectOverride is not null)
+        {
+            await _reconnectOverride(ct).ConfigureAwait(false);
+            return;
+        }
+
         var backoffIndex = Math.Min(_reconnectAttempts, BackoffSeconds.Length - 1);
         var delay = TimeSpan.FromSeconds(BackoffSeconds[backoffIndex]);
         _reconnectAttempts++;
@@ -309,20 +339,28 @@ public sealed class SftpLogTailer : ILogTailer
 
     private async Task<long> GetFileSizeAsync(string path, CancellationToken ct)
     {
-        return await Task.Run(() =>
-        {
-            var attributes = _client!.GetAttributes(path);
-            return attributes.Size;
-        }, ct).ConfigureAwait(false);
+        return _getFileSizeOverride is not null
+            ? await _getFileSizeOverride(path, ct).ConfigureAwait(false)
+            : await Task.Run(() => _client!.GetAttributes(path).Size, ct).ConfigureAwait(false);
     }
 
     private async Task OpenLogStreamAsync(string path, CancellationToken ct)
     {
-        _logStream = await Task.Run(() => _client!.OpenRead(path), ct).ConfigureAwait(false);
+        _logStream = _openLogStreamOverride is null
+            ? await Task.Run(() => _client!.OpenRead(path), ct).ConfigureAwait(false)
+            : await _openLogStreamOverride(path, ct).ConfigureAwait(false);
 
         if (_lastFileSize > 0)
         {
             _logStream.Seek(_lastFileSize, SeekOrigin.Begin);
+        }
+    }
+
+    internal static async ValueTask DisposeLogStreamAsync(IAsyncDisposable? logStream)
+    {
+        if (logStream is not null)
+        {
+            await logStream.DisposeAsync().ConfigureAwait(false);
         }
     }
 
