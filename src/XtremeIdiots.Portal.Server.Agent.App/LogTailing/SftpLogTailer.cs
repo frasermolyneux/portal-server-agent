@@ -119,7 +119,7 @@ public sealed class SftpLogTailer : ILogTailer
                     _partialLine = string.Empty;
                     statSize = null;
 
-                    _logStream?.Dispose();
+                    await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
                     _logStream = null;
                     await OpenLogStreamAsync(_config.FilePath, ct).ConfigureAwait(false);
                 }
@@ -157,7 +157,7 @@ public sealed class SftpLogTailer : ILogTailer
                     "Rename-rotation suspected for {FilePath}: stat shows {StatSize} bytes but stream returned 0; reopening handle",
                     _config.FilePath, statSize.Value);
 
-                _logStream?.Dispose();
+                await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
                 _logStream = null;
                 await OpenLogStreamAsync(_config.FilePath, ct).ConfigureAwait(false);
             }
@@ -179,7 +179,7 @@ public sealed class SftpLogTailer : ILogTailer
         catch (SftpPathNotFoundException ex)
         {
             _logger.LogError(ex, "SFTP path not found while polling {FilePath}, will attempt reconnect", _config.FilePath);
-            _logStream?.Dispose();
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;
             await ReconnectAsync(ct).ConfigureAwait(false);
             return Array.Empty<string>();
@@ -187,7 +187,7 @@ public sealed class SftpLogTailer : ILogTailer
         catch (SshException ex)
         {
             _logger.LogError(ex, "SFTP error while polling {FilePath}, will attempt reconnect", _config.FilePath);
-            _logStream?.Dispose();
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;
             await ReconnectAsync(ct).ConfigureAwait(false);
             return Array.Empty<string>();
@@ -195,7 +195,7 @@ public sealed class SftpLogTailer : ILogTailer
         catch (IOException ex)
         {
             _logger.LogError(ex, "IO error while polling {FilePath}, will attempt reconnect", _config.FilePath);
-            _logStream?.Dispose();
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;
             await ReconnectAsync(ct).ConfigureAwait(false);
             return Array.Empty<string>();
@@ -208,7 +208,7 @@ public sealed class SftpLogTailer : ILogTailer
         {
             if (_logStream is not null)
             {
-                _logStream.Dispose();
+                await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
                 _logStream = null;
             }
 
@@ -232,7 +232,7 @@ public sealed class SftpLogTailer : ILogTailer
     {
         try
         {
-            _logStream?.Dispose();
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
         }
         finally
         {
@@ -323,6 +323,14 @@ public sealed class SftpLogTailer : ILogTailer
         if (_lastFileSize > 0)
         {
             _logStream.Seek(_lastFileSize, SeekOrigin.Begin);
+        }
+    }
+
+    internal static async ValueTask DisposeLogStreamAsync(IAsyncDisposable? logStream)
+    {
+        if (logStream is not null)
+        {
+            await logStream.DisposeAsync().ConfigureAwait(false);
         }
     }
 
