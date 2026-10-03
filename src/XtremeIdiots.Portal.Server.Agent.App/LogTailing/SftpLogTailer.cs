@@ -23,9 +23,13 @@ public sealed class SftpLogTailer : ILogTailer
     internal static readonly TimeSpan RotationCheckInterval = TimeSpan.FromSeconds(30);
 
     private readonly ILogger<SftpLogTailer> _logger;
+    private readonly Func<bool>? _isConnectedOverride;
+    private readonly Func<string, CancellationToken, Task<long>>? _getFileSizeOverride;
+    private readonly Func<string, CancellationToken, Task<Stream>>? _openLogStreamOverride;
+    private readonly Func<CancellationToken, Task>? _reconnectOverride;
     private SftpClient? _client;
     private SftpAuthentication? _authentication;
-    private SftpFileStream? _logStream;
+    private Stream? _logStream;
     private FileTransportTailerConfig? _config;
     private long _lastFileSize;
     private string _partialLine = string.Empty;
@@ -40,7 +44,27 @@ public sealed class SftpLogTailer : ILogTailer
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public bool IsConnected => _client?.IsConnected == true;
+    internal SftpLogTailer(
+        ILogger<SftpLogTailer> logger,
+        FileTransportTailerConfig config,
+        Stream logStream,
+        long offset,
+        Func<bool> isConnected,
+        Func<string, CancellationToken, Task<long>> getFileSize,
+        Func<string, CancellationToken, Task<Stream>> openLogStream,
+        Func<CancellationToken, Task> reconnect)
+        : this(logger)
+    {
+        _config = config;
+        _logStream = logStream;
+        _lastFileSize = offset;
+        _isConnectedOverride = isConnected;
+        _getFileSizeOverride = getFileSize;
+        _openLogStreamOverride = openLogStream;
+        _reconnectOverride = reconnect;
+    }
+
+    public bool IsConnected => _isConnectedOverride?.Invoke() ?? (_client?.IsConnected == true);
 
     public long CurrentOffset => _lastFileSize;
 
@@ -292,6 +316,12 @@ public sealed class SftpLogTailer : ILogTailer
 
     private async Task ReconnectAsync(CancellationToken ct)
     {
+        if (_reconnectOverride is not null)
+        {
+            await _reconnectOverride(ct).ConfigureAwait(false);
+            return;
+        }
+
         var backoffIndex = Math.Min(_reconnectAttempts, BackoffSeconds.Length - 1);
         var delay = TimeSpan.FromSeconds(BackoffSeconds[backoffIndex]);
         _reconnectAttempts++;
@@ -309,6 +339,11 @@ public sealed class SftpLogTailer : ILogTailer
 
     private async Task<long> GetFileSizeAsync(string path, CancellationToken ct)
     {
+        if (_getFileSizeOverride is not null)
+        {
+            return await _getFileSizeOverride(path, ct).ConfigureAwait(false);
+        }
+
         return await Task.Run(() =>
         {
             var attributes = _client!.GetAttributes(path);
@@ -318,7 +353,9 @@ public sealed class SftpLogTailer : ILogTailer
 
     private async Task OpenLogStreamAsync(string path, CancellationToken ct)
     {
-        _logStream = await Task.Run(() => _client!.OpenRead(path), ct).ConfigureAwait(false);
+        _logStream = _openLogStreamOverride is null
+            ? await Task.Run(() => _client!.OpenRead(path), ct).ConfigureAwait(false)
+            : await _openLogStreamOverride(path, ct).ConfigureAwait(false);
 
         if (_lastFileSize > 0)
         {
