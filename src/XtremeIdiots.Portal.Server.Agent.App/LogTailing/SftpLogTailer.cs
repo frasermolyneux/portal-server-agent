@@ -339,16 +339,9 @@ public sealed class SftpLogTailer : ILogTailer
 
     private async Task<long> GetFileSizeAsync(string path, CancellationToken ct)
     {
-        if (_getFileSizeOverride is not null)
-        {
-            return await _getFileSizeOverride(path, ct).ConfigureAwait(false);
-        }
-
-        return await Task.Run(() =>
-        {
-            var attributes = _client!.GetAttributes(path);
-            return attributes.Size;
-        }, ct).ConfigureAwait(false);
+        return _getFileSizeOverride is not null
+            ? await _getFileSizeOverride(path, ct).ConfigureAwait(false)
+            : await Task.Run(() => _client!.GetAttributes(path).Size, ct).ConfigureAwait(false);
     }
 
     private async Task OpenLogStreamAsync(string path, CancellationToken ct)
