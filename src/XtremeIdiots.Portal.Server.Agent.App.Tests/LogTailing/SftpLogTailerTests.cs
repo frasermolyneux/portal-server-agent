@@ -7,86 +7,36 @@ using Renci.SshNet.Sftp;
 
 using XtremeIdiots.Portal.Server.Agent.App.FileTransport;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.LogTailing;
 
 public class SftpLogTailerTests
 {
     [Fact]
-    public async Task DisposeLogStreamAsync_AwaitsAsynchronousDisposal()
-    {
-        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var completeDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var stream = new TestAsyncDisposable(async () =>
-        {
-            disposalStarted.SetResult();
-            await completeDisposal.Task;
-        });
-
-        var disposal = SftpLogTailer.DisposeLogStreamAsync(stream).AsTask();
-        await disposalStarted.Task;
-
-        Assert.False(disposal.IsCompleted);
-
-        completeDisposal.SetResult();
-        await disposal;
-        Assert.True(stream.IsDisposed);
-    }
+    public Task DisposeAsync_AwaitsLogStreamDisposal() => AssertDisposalIsAwaited(tailer => tailer.DisposeAsync().AsTask());
 
     [Fact]
-    public async Task DisposeLogStreamAsync_WhenDisposalFails_PropagatesException()
+    public async Task ConnectAsync_WhenResettingConnection_AwaitsLogStreamDisposal()
+        => await AssertDisposalIsAwaited(tailer =>
+            Assert.ThrowsAsync<InvalidOperationException>(() =>
+                tailer.ConnectAsync(CreateConfig((SftpAuthenticationType)int.MaxValue))));
+
+    [Fact]
+    public async Task ConnectAsync_WhenStreamDisposalFails_ClearsStreamAndPropagatesException()
     {
         var expected = new IOException("Failed to dispose stream.");
-        var stream = new TestAsyncDisposable(() => ValueTask.FromException(expected));
+        var stream = new TestLogStream(
+            _ => ValueTask.FromResult(0),
+            () => ValueTask.FromException(expected));
+        var tailer = CreateTailer(stream);
+        var config = CreateConfig((SftpAuthenticationType)int.MaxValue);
 
-        var actual = await Assert.ThrowsAsync<IOException>(
-            async () => await SftpLogTailer.DisposeLogStreamAsync(stream));
-
+        var actual = await Assert.ThrowsAsync<IOException>(() => tailer.ConnectAsync(config));
         Assert.Same(expected, actual);
-    }
 
-    [Fact]
-    public async Task DisposeAsync_AwaitsLogStreamDisposal()
-    {
-        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var completeDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var stream = new TestLogStream(_ => ValueTask.FromResult(0), async () =>
-        {
-            disposalStarted.SetResult();
-            await completeDisposal.Task;
-        });
-        var tailer = CreateTailer(stream);
-
-        var disposal = tailer.DisposeAsync().AsTask();
-        await disposalStarted.Task;
-
-        Assert.False(disposal.IsCompleted);
-
-        completeDisposal.SetResult();
-        await disposal;
-        Assert.True(stream.IsDisposed);
-    }
-
-    [Fact]
-    public async Task ResetConnectionAsync_AwaitsLogStreamDisposal()
-    {
-        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var completeDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var stream = new TestLogStream(_ => ValueTask.FromResult(0), async () =>
-        {
-            disposalStarted.SetResult();
-            await completeDisposal.Task;
-        });
-        var tailer = CreateTailer(stream);
-
-        var reset = tailer.ResetConnectionAsync();
-        await disposalStarted.Task;
-
-        Assert.False(reset.IsCompleted);
-
-        completeDisposal.SetResult();
-        await reset;
-        Assert.True(stream.IsDisposed);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => tailer.ConnectAsync(config));
+        Assert.Equal(1, stream.DisposeCount);
     }
 
     [Fact]
@@ -188,15 +138,25 @@ public class SftpLogTailerTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => tailer.ConnectAsync(config));
     }
 
-    private sealed class TestAsyncDisposable(Func<ValueTask> disposeAsync) : IAsyncDisposable
+    private static async Task AssertDisposalIsAwaited(Func<SftpLogTailer, Task> operation)
     {
-        public bool IsDisposed { get; private set; }
-
-        public async ValueTask DisposeAsync()
+        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completeDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new TestLogStream(_ => ValueTask.FromResult(0), async () =>
         {
-            await disposeAsync();
-            IsDisposed = true;
-        }
+            disposalStarted.SetResult();
+            await completeDisposal.Task;
+        });
+        var tailer = CreateTailer(stream);
+
+        var pending = operation(tailer);
+        await disposalStarted.Task;
+
+        Assert.False(pending.IsCompleted);
+
+        completeDisposal.SetResult();
+        await pending;
+        Assert.True(stream.IsDisposed);
     }
 
     private static SftpLogTailer CreateTailer(
@@ -206,20 +166,9 @@ public class SftpLogTailerTests
         Func<string, CancellationToken, Task<Stream>>? openLogStream = null,
         Func<CancellationToken, Task>? reconnect = null)
     {
-        var config = new FileTransportTailerConfig
-        {
-            TransportType = "sftp",
-            Hostname = "sftp.example.com",
-            Port = 22,
-            Username = "user",
-            Password = "pass",
-            HostKeyFingerprint = "fingerprint",
-            FilePath = "/logs/games_mp.log"
-        };
-
         return new SftpLogTailer(
             new Mock<ILogger<SftpLogTailer>>().Object,
-            config,
+            CreateConfig(),
             stream,
             offset,
             () => true,
@@ -228,24 +177,39 @@ public class SftpLogTailerTests
             reconnect ?? (_ => Task.CompletedTask));
     }
 
+    private static FileTransportTailerConfig CreateConfig(
+        SftpAuthenticationType authenticationType = SftpAuthenticationType.Password) =>
+        new()
+        {
+            TransportType = "sftp",
+            Hostname = "sftp.example.com",
+            Port = 22,
+            Username = "user",
+            Password = "pass",
+            AuthenticationType = authenticationType,
+            HostKeyFingerprint = "fingerprint",
+            FilePath = "/logs/games_mp.log"
+        };
+
     private sealed class TestLogStream(
         Func<Memory<byte>, ValueTask<int>> readAsync,
         Func<ValueTask>? disposeAsync = null) : MemoryStream
     {
-        public bool IsDisposed { get; private set; }
+        public bool IsDisposed => !CanRead;
+        public int DisposeCount { get; private set; }
 
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
             readAsync(buffer);
 
         public override async ValueTask DisposeAsync()
         {
+            DisposeCount++;
             if (disposeAsync is not null)
             {
                 await disposeAsync();
             }
 
             await base.DisposeAsync();
-            IsDisposed = true;
         }
     }
 }
