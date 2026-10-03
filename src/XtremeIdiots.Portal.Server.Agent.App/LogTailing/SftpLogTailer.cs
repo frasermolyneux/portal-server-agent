@@ -254,15 +254,7 @@ public sealed class SftpLogTailer : ILogTailer
 
     private async Task EstablishConnectionAsync(CancellationToken ct)
     {
-        try
-        {
-            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
-        }
-        finally
-        {
-            _logStream = null;
-            DisposeConnection();
-        }
+        await ResetConnectionAsync().ConfigureAwait(false);
 
         var expectedFingerprint = NormalizeFingerprint(_config!.HostKeyFingerprint!);
         _hostKeyValidated = false;
@@ -311,6 +303,19 @@ public sealed class SftpLogTailer : ILogTailer
         {
             DisposeConnection();
             throw;
+        }
+    }
+
+    internal async Task ResetConnectionAsync()
+    {
+        try
+        {
+            await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
+        }
+        finally
+        {
+            _logStream = null;
+            DisposeConnection();
         }
     }
 

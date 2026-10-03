@@ -46,6 +46,50 @@ public class SftpLogTailerTests
     }
 
     [Fact]
+    public async Task DisposeAsync_AwaitsLogStreamDisposal()
+    {
+        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completeDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new TestLogStream(_ => ValueTask.FromResult(0), async () =>
+        {
+            disposalStarted.SetResult();
+            await completeDisposal.Task;
+        });
+        var tailer = CreateTailer(stream);
+
+        var disposal = tailer.DisposeAsync().AsTask();
+        await disposalStarted.Task;
+
+        Assert.False(disposal.IsCompleted);
+
+        completeDisposal.SetResult();
+        await disposal;
+        Assert.True(stream.IsDisposed);
+    }
+
+    [Fact]
+    public async Task ResetConnectionAsync_AwaitsLogStreamDisposal()
+    {
+        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completeDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new TestLogStream(_ => ValueTask.FromResult(0), async () =>
+        {
+            disposalStarted.SetResult();
+            await completeDisposal.Task;
+        });
+        var tailer = CreateTailer(stream);
+
+        var reset = tailer.ResetConnectionAsync();
+        await disposalStarted.Task;
+
+        Assert.False(reset.IsCompleted);
+
+        completeDisposal.SetResult();
+        await reset;
+        Assert.True(stream.IsDisposed);
+    }
+
+    [Fact]
     public async Task PollAsync_WhenFileRotates_AwaitsDisposalBeforeOpeningReplacement()
     {
         var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
