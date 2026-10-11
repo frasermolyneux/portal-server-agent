@@ -282,6 +282,74 @@ public class FtpLogTailerTests
 
     #endregion
 
+    #region Reconnect Disposal Tests
+
+    [Fact]
+    public async Task EstablishConnectionAsync_AwaitsExistingClientDisposalBeforeCreatingReplacement()
+    {
+        var disposalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completeDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var existingClient = new DelayedAsyncDisposable(disposalStarted, completeDisposal);
+        var replacementCreated = false;
+
+        var reconnect = FtpLogTailer.DisposeClientBeforeReconnectAsync(existingClient, () =>
+        {
+            Assert.True(existingClient.IsDisposed);
+            replacementCreated = true;
+            return new object();
+        });
+
+        await disposalStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(reconnect.IsCompleted);
+        Assert.False(replacementCreated);
+
+        completeDisposal.SetResult();
+        _ = await reconnect;
+
+        Assert.True(existingClient.IsDisposed);
+        Assert.True(replacementCreated);
+    }
+
+    [Fact]
+    public async Task EstablishConnectionAsync_WhenClientDisposalFails_DoesNotCreateReplacement()
+    {
+        var expected = new IOException("Failed to dispose FTP client.");
+        var replacementCreated = false;
+
+        var actual = await Assert.ThrowsAsync<IOException>(() =>
+            FtpLogTailer.DisposeClientBeforeReconnectAsync(
+                new FailedAsyncDisposable(expected),
+                () =>
+                {
+                    replacementCreated = true;
+                    return new object();
+                }));
+
+        Assert.Same(expected, actual);
+        Assert.False(replacementCreated);
+    }
+
+    private sealed class DelayedAsyncDisposable(
+        TaskCompletionSource disposalStarted,
+        TaskCompletionSource completeDisposal) : IAsyncDisposable
+    {
+        public bool IsDisposed { get; private set; }
+
+        public async ValueTask DisposeAsync()
+        {
+            disposalStarted.SetResult();
+            await completeDisposal.Task;
+            IsDisposed = true;
+        }
+    }
+
+    private sealed class FailedAsyncDisposable(Exception exception) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.FromException(exception);
+    }
+
+    #endregion
+
     #region Negative File Size Guard Tests
 
     /// <summary>
