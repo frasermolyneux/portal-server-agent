@@ -223,10 +223,22 @@ public sealed class FtpLogTailer : ILogTailer
 
     private async Task EstablishConnectionAsync(CancellationToken ct)
     {
-        _client?.Dispose();
-        _client = new AsyncFtpClient(_config!.Hostname, _config.Username, _config.Password, _config.Port);
+        _client = await DisposeClientBeforeReconnectAsync(_client,
+            () => new AsyncFtpClient(_config!.Hostname, _config.Username, _config.Password, _config.Port)).ConfigureAwait(false);
         _client.Config.SocketKeepAlive = true;
         await _client.Connect(ct);
+    }
+
+    internal static async Task<T> DisposeClientBeforeReconnectAsync<T>(
+        IAsyncDisposable? existingClient,
+        Func<T> createReplacement)
+    {
+        if (existingClient is not null)
+        {
+            await existingClient.DisposeAsync().ConfigureAwait(false);
+        }
+
+        return createReplacement();
     }
 
     private async Task ReconnectAsync(CancellationToken ct)
