@@ -149,7 +149,7 @@ public class FtpLogTailerAccumulationTests
                 return ValueTask.FromException<int>(Failure);
             }
 
-            var count = base.Read(buffer.Span[..Math.Min(buffer.Length, maxRead)]);
+            var count = Read(buffer.Span[..Math.Min(buffer.Length, maxRead)]);
             Reads.Add((buffer.Length, count, cancellationToken));
             CancelAfterRead?.Cancel();
             return ValueTask.FromResult(count);
