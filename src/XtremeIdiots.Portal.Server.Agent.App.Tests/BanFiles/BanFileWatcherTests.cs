@@ -38,6 +38,63 @@ public class BanFileWatcherTests
     }
 
     [Fact]
+    public async Task AnUnacknowledgedPendingImportRequiresCanonicalCoverageBeforeAnyPush()
+    {
+        const string content = "pending-guid Manual Ban\n";
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(client => client.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>())).ReturnsAsync("/mods/test");
+        remote.Setup(client => client.GetFileSizeAsync("/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Encoding.UTF8.GetByteCount(content));
+        remote.Setup(client => client.OpenReadAsync("/mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(content));
+        var health = new AgentProcessHealth();
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object, processHealth: health);
+        var now = DateTimeOffset.UtcNow;
+        var oldest = now.AddMinutes(-21);
+        health.BanChecks[context.ServerId] = new(now, true, null, null, oldest);
+        var monitor = CreateMonitor(context.ServerId, "previous-etag", now.AddDays(-2).UtcDateTime, now.AddHours(-1).UtcDateTime);
+        SetInternalProperty(monitor, nameof(BanFileMonitorDto.RemoteFileSize), (long?)Encoding.UTF8.GetByteCount(content));
+        repository.BanFileMonitorsApi.AddBanFileMonitor(monitor);
+
+        await watcher.CheckAsync(context, "test");
+
+        Assert.Equal(oldest, health.BanChecks[context.ServerId].PendingImportSince);
+        remote.Verify(client => client.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingCentralObservationPreservesThePendingDeliveryDeadline(bool manualBans)
+    {
+        const string content = "pending-guid Manual Ban\n";
+        var remote = new Mock<IRemoteFileClient>();
+        var directory = remote.Setup(client => client.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>()));
+        if (manualBans)
+        {
+            directory.ReturnsAsync("/mods/test");
+        }
+        else
+        {
+            directory.ThrowsAsync(new IOException("Transport unavailable."));
+        }
+        remote.Setup(client => client.GetFileSizeAsync("/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Encoding.UTF8.GetByteCount(content));
+        remote.Setup(client => client.OpenReadAsync("/mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(content));
+        var health = new AgentProcessHealth();
+        var (watcher, context, _) = CreateCheckWatcher(remote.Object, processHealth: health);
+        var now = DateTimeOffset.UtcNow;
+        var oldest = now.AddMinutes(-11);
+        health.BanChecks[context.ServerId] = new(now, true, "pending-etag", oldest, null);
+
+        await watcher.CheckAsync(context, "test");
+
+        Assert.Equal(oldest, health.BanChecks[context.ServerId].PendingDeliverySince);
+        Assert.Equal("pending-etag", health.BanChecks[context.ServerId].PendingETag);
+    }
+
+    [Fact]
     public async Task ANewCentralVersionDoesNotResetAnAlreadyOverdueDelivery()
     {
         var remote = new Mock<IRemoteFileClient>();

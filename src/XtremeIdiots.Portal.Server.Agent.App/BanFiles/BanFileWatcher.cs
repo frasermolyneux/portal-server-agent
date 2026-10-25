@@ -367,12 +367,18 @@ public sealed class BanFileWatcher : IBanFileWatcher
         _processHealth.BanChecks.TryGetValue(context.ServerId, out var previousHealth);
         var pending = centralEtag is not null && ((activePathChanged && pushedAt is null)
             || !string.Equals(centralEtag, pushedEtag ?? existingMonitor?.LastPushedETag, StringComparison.Ordinal));
+        var pendingEtag = centralEtag;
+        if (centralEtag is null && pushedAt is null && previousHealth?.PendingETag is { } previousEtag)
+        {
+            pending = true;
+            pendingEtag = previousEtag;
+        }
         var lastImport = existingMonitor?.LastImportUtc;
         var lastPush = pushedAt ?? existingMonitor?.LastPushUtc;
         DateTimeOffset? importPending = lastImport.HasValue && (!lastPush.HasValue || lastImport > lastPush)
             ? new DateTimeOffset(lastImport.Value, TimeSpan.Zero) : null;
         if (previousHealth?.PendingImportSince is { } previousImport
-            && (!lastPush.HasValue || new DateTimeOffset(lastPush.Value, TimeSpan.Zero) < previousImport)
+            && pushedAt is null
             && (importPending is null || previousImport < importPending))
         {
             importPending = previousImport;
@@ -382,7 +388,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
             importPending = new DateTimeOffset(nowUtc, TimeSpan.Zero);
         }
         _processHealth.BanChecks[context.ServerId] = new(new DateTimeOffset(nowUtc, TimeSpan.Zero),
-            checkResult == "Success", pending ? centralEtag : null,
+            checkResult == "Success", pending ? pendingEtag : null,
             pending ? previousHealth?.PendingDeliverySince ?? DateTimeOffset.UtcNow : null,
             importPending);
 
@@ -480,6 +486,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
             var nowUtc = DateTime.UtcNow;
             var hasUnreconciledImport = existingMonitor?.LastImportUtc is not null
                 && (existingMonitor.LastPushUtc is null || existingMonitor.LastImportUtc > existingMonitor.LastPushUtc);
+            hasUnreconciledImport |= _processHealth.BanChecks.TryGetValue(context.ServerId, out var health)
+                && health.PendingImportSince is not null;
             var lastPushedEtag = existingMonitor?.LastPushedETag;
             var alreadyPushed = string.Equals(existingMonitor?.RemoteFilePath, resolvedPath.Path, StringComparison.Ordinal)
                 && string.Equals(lastPushedEtag, central.ETag, StringComparison.Ordinal);

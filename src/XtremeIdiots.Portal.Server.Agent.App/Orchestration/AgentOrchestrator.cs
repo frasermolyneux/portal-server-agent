@@ -112,6 +112,11 @@ public class AgentOrchestrator : BackgroundService
                     _logger.LogError(ex, "Error refreshing agents");
                 }
 
+                if (!stoppingToken.IsCancellationRequested)
+                {
+                    PublishProcessHealth();
+                }
+
                 try
                 {
                     await Task.Delay(RefreshInterval, stoppingToken);
@@ -288,6 +293,10 @@ public class AgentOrchestrator : BackgroundService
         }
 
         _logger.LogInformation("Agent refresh complete: {Count} active agents", _agents.Count);
+    }
+
+    private void PublishProcessHealth()
+    {
         var now = DateTimeOffset.UtcNow;
         if (now - _lastProcessPublication >= ProcessHealthTelemetry.Interval)
         {
