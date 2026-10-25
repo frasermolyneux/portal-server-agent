@@ -46,7 +46,8 @@ public class AgentHealthCheckTests
             new Mock<IBanFileWatcher>().Object,
             new Mock<IRemoteOpsSessionCoordinator>().Object,
             NullLoggerFactory.Instance,
-            NullLogger<AgentOrchestrator>.Instance);
+            NullLogger<AgentOrchestrator>.Instance,
+            new Microsoft.ApplicationInsights.TelemetryClient(new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration { DisableTelemetry = true }));
 
     [Fact]
     public async Task CheckHealthAsync_WhenOrchestratorNotRunning_ReturnsUnhealthy()
@@ -89,7 +90,8 @@ public class AgentHealthCheckTests
             new Mock<IBanFileWatcher>().Object,
             new Mock<IRemoteOpsSessionCoordinator>().Object,
             NullLoggerFactory.Instance,
-            NullLogger<AgentOrchestrator>.Instance);
+            NullLogger<AgentOrchestrator>.Instance,
+            new Microsoft.ApplicationInsights.TelemetryClient(new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration { DisableTelemetry = true }));
 
         using var cts = new CancellationTokenSource();
         try
@@ -190,7 +192,8 @@ public class AgentHealthCheckTests
             new Mock<IBanFileWatcher>().Object,
             new Mock<IRemoteOpsSessionCoordinator>().Object,
             NullLoggerFactory.Instance,
-            NullLogger<AgentOrchestrator>.Instance);
+            NullLogger<AgentOrchestrator>.Instance,
+            new Microsoft.ApplicationInsights.TelemetryClient(new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration { DisableTelemetry = true }));
 
         using var cts = new CancellationTokenSource();
         try

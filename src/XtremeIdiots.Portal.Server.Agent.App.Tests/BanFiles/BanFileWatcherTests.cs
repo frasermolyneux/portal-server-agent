@@ -19,6 +19,113 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Tests.BanFiles;
 public class BanFileWatcherTests
 {
     [Fact]
+    public async Task CheckAsync_SftpCanonicalDirectory_ImportsExistingManualBansBeforeAnyPush()
+    {
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(c => c.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("/Mods/test");
+        remote.Setup(c => c.GetFileSizeAsync("/Mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(23);
+        remote.Setup(c => c.OpenReadAsync("/Mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream("manual-guid Manual Ban\n"));
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object);
+        var previous = CreateMonitor(context.ServerId, "etag", DateTime.UtcNow.AddDays(-2),
+            DateTime.UtcNow.AddDays(-1), "/mods/test/ban.txt");
+        SetInternalProperty(previous, nameof(BanFileMonitorDto.RemoteFileSize), (long?)23);
+        repository.BanFileMonitorsApi.AddBanFileMonitor(previous);
+
+        var result = await watcher.CheckAsync(context, "test");
+
+        Assert.Single(result.NewBans);
+        var monitors = await repository.BanFileMonitorsApi.GetBanFileMonitors(null, null, context.ServerId, 0, 1, null);
+        Assert.Equal("/Mods/test/ban.txt", Assert.Single(monitors.Result!.Data!.Items!).RemoteFilePath);
+        remote.Verify(c => c.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        remote.Verify(c => c.CreateFileIfMissingAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CheckAsync_MissingFile_UsesExclusiveCreateAndPreservesConcurrentManualFile(bool created)
+    {
+        const string centralContent = "central-guid [BANSYNC]-Player\n";
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(c => c.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("/Mods/test");
+        remote.SetupSequence(c => c.GetFileSizeAsync("/Mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new RemoteFileNotFoundException("Missing"))
+            .ReturnsAsync(created ? Encoding.UTF8.GetByteCount(centralContent) : 23);
+        remote.Setup(c => c.CreateFileIfMissingAsync(It.IsAny<Stream>(), "/Mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(created);
+        remote.Setup(c => c.OpenReadAsync("/Mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(created ? centralContent : "manual-guid Manual Ban\n"));
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object, centralContent);
+
+        var result = await watcher.CheckAsync(context, "test");
+
+        Assert.Equal(created ? 0 : 1, result.NewBans.Count);
+        remote.Verify(c => c.CreateFileIfMissingAsync(It.IsAny<Stream>(), "/Mods/test/ban.txt", It.IsAny<CancellationToken>()), Times.Once);
+        remote.Verify(c => c.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        var monitors = await repository.BanFileMonitorsApi.GetBanFileMonitors(null, null, context.ServerId, 0, 1, null);
+        var monitor = Assert.Single(monitors.Result!.Data!.Items!);
+        Assert.Equal("Success", monitor.LastCheckResult);
+        Assert.Equal(string.Empty, monitor.LastCheckErrorMessage);
+        Assert.Equal(created, monitor.LastPushUtc.HasValue);
+    }
+
+    [Fact]
+    public async Task CheckAsync_MissingFileWithoutCentralSource_DoesNotInitialize()
+    {
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(c => c.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("/Mods/test");
+        remote.Setup(c => c.GetFileSizeAsync("/Mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new RemoteFileNotFoundException("Missing"));
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object, centralContent: string.Empty);
+
+        await watcher.CheckAsync(context, "test");
+
+        var monitors = await repository.BanFileMonitorsApi.GetBanFileMonitors(null, null, context.ServerId, 0, 1, null);
+        var monitor = Assert.Single(monitors.Result!.Data!.Items!);
+        Assert.Equal("FileTransportError", monitor.LastCheckResult);
+        Assert.Contains("no valid central ban file", monitor.LastCheckErrorMessage);
+        remote.Verify(c => c.CreateFileIfMissingAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CheckAsync_InvalidDirectory_DoesNotCreateOrUploadFile()
+    {
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(c => c.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new RemoteFileNotFoundException("Game directory missing"));
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object);
+
+        await watcher.CheckAsync(context, "test");
+
+        var monitors = await repository.BanFileMonitorsApi.GetBanFileMonitors(null, null, context.ServerId, 0, 1, null);
+        Assert.Equal("FileNotFound", Assert.Single(monitors.Result!.Data!.Items!).LastCheckResult);
+        remote.Verify(c => c.CreateFileIfMissingAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        remote.Verify(c => c.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static (BanFileWatcher Watcher, ServerContext Context, FakeRepositoryApiClient Repository) CreateCheckWatcher(
+        IRemoteFileClient remote, string centralContent = "central-guid [BANSYNC]-Player\n")
+    {
+        var repository = new FakeRepositoryApiClient();
+        var context = CreateServerContext(Guid.NewGuid()) with
+        {
+            FileTransportEnabled = true,
+            FileTransportType = "sftp"
+        };
+        var resolver = new Mock<IBanFilePathResolver>();
+        resolver.Setup(r => r.Resolve("CallOfDuty5", "/", It.IsAny<string?>()))
+            .Returns(new ResolvedBanFilePath { Path = "/mods/test/ban.txt", ResolvedForMod = "test" });
+        return (new BanFileWatcher(repository, CreateBanFileSource("etag", centralContent), resolver.Object,
+            new PassThroughRemoteOpsSessionCoordinator(remote), Mock.Of<IAuditLogger>(),
+            NullLogger<BanFileWatcher>.Instance, new ZeroJitterRandom()), context, repository);
+    }
+
+    [Fact]
     public async Task TryPushCentralBanFileAsync_EqualETagAndSettledImport_DoesNotReadOrUpload()
     {
         const string centralEtag = "central-etag";
@@ -584,4 +691,3 @@ public class BanFileWatcherTests
             => Task.CompletedTask;
     }
 }
-

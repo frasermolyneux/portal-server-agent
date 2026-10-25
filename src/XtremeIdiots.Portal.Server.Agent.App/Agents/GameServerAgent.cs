@@ -31,6 +31,7 @@ public sealed class GameServerAgent
     private readonly IBanFileWatcher _banFileWatcher;
     private readonly ILogger _logger;
     private readonly Random _startupJitterRandom;
+    private readonly Action? _reportHeartbeat;
 
     private long _sequenceId;
     private DateTime _lastOffsetSave = DateTime.MinValue;
@@ -39,6 +40,7 @@ public sealed class GameServerAgent
     private DateTime _lastRconSync = DateTime.MinValue;
     private DateTime _lastPluginLifecycleCheck = DateTime.MinValue;
     private DateTime _lastBanFileCheck = DateTime.MinValue;
+    private DateTime _lastHeartbeat = DateTime.MinValue;
     private DateTime _lastBroadcastAt = DateTime.MinValue;
     private int _nextBroadcastIndex;
 
@@ -62,7 +64,8 @@ public sealed class GameServerAgent
         ICod4xCvarProbe cvarProbe,
         ICoD4xPluginLifecycleService coD4xPluginLifecycleService,
         IBanFileWatcher banFileWatcher,
-        ILogger logger)
+        ILogger logger,
+        Action? reportHeartbeat = null)
         : this(
             context,
             tailer,
@@ -76,7 +79,8 @@ public sealed class GameServerAgent
             coD4xPluginLifecycleService,
             banFileWatcher,
             logger,
-            new Random())
+            new Random(),
+            reportHeartbeat)
     {
     }
 
@@ -93,7 +97,8 @@ public sealed class GameServerAgent
         ICoD4xPluginLifecycleService coD4xPluginLifecycleService,
         IBanFileWatcher banFileWatcher,
         ILogger logger,
-        Random startupJitterRandom)
+        Random startupJitterRandom,
+        Action? reportHeartbeat = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _tailer = tailer ?? throw new ArgumentNullException(nameof(tailer));
@@ -108,6 +113,7 @@ public sealed class GameServerAgent
         _banFileWatcher = banFileWatcher ?? throw new ArgumentNullException(nameof(banFileWatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _startupJitterRandom = startupJitterRandom ?? throw new ArgumentNullException(nameof(startupJitterRandom));
+        _reportHeartbeat = reportHeartbeat;
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -218,6 +224,12 @@ public sealed class GameServerAgent
                             break;
                         }
                         _lastLeaseRenew = DateTime.UtcNow;
+                    }
+
+                    if (_reportHeartbeat is not null && DateTime.UtcNow - _lastHeartbeat > StatusPublishInterval)
+                    {
+                        _reportHeartbeat();
+                        _lastHeartbeat = DateTime.UtcNow;
                     }
 
                     // Periodic offset save (every 30s)

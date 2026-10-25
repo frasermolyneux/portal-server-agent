@@ -41,7 +41,8 @@ public class AgentOrchestratorTests
     private AgentOrchestrator CreateOrchestrator() =>
         new(_mockConfigProvider.Object, _mockTailerFactory.Object, _mockParserFactory.Object,
             _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object,
-            _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _mockOpsSessionCoordinator.Object, _loggerFactory, _logger);
+            _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _mockOpsSessionCoordinator.Object, _loggerFactory, _logger,
+            new Microsoft.ApplicationInsights.TelemetryClient(new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration { DisableTelemetry = true }));
 
     [Fact]
     public async Task RefreshAgents_WithNoServers_StartsNoAgents()
