@@ -8,4 +8,6 @@ public interface IRemoteFileClient : IAsyncDisposable
     Task<long> GetFileSizeAsync(string path, CancellationToken ct = default);
     Task<Stream> OpenReadAsync(string path, long offset, CancellationToken ct = default);
     Task UploadAsync(Stream content, string path, CancellationToken ct = default);
+    Task<string> ResolveDirectoryPathAsync(string directoryPath, CancellationToken ct = default);
+    Task<bool> CreateFileIfMissingAsync(Stream content, string path, CancellationToken ct = default);
 }

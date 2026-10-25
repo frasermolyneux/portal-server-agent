@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 
+using Microsoft.ApplicationInsights;
+
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
@@ -28,6 +30,7 @@ public class AgentOrchestrator : BackgroundService
     private readonly IRemoteOpsSessionCoordinator _opsSessionCoordinator;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AgentOrchestrator> _logger;
+    private readonly TelemetryClient _telemetryClient;
 
     private readonly ConcurrentDictionary<Guid, AgentEntry> _agents = new();
 
@@ -49,7 +52,8 @@ public class AgentOrchestrator : BackgroundService
         IBanFileWatcher banFileWatcher,
         IRemoteOpsSessionCoordinator opsSessionCoordinator,
         ILoggerFactory loggerFactory,
-        ILogger<AgentOrchestrator> logger)
+        ILogger<AgentOrchestrator> logger,
+        TelemetryClient telemetryClient)
     {
         _configProvider = configProvider ?? throw new ArgumentNullException(nameof(configProvider));
         _tailerFactory = tailerFactory ?? throw new ArgumentNullException(nameof(tailerFactory));
@@ -65,6 +69,7 @@ public class AgentOrchestrator : BackgroundService
         _opsSessionCoordinator = opsSessionCoordinator ?? throw new ArgumentNullException(nameof(opsSessionCoordinator));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _telemetryClient = telemetryClient ?? throw new ArgumentNullException(nameof(telemetryClient));
     }
 
     /// <summary>
@@ -256,7 +261,13 @@ public class AgentOrchestrator : BackgroundService
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 
-            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _coD4xPluginLifecycleService, _banFileWatcher, agentLogger);
+            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _coD4xPluginLifecycleService, _banFileWatcher, agentLogger,
+                () => _telemetryClient.TrackEvent("AgentHeartbeat", new Dictionary<string, string>
+                {
+                    ["ServerId"] = server.ServerId.ToString(),
+                    ["GameType"] = server.GameType,
+                    ["SourceMode"] = server.IsCod4xPluginSourceEnabled ? "Plugin" : "Log"
+                }));
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
             _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash));

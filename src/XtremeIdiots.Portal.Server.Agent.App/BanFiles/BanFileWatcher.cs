@@ -122,14 +122,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
         var existingMonitor = await GetExistingMonitorAsync(context.ServerId, ct).ConfigureAwait(false);
         var activePathChanged = existingMonitor is not null
             && !string.Equals(existingMonitor.RemoteFilePath, resolvedPath.Path, StringComparison.Ordinal);
-        var lastKnownSize = activePathChanged ? 0 : existingMonitor?.RemoteFileSize ?? 0;
+        var lastKnownSize = existingMonitor?.RemoteFileSize ?? 0;
         var monitorIdForLogs = existingMonitor?.BanFileMonitorId.ToString() ?? "(new)";
-
-        if (activePathChanged)
-        {
-            _scheduledPushes.TryRemove(laneKey, out _);
-            _countCache.TryRemove(laneKey, out _);
-        }
 
         IReadOnlyList<DetectedBanEntry> detectedBans = [];
         long? finalSize = null;
@@ -140,6 +134,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
         DateTime? centralEtagSeenAt = null;
         string? checkErrorMessage = null;
         var checkResult = "Success";
+        var missingObserved = false;
 
         try
         {
@@ -147,6 +142,26 @@ public sealed class BanFileWatcher : IBanFileWatcher
                 context,
                 async (remoteClient, token) =>
                 {
+                    if (string.Equals(context.EffectiveFileTransportType, "sftp", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var separator = resolvedPath.Path.LastIndexOf('/');
+                        var directory = await remoteClient.ResolveDirectoryPathAsync(
+                            separator == 0 ? "/" : resolvedPath.Path[..separator], token).ConfigureAwait(false);
+                        resolvedPath = resolvedPath with
+                        {
+                            Path = directory.TrimEnd('/') + resolvedPath.Path[separator..]
+                        };
+                    }
+
+                    activePathChanged = existingMonitor is not null
+                        && !string.Equals(existingMonitor.RemoteFilePath, resolvedPath.Path, StringComparison.Ordinal);
+                    if (activePathChanged)
+                    {
+                        lastKnownSize = 0;
+                        _scheduledPushes.TryRemove(laneKey, out _);
+                        _countCache.TryRemove(laneKey, out _);
+                    }
+
                     long? localFinalSize = null;
                     long? localPushedSize = null;
                     string? localPushedEtag = null;
@@ -161,15 +176,43 @@ public sealed class BanFileWatcher : IBanFileWatcher
                     try
                     {
                         currentSize = await remoteClient.GetFileSizeAsync(resolvedPath.Path, token).ConfigureAwait(false);
+                        if (currentSize < 0)
+                        {
+                            throw new RemoteFileNotFoundException($"Remote ban file '{resolvedPath.Path}' was not found.");
+                        }
                     }
-                    catch (RemoteFileNotFoundException ex)
+                    catch (RemoteFileNotFoundException)
                     {
-                        // Path resolution may have raced with a mod change, or the server has
-                        // never had a ban.txt at the resolved path. Surface as a clean
-                        // FileNotFound rather than crashing the whole cycle.
-                        localCheckResult = "FileNotFound";
-                        localCheckErrorMessage = ex.Message;
-                        currentSize = -1;
+                        missingObserved = true;
+                        lastKnownSize = 0;
+                        _countCache.TryRemove(laneKey, out _);
+                        await using var central = await _banFileSource.GetAsync(context.GameType, token).ConfigureAwait(false);
+                        if (central is null || central.Length <= 0 || string.IsNullOrWhiteSpace(central.ETag))
+                        {
+                            throw new InvalidOperationException(
+                                "Ban file is missing and no valid central ban file is available. Automatic initialization will retry.");
+                        }
+
+                        var created = await remoteClient.CreateFileIfMissingAsync(
+                            central.Content, resolvedPath.Path, token).ConfigureAwait(false);
+                        currentSize = await remoteClient.GetFileSizeAsync(resolvedPath.Path, token).ConfigureAwait(false);
+                        if (created)
+                        {
+                            if (currentSize != central.Length)
+                            {
+                                throw new IOException("Initialized ban file size does not match the central source.");
+                            }
+
+                            localPushedSize = currentSize;
+                            localPushedEtag = central.ETag;
+                            localPushedAt = DateTime.UtcNow;
+                            localCentralEtag = central.ETag;
+                            localCentralEtagSeenAt = localPushedAt;
+                            lastKnownSize = currentSize;
+                            await RecordPushAsync(context, resolvedPath, central, token).ConfigureAwait(false);
+                            _logger.LogInformation("[{Title}] Initialized missing ban file at {Path}",
+                                context.Title, resolvedPath.Path);
+                        }
                     }
 
                     if (currentSize >= 0)
@@ -216,7 +259,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
                         // Outbound push only when no manual additions detected this cycle.
                         // Mirrors the legacy "remote == lastKnown" guard that prevents
                         // overwriting a freshly-detected manual ban before it's been ingested.
-                        if (localDetectedBans.Count == 0)
+                        if (localDetectedBans.Count == 0 && localPushedAt is null)
                         {
                             var pushOutcome = await TryPushCentralBanFileAsync(
                                 remoteClient, context, existingMonitor, resolvedPath, currentSize, laneKey, token).ConfigureAwait(false);
@@ -300,12 +343,12 @@ public sealed class BanFileWatcher : IBanFileWatcher
         {
             LastCheckUtc = nowUtc,
             LastCheckResult = checkResult,
-            LastCheckErrorMessage = checkErrorMessage,
+            LastCheckErrorMessage = checkErrorMessage ?? string.Empty,
             RemoteFilePath = resolvedPath.Path,
             ResolvedForMod = resolvedPath.ResolvedForMod,
             RemoteFileSize = finalSize,
             LastPushUtc = pushedAt,
-            LastPushedETag = activePathChanged && pushedEtag is null ? string.Empty : pushedEtag,
+            LastPushedETag = (activePathChanged || missingObserved) && pushedEtag is null ? string.Empty : pushedEtag,
             LastPushedSize = pushedSize,
             LastCentralBlobETag = centralEtag,
             LastCentralBlobUtc = centralEtagSeenAt,
