@@ -120,7 +120,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
         // for the append-only ingest, and its LastPushedETag tells us whether the
         // central blob still needs propagating to this server.
         var existingMonitor = await GetExistingMonitorAsync(context.ServerId, ct).ConfigureAwait(false);
-        var activePathChanged = false;
+        var activePathChanged = existingMonitor is not null
+            && !string.Equals(existingMonitor.RemoteFilePath, resolvedPath.Path, StringComparison.Ordinal);
         var lastKnownSize = existingMonitor?.RemoteFileSize ?? 0;
         var monitorIdForLogs = existingMonitor?.BanFileMonitorId.ToString() ?? "(new)";
 

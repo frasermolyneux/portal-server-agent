@@ -79,7 +79,7 @@ public sealed class GameServerAgent
             coD4xPluginLifecycleService,
             banFileWatcher,
             logger,
-            new Random(),
+            Random.Shared,
             reportHeartbeat)
     {
     }
