@@ -69,7 +69,7 @@ builder.Services.AddApplicationInsightsTelemetry(new ApplicationInsightsServiceO
     EnableAdaptiveSampling = false,
 });
 
-builder.Services.AddObservability();
+builder.Services.AddObservability(AgentHeartbeatTelemetry.ConfigureFiltering);
 builder.Services.AddServiceProfiler();
 
 // Repository API client

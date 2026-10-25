@@ -5,6 +5,7 @@ using Microsoft.ApplicationInsights;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
+using XtremeIdiots.Portal.Server.Agent.App.Observability;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 
@@ -262,7 +263,7 @@ public class AgentOrchestrator : BackgroundService
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 
             var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _coD4xPluginLifecycleService, _banFileWatcher, agentLogger,
-                () => _telemetryClient.TrackEvent("AgentHeartbeat", new Dictionary<string, string>
+                () => _telemetryClient.TrackEvent(AgentHeartbeatTelemetry.EventName, new Dictionary<string, string>
                 {
                     ["ServerId"] = server.ServerId.ToString(),
                     ["GameType"] = server.GameType,
