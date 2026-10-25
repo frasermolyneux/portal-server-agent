@@ -41,7 +41,7 @@ jobs:
       state_tainted: ${{ steps.state-check.outputs.state_tainted }}
     steps:
       - id: state-check
-        uses: frasermolyneux/actions/terraform-state-check@8e7ca58b7821e01192ee4f23756c55e4ee057496
+        uses: frasermolyneux/actions/terraform-state-check@terraform-state-check/v2.0.0
         with:
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/dev.tfvars"
@@ -79,7 +79,7 @@ jobs:
   #  concurrency:
   #    group: ${{ github.repository }}-dev
   #  steps:
-  #    - uses: frasermolyneux/actions/terraform-plan-and-apply@6302bef1311daa00b8dd792212bd6529adc17786
+  #    - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v2.0.0
   #      if: needs.detect-changes.outputs.terraform == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true'
   #      with:
   #        terraform-folder: "terraform"
@@ -89,7 +89,7 @@ jobs:
   #        AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
   #        AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 #
-  #    - uses: frasermolyneux/actions/terraform-output@8e7ca58b7821e01192ee4f23756c55e4ee057496
+  #    - uses: frasermolyneux/actions/terraform-output@terraform-output/v2.0.0
   #      if: needs.detect-changes.outputs.terraform != 'true' && needs.terraform-state-check-dev.outputs.state_tainted != 'true'
   #      with:
   #        terraform-folder: "terraform"
@@ -237,7 +237,7 @@ jobs:
     if: |
       !failure() && !cancelled()
     steps:
-      - uses: frasermolyneux/actions/terraform-plan-and-apply@6302bef1311daa00b8dd792212bd6529adc17786
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v2.0.0
         if: needs.detect-changes.outputs.terraform == 'true'
         with:
           terraform-folder: "terraform"
@@ -247,7 +247,7 @@ jobs:
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: frasermolyneux/actions/terraform-output@8e7ca58b7821e01192ee4f23756c55e4ee057496
+      - uses: frasermolyneux/actions/terraform-output@terraform-output/v2.0.0
         if: needs.detect-changes.outputs.terraform != 'true'
         with:
           terraform-folder: "terraform"

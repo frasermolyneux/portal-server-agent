@@ -24,3 +24,7 @@ and publishes the shared event contracts to Azure Service Bus.
 
 Use the exact SDK from `global.json`. Add focused tests for changed behavior and
 select the relevant validation commands documented in `AGENTS.md`.
+
+## Terraform toolchain
+
+Commit each root's `.terraform-version` and `.terraform.lock.hcl`. Select the exact root CLI pin before invoking Terraform; normal initialization uses `-lockfile=readonly`. Regenerate provider selections only in a reviewed dependency-update PR; never commit state, plans, or `.terraform/`.
