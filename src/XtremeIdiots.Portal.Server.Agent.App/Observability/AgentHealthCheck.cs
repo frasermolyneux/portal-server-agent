@@ -26,6 +26,15 @@ public sealed class AgentHealthCheck : IHealthCheck
         }
 
         var activeCount = _orchestrator.ActiveAgentCount;
+        if (_orchestrator.ExpectedAgentCount is null)
+        {
+            return Task.FromResult(HealthCheckResult.Degraded("Configured agent inventory is unavailable."));
+        }
+
+        if (_orchestrator.ExpectedAgentCount > 0 && activeCount == 0)
+        {
+            return Task.FromResult(HealthCheckResult.Unhealthy("No configured agent is running."));
+        }
 
         return Task.FromResult(HealthCheckResult.Healthy(
             $"Agent orchestrator is running with {activeCount} active agent(s)."));

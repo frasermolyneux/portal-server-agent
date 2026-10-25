@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 
 using Microsoft.ApplicationInsights;
+using MX.Platform.Monitoring;
 
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
@@ -32,6 +33,8 @@ public class AgentOrchestrator : BackgroundService
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<AgentOrchestrator> _logger;
     private readonly TelemetryClient _telemetryClient;
+    private readonly AgentProcessHealth _processHealth;
+    private DateTimeOffset _lastProcessPublication;
 
     private readonly ConcurrentDictionary<Guid, AgentEntry> _agents = new();
 
@@ -54,7 +57,8 @@ public class AgentOrchestrator : BackgroundService
         IRemoteOpsSessionCoordinator opsSessionCoordinator,
         ILoggerFactory loggerFactory,
         ILogger<AgentOrchestrator> logger,
-        TelemetryClient telemetryClient)
+        TelemetryClient telemetryClient,
+        AgentProcessHealth? processHealth = null)
     {
         _configProvider = configProvider ?? throw new ArgumentNullException(nameof(configProvider));
         _tailerFactory = tailerFactory ?? throw new ArgumentNullException(nameof(tailerFactory));
@@ -71,6 +75,7 @@ public class AgentOrchestrator : BackgroundService
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _telemetryClient = telemetryClient ?? throw new ArgumentNullException(nameof(telemetryClient));
+        _processHealth = processHealth ?? new AgentProcessHealth();
     }
 
     /// <summary>
@@ -82,7 +87,8 @@ public class AgentOrchestrator : BackgroundService
     /// <summary>
     /// The number of currently running agents.
     /// </summary>
-    public int ActiveAgentCount => _agents.Count;
+    public int ActiveAgentCount => _agents.Values.Count(entry => !entry.Task.IsCompleted);
+    public int? ExpectedAgentCount => _configProvider.Inventory?.Servers.Count(server => server.AgentEnabled);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -263,12 +269,16 @@ public class AgentOrchestrator : BackgroundService
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
 
             var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _coD4xPluginLifecycleService, _banFileWatcher, agentLogger,
-                () => _telemetryClient.TrackEvent(AgentHeartbeatTelemetry.EventName, new Dictionary<string, string>
+                () =>
                 {
-                    ["ServerId"] = server.ServerId.ToString(),
-                    ["GameType"] = server.GameType,
-                    ["SourceMode"] = server.IsCod4xPluginSourceEnabled ? "Plugin" : "Log"
-                }));
+                    _processHealth.Heartbeats[server.ServerId] = DateTimeOffset.UtcNow;
+                    _telemetryClient.TrackEvent(AgentHeartbeatTelemetry.EventName, new Dictionary<string, string>
+                    {
+                        ["ServerId"] = server.ServerId.ToString(),
+                        ["GameType"] = server.GameType,
+                        ["SourceMode"] = server.IsCod4xPluginSourceEnabled ? "Plugin" : "Log"
+                    });
+                });
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
             _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash));
@@ -278,5 +288,11 @@ public class AgentOrchestrator : BackgroundService
         }
 
         _logger.LogInformation("Agent refresh complete: {Count} active agents", _agents.Count);
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastProcessPublication >= ProcessHealthTelemetry.Interval)
+        {
+            _processHealth.Publish(new ProcessHealthTelemetry(_telemetryClient), _configProvider.Inventory, now);
+            _lastProcessPublication = now;
+        }
     }
 }

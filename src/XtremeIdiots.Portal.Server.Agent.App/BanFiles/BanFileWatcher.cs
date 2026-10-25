@@ -45,6 +45,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
     private readonly IAuditLogger _auditLogger;
     private readonly ILogger<BanFileWatcher> _logger;
     private readonly Random _jitterRng;
+    private readonly Observability.AgentProcessHealth _processHealth;
 
     /// <summary>Tags that indicate the line was written by a known system — skip these.</summary>
     private static readonly string[] SkipTags = ["[PBBAN]", "[B3BAN]", "[BANSYNC]", "[EXTERNAL]"];
@@ -84,7 +85,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
         IBanFilePathResolver pathResolver,
         IRemoteOpsSessionCoordinator opsSessionCoordinator,
         IAuditLogger auditLogger,
-        ILogger<BanFileWatcher> logger)
+        ILogger<BanFileWatcher> logger,
+        Observability.AgentProcessHealth? processHealth = null)
     {
         _repositoryClient = repositoryClient ?? throw new ArgumentNullException(nameof(repositoryClient));
         _banFileSource = banFileSource ?? throw new ArgumentNullException(nameof(banFileSource));
@@ -93,6 +95,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
         _auditLogger = auditLogger ?? throw new ArgumentNullException(nameof(auditLogger));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _jitterRng = new Random();
+        _processHealth = processHealth ?? new Observability.AgentProcessHealth();
     }
 
     /// <summary>Constructor overload exposed for tests that need deterministic jitter.</summary>
@@ -103,8 +106,9 @@ public sealed class BanFileWatcher : IBanFileWatcher
         IRemoteOpsSessionCoordinator opsSessionCoordinator,
         IAuditLogger auditLogger,
         ILogger<BanFileWatcher> logger,
-        Random jitterRng)
-        : this(repositoryClient, banFileSource, pathResolver, opsSessionCoordinator, auditLogger, logger)
+        Random jitterRng,
+        Observability.AgentProcessHealth? processHealth = null)
+        : this(repositoryClient, banFileSource, pathResolver, opsSessionCoordinator, auditLogger, logger, processHealth)
     {
         _jitterRng = jitterRng ?? throw new ArgumentNullException(nameof(jitterRng));
     }
@@ -360,6 +364,27 @@ public sealed class BanFileWatcher : IBanFileWatcher
         };
 
         await UpsertStatusAsync(statusDto, context, ct).ConfigureAwait(false);
+        _processHealth.BanChecks.TryGetValue(context.ServerId, out var previousHealth);
+        var pending = centralEtag is not null && ((activePathChanged && pushedAt is null)
+            || !string.Equals(centralEtag, pushedEtag ?? existingMonitor?.LastPushedETag, StringComparison.Ordinal));
+        var lastImport = existingMonitor?.LastImportUtc;
+        var lastPush = pushedAt ?? existingMonitor?.LastPushUtc;
+        DateTimeOffset? importPending = lastImport.HasValue && (!lastPush.HasValue || lastImport > lastPush)
+            ? new DateTimeOffset(lastImport.Value, TimeSpan.Zero) : null;
+        if (previousHealth?.PendingImportSince is { } previousImport
+            && (!lastPush.HasValue || new DateTimeOffset(lastPush.Value, TimeSpan.Zero) < previousImport)
+            && (importPending is null || previousImport < importPending))
+        {
+            importPending = previousImport;
+        }
+        if (detectedBans.Count > 0 && importPending is null)
+        {
+            importPending = new DateTimeOffset(nowUtc, TimeSpan.Zero);
+        }
+        _processHealth.BanChecks[context.ServerId] = new(new DateTimeOffset(nowUtc, TimeSpan.Zero),
+            checkResult == "Success", pending ? centralEtag : null,
+            pending ? previousHealth?.PendingDeliverySince ?? DateTimeOffset.UtcNow : null,
+            importPending);
 
         if (detectedBans.Count == 0)
         {
@@ -384,6 +409,13 @@ public sealed class BanFileWatcher : IBanFileWatcher
     public async Task AcknowledgeImportAsync(Guid serverId, ImportAcknowledgment acknowledgment, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(acknowledgment);
+        if (_processHealth.BanChecks.TryGetValue(serverId, out var health))
+        {
+            _processHealth.BanChecks.TryUpdate(serverId, health with
+            {
+                PendingImportSince = health.PendingImportSince ?? new DateTimeOffset(acknowledgment.ImportUtc, TimeSpan.Zero)
+            }, health);
+        }
 
         var statusDto = new UpsertBanFileMonitorStatusDto(serverId)
         {
@@ -435,12 +467,12 @@ public sealed class BanFileWatcher : IBanFileWatcher
         {
             _logger.LogWarning(ex, "[{Title}] Failed to fetch central ban file for {GameType}",
                 context.Title, context.GameType);
-            return PushOutcome.NoPush(centralEtag: null, centralEtagSeenAt: null);
+            throw;
         }
 
         if (central is null)
         {
-            return PushOutcome.NoPush(centralEtag: null, centralEtagSeenAt: null);
+            throw new InvalidOperationException("No central ban file is available for an enabled synchronisation process.");
         }
 
         await using (central)
@@ -510,7 +542,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
             {
                 _logger.LogWarning(ex, "[{Title}] Failed to re-check remote ban file size before push to {Path}",
                     context.Title, resolvedPath.Path);
-                return PushOutcome.NoPush(central.ETag, nowUtc);
+                throw;
             }
 
             if (currentSizeBeforePush != currentRemoteSize)
@@ -540,7 +572,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
             {
                 _logger.LogWarning(ex, "[{Title}] Failed to push central ban file to {Path}",
                     context.Title, resolvedPath.Path);
-                return PushOutcome.NoPush(central.ETag, nowUtc);
+                throw;
             }
         }
     }

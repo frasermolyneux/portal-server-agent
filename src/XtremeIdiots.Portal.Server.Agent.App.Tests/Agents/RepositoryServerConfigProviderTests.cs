@@ -15,7 +15,6 @@ using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
-using RepositoryGameServerFilter = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameServerFilter;
 using RepositoryGameType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameType;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
@@ -58,6 +57,42 @@ public class RepositoryServerConfigProviderTests
 
     private RepositoryServerConfigProvider CreateProvider() =>
         new(_mockClient.Object, _logger);
+
+    [Fact]
+    public async Task InventoryIncludesLaterPagesDisabledIntentAndUnstartableConfigurations()
+    {
+        var first = Enumerable.Range(0, 50).Select(index => CreateGameServerDto(Guid.NewGuid(),
+            $"Server {index}", RepositoryGameType.CallOfDuty4)).ToArray();
+        var disabled = CreateGameServerDto(Guid.NewGuid(), "Disabled agent", RepositoryGameType.CallOfDuty4);
+        SetProperty(typeof(GameServerDto), disabled, nameof(GameServerDto.AgentEnabled), false);
+        SetupApiSuccess(first);
+        _mockGameServersApi.Setup(api => api.GetGameServers(null, null, null, 50, 50, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CollectionModel<GameServerDto>>(HttpStatusCode.OK,
+                new ApiResponse<CollectionModel<GameServerDto>>(new CollectionModel<GameServerDto>([disabled]))));
+        var provider = CreateProvider();
+        Assert.Empty(await provider.GetAgentEnabledServersAsync(default));
+        Assert.Equal(51, provider.Inventory!.Servers.Count);
+        Assert.Contains(provider.Inventory.Servers, server => server.ServerId == disabled.GameServerId
+            && !server.AgentEnabled && server.BanFileSyncEnabled);
+        _mockConfigApi.Verify(api => api.GetConfigurations(disabled.GameServerId, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RepeatedPaginationFailsBeforeReplacingTheLastCompleteInventory()
+    {
+        SetupApiSuccess([]);
+        var provider = CreateProvider();
+        await provider.GetAgentEnabledServersAsync(default);
+        var previous = provider.Inventory;
+        var repeated = Enumerable.Range(0, 50).Select(index => CreateGameServerDto(Guid.NewGuid(),
+            $"Server {index}", RepositoryGameType.CallOfDuty4)).ToArray();
+        var page = new ApiResult<CollectionModel<GameServerDto>>(HttpStatusCode.OK,
+            new ApiResponse<CollectionModel<GameServerDto>>(new CollectionModel<GameServerDto>(repeated)));
+        _mockGameServersApi.Setup(api => api.GetGameServers(null, null, null, It.IsAny<int>(), 50, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(page);
+        await Assert.ThrowsAsync<InvalidDataException>(() => provider.GetAgentEnabledServersAsync(default));
+        Assert.Same(previous, provider.Inventory);
+    }
 
     [Fact]
     public async Task GetAgentEnabledServersAsync_ReturnsMappedServers()
@@ -579,22 +614,19 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_WhenApiFails_ReturnsEmptyList()
+    public async Task GetAgentEnabledServersAsync_WhenApiFails_DoesNotReplaceInventoryWithAnEmptyFleet()
     {
         // Arrange
         var apiResult = new ApiResult<CollectionModel<GameServerDto>>(HttpStatusCode.InternalServerError);
 
         _mockGameServersApi
-            .Setup(a => a.GetGameServers(null, null, RepositoryGameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
+            .Setup(a => a.GetGameServers(null, null, null, 0, 50, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(apiResult);
 
         var provider = CreateProvider();
 
-        // Act
-        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
-
-        // Assert
-        Assert.Empty(result);
+        await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetAgentEnabledServersAsync(CancellationToken.None));
+        Assert.Null(provider.Inventory);
     }
 
     [Fact]
@@ -670,20 +702,17 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_WhenExceptionThrown_ReturnsEmptyList()
+    public async Task GetAgentEnabledServersAsync_WhenExceptionThrown_DoesNotReturnASuccessfulEmptyFleet()
     {
         // Arrange
         _mockGameServersApi
-            .Setup(a => a.GetGameServers(null, null, RepositoryGameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
+            .Setup(a => a.GetGameServers(null, null, null, 0, 50, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Network error"));
 
         var provider = CreateProvider();
 
-        // Act
-        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
-
-        // Assert
-        Assert.Empty(result);
+        await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetAgentEnabledServersAsync(CancellationToken.None));
+        Assert.Null(provider.Inventory);
     }
 
     [Fact]
@@ -706,7 +735,7 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
-    public async Task GetAgentEnabledServersAsync_WhenConfigApiFails_SkipsServer()
+    public async Task GetAgentEnabledServersAsync_WhenConfigApiFails_PreservesThePreviousInventory()
     {
         // Arrange — config API throws for this server
         var serverId = Guid.NewGuid();
@@ -721,11 +750,8 @@ public class RepositoryServerConfigProviderTests
 
         var provider = CreateProvider();
 
-        // Act
-        var result = await provider.GetAgentEnabledServersAsync(CancellationToken.None);
-
-        // Assert — config API failure means required namespaces are missing, server is skipped
-        Assert.Empty(result);
+        await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetAgentEnabledServersAsync(CancellationToken.None));
+        Assert.Null(provider.Inventory);
     }
 
     [Fact]
@@ -1159,7 +1185,7 @@ public class RepositoryServerConfigProviderTests
         var apiResult = new ApiResult<CollectionModel<GameServerDto>>(HttpStatusCode.OK, apiResponse);
 
         _mockGameServersApi
-            .Setup(a => a.GetGameServers(null, null, RepositoryGameServerFilter.AgentEnabled, 0, 50, null, It.IsAny<CancellationToken>()))
+            .Setup(a => a.GetGameServers(null, null, null, 0, 50, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(apiResult);
     }
 

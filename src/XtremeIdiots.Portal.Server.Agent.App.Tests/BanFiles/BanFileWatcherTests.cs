@@ -13,11 +13,81 @@ using XtremeIdiots.Portal.Repository.Api.Client.Testing;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
+using XtremeIdiots.Portal.Server.Agent.App.Observability;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.BanFiles;
 
 public class BanFileWatcherTests
 {
+    [Fact]
+    public async Task UploadFailureCannotBeRecordedAsSuccessfulNoChange()
+    {
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(client => client.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>())).ReturnsAsync("/mods/test");
+        remote.Setup(client => client.GetFileSizeAsync("/mods/test/ban.txt", It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        remote.Setup(client => client.OpenReadAsync("/mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(""));
+        remote.Setup(client => client.UploadAsync(It.IsAny<Stream>(), "/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("Upload failed."));
+        var health = new AgentProcessHealth();
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object, processHealth: health);
+        await watcher.CheckAsync(context, "test");
+        Assert.False(health.BanChecks[context.ServerId].Success);
+        var rows = await repository.BanFileMonitorsApi.GetBanFileMonitors(null, null, context.ServerId, 0, 1, null);
+        Assert.NotEqual("Success", Assert.Single(rows.Result!.Data!.Items!).LastCheckResult);
+    }
+
+    [Fact]
+    public async Task ANewCentralVersionDoesNotResetAnAlreadyOverdueDelivery()
+    {
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(client => client.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>())).ReturnsAsync("/mods/test");
+        remote.SetupSequence(client => client.GetFileSizeAsync("/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0).ReturnsAsync(1);
+        remote.Setup(client => client.OpenReadAsync("/mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(""));
+        var health = new AgentProcessHealth();
+        var (watcher, context, _) = CreateCheckWatcher(remote.Object, processHealth: health);
+        var now = DateTimeOffset.UtcNow;
+        var oldest = now.AddMinutes(-11);
+        health.BanChecks[context.ServerId] = new(now, true, "previous-etag", oldest, null);
+
+        await watcher.CheckAsync(context, "test");
+
+        Assert.Equal(oldest, health.BanChecks[context.ServerId].PendingDeliverySince);
+        Assert.Equal("degraded", health.Evaluate(new(now, [new(context.ServerId, true, true)]), true, now).Status);
+        remote.Verify(client => client.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RepeatedPublicationAcknowledgementsDoNotResetTheOldestUnconvergedImportDeadline()
+    {
+        const string content = "pending-guid Manual Ban\n";
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(client => client.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>())).ReturnsAsync("/mods/test");
+        remote.Setup(client => client.GetFileSizeAsync("/mods/test/ban.txt", It.IsAny<CancellationToken>())).ReturnsAsync(Encoding.UTF8.GetByteCount(content));
+        remote.Setup(client => client.OpenReadAsync("/mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(content));
+        var health = new AgentProcessHealth();
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object, processHealth: health);
+        var now = DateTimeOffset.UtcNow;
+        var oldest = now.AddMinutes(-21);
+        health.BanChecks[context.ServerId] = new(now, true, null, null, oldest);
+        var monitor = CreateMonitor(context.ServerId, "etag", oldest.UtcDateTime, now.AddHours(-1).UtcDateTime);
+        SetInternalProperty(monitor, nameof(BanFileMonitorDto.RemoteFileSize), (long?)Encoding.UTF8.GetByteCount(content));
+        repository.BanFileMonitorsApi.AddBanFileMonitor(monitor);
+        await watcher.AcknowledgeImportAsync(context.ServerId, new()
+        {
+            ImportUtc = now.UtcDateTime,
+            BanCount = 1,
+            SampleNamesJson = "[\"Manual Ban\"]"
+        });
+        Assert.Equal(oldest, health.BanChecks[context.ServerId].PendingImportSince);
+        await watcher.CheckAsync(context, "test");
+        Assert.Equal(oldest, health.BanChecks[context.ServerId].PendingImportSince);
+        Assert.Equal("degraded", health.Evaluate(new(now, [new(context.ServerId, true, true)]), true, now).Status);
+    }
+
     [Fact]
     public async Task CheckAsync_SftpCanonicalDirectory_ImportsExistingManualBansBeforeAnyPush()
     {
@@ -28,7 +98,8 @@ public class BanFileWatcherTests
             .ReturnsAsync(23);
         remote.Setup(c => c.OpenReadAsync("/Mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => CreateStream("manual-guid Manual Ban\n"));
-        var (watcher, context, repository) = CreateCheckWatcher(remote.Object);
+        var health = new AgentProcessHealth();
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object, processHealth: health);
         var previous = CreateMonitor(context.ServerId, "etag", DateTime.UtcNow.AddDays(-2),
             DateTime.UtcNow.AddDays(-1), "/mods/test/ban.txt");
         SetInternalProperty(previous, nameof(BanFileMonitorDto.RemoteFileSize), (long?)23);
@@ -37,6 +108,7 @@ public class BanFileWatcherTests
         var result = await watcher.CheckAsync(context, "test");
 
         Assert.Single(result.NewBans);
+        Assert.NotNull(health.BanChecks[context.ServerId].PendingImportSince);
         var monitors = await repository.BanFileMonitorsApi.GetBanFileMonitors(null, null, context.ServerId, 0, 1, null);
         Assert.Equal("/Mods/test/ban.txt", Assert.Single(monitors.Result!.Data!.Items!).RemoteFilePath);
         remote.Verify(c => c.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -126,7 +198,8 @@ public class BanFileWatcherTests
     }
 
     private static (BanFileWatcher Watcher, ServerContext Context, FakeRepositoryApiClient Repository) CreateCheckWatcher(
-        IRemoteFileClient remote, string centralContent = "central-guid [BANSYNC]-Player\n")
+        IRemoteFileClient remote, string centralContent = "central-guid [BANSYNC]-Player\n",
+        AgentProcessHealth? processHealth = null)
     {
         var repository = new FakeRepositoryApiClient();
         var context = CreateServerContext(Guid.NewGuid()) with
@@ -139,7 +212,7 @@ public class BanFileWatcherTests
             .Returns(new ResolvedBanFilePath { Path = "/mods/test/ban.txt", ResolvedForMod = "test" });
         return (new BanFileWatcher(repository, CreateBanFileSource("etag", centralContent), resolver.Object,
             new PassThroughRemoteOpsSessionCoordinator(remote), Mock.Of<IAuditLogger>(),
-            NullLogger<BanFileWatcher>.Instance, new ZeroJitterRandom()), context, repository);
+            NullLogger<BanFileWatcher>.Instance, new ZeroJitterRandom(), processHealth), context, repository);
     }
 
     [Fact]
