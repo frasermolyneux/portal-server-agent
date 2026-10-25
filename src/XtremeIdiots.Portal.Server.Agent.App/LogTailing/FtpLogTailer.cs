@@ -260,6 +260,11 @@ public sealed class FtpLogTailer : ILogTailer
     {
         await using var stream = await _client!.OpenRead(path, FtpDataType.Binary, offset, false, ct);
 
+        return await ReadBytesAsync(stream, length, ct);
+    }
+
+    internal static async Task<byte[]> ReadBytesAsync(Stream stream, long length, CancellationToken ct)
+    {
         using var memoryStream = new MemoryStream();
         var buffer = new byte[8192];
         long totalRead = 0;
@@ -274,7 +279,7 @@ public sealed class FtpLogTailer : ILogTailer
                 break;
             }
 
-            memoryStream.Write(buffer, 0, bytesRead);
+            await memoryStream.WriteAsync(buffer.AsMemory(0, bytesRead), CancellationToken.None);
             totalRead += bytesRead;
         }
 
