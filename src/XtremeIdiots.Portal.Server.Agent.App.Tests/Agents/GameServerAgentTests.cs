@@ -87,6 +87,48 @@ public class GameServerAgentTests
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
     [Fact]
+    public async Task RunAsync_QuietPluginServerWithoutMap_ReportsOperationalHeartbeat()
+    {
+        var context = _testContext with { IsCod4xPluginSourceEnabled = true };
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+        var heartbeat = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), () => heartbeat.TrySetResult());
+
+        var running = agent.RunAsync(cts.Token);
+        await heartbeat.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await running;
+
+        _mockPublisher.Verify(p => p.PublishServerStatusAsync(
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<IReadOnlyDictionary<int, PlayerInfo>>(), It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<int?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_LostLease_DoesNotReportHeartbeat()
+    {
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+        _mockServerLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var heartbeats = 0;
+        var agent = new GameServerAgent(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), () => heartbeats++);
+
+        await agent.RunAsync(CancellationToken.None);
+
+        Assert.Equal(0, heartbeats);
+    }
+
+    [Fact]
     public async Task RunAsync_WithSftpPrivateKey_PassesAuthenticationSettingsToTailer()
     {
         var context = _testContext with

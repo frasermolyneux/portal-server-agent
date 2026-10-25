@@ -92,6 +92,13 @@ public sealed class FtpRemoteFileClient : IRemoteFileClient
         _client.Dispose();
     }
 
+    public Task<string> ResolveDirectoryPathAsync(string directoryPath, CancellationToken ct = default)
+        => Task.FromResult(directoryPath);
+
+    public Task<bool> CreateFileIfMissingAsync(Stream content, string path, CancellationToken ct = default)
+        => throw new NotSupportedException(
+            $"Automatic creation of '{path}' requires SFTP exclusive-create support. Restore the missing ban file in the verified game directory.");
+
     private static bool IsFileNotFound(Exception ex)
         => ex.Message.Contains("No such file", StringComparison.OrdinalIgnoreCase)
            || ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase);
