@@ -110,7 +110,7 @@ public class FtpLogTailerAccumulationTests
         Assert.Equal(cancellation.Token, exception.CancellationToken);
         Assert.Equal(cancellation.Token, stream.LastToken);
         Assert.Equal(2, stream.ReadAttempts);
-        Assert.Single(stream.Reads);
+        _ = Assert.Single(stream.Reads);
         Assert.Equal(3, stream.Position);
     }
 
