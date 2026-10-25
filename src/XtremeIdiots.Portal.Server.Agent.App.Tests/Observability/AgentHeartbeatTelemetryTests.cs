@@ -21,6 +21,7 @@ public class AgentHeartbeatTelemetryTests
     [InlineData(true, "", "Audit:", "AgentHeartbeat,Audit:BanFilePushed", "AgentHeartbeat,Audit:BanFilePushed,UnrelatedEvent")]
     [InlineData(true, "ExistingEvent", "", "AgentHeartbeat,ExistingEvent", "AgentHeartbeat,UnrelatedEvent")]
     [InlineData(true, "", "", "AgentHeartbeat,Audit:BanFilePushed,ExistingEvent,UnrelatedEvent", "AgentHeartbeat,UnrelatedEvent")]
+    [InlineData(true, " , , ", " , ", "AgentHeartbeat,Audit:BanFilePushed,ExistingEvent,UnrelatedEvent", "AgentHeartbeat,UnrelatedEvent")]
     [InlineData(false, "", "Audit:", "AgentHeartbeat,Audit:BanFilePushed,ExistingEvent,UnrelatedEvent", "AgentHeartbeat,Audit:BanFilePushed,ExistingEvent,UnrelatedEvent")]
     public void FilteringRetainsHeartbeatAndPreservesConfiguredPolicyAcrossReload(
         bool enabled,

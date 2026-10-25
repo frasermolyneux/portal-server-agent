@@ -9,17 +9,19 @@ internal static class AgentHeartbeatTelemetry
     internal static void ConfigureFiltering(TelemetryFilterOptions options)
     {
         var customEvents = options.CustomEvents;
+        var allowedNames = customEvents.AllowedNames?.Split(
+            ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        var allowedPrefixes = customEvents.AllowedNamePrefixes?.Split(
+            ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
 
         // An empty allow-list deliberately retains all events; do not make it restrictive.
         if (!customEvents.Enabled ||
-            (string.IsNullOrWhiteSpace(customEvents.AllowedNames) &&
-             string.IsNullOrWhiteSpace(customEvents.AllowedNamePrefixes)))
+            (allowedNames.Length == 0 && allowedPrefixes.Length == 0))
         {
             return;
         }
 
-        customEvents.AllowedNames = string.IsNullOrWhiteSpace(customEvents.AllowedNames)
-            ? EventName
-            : $"{customEvents.AllowedNames},{EventName}";
+        customEvents.AllowedNames = string.Join(
+            ',', allowedNames.Append(EventName).Distinct(StringComparer.OrdinalIgnoreCase));
     }
 }
