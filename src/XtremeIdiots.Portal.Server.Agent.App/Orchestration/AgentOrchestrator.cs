@@ -38,7 +38,7 @@ public class AgentOrchestrator : BackgroundService
 
     private readonly ConcurrentDictionary<Guid, AgentEntry> _agents = new();
 
-    private record AgentEntry(Task Task, CancellationTokenSource Cts, string ConfigHash);
+    private record AgentEntry(Task Task, CancellationTokenSource Cts, string ConfigHash, Guid RunId);
 
     internal static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
 
@@ -272,11 +272,12 @@ public class AgentOrchestrator : BackgroundService
             var tailer = _tailerFactory.Create(server);
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
+            var runId = Guid.NewGuid();
 
             var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _coD4xPluginLifecycleService, _banFileWatcher, agentLogger,
                 () =>
                 {
-                    _processHealth.Heartbeats[server.ServerId] = DateTimeOffset.UtcNow;
+                    _processHealth.Heartbeats[server.ServerId] = new(runId, DateTimeOffset.UtcNow);
                     _telemetryClient.TrackEvent(AgentHeartbeatTelemetry.EventName, new Dictionary<string, string>
                     {
                         ["ServerId"] = server.ServerId.ToString(),
@@ -286,7 +287,7 @@ public class AgentOrchestrator : BackgroundService
                 });
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
-            _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash));
+            _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash, runId));
 
             _logger.LogInformation("Started agent for {Title} ({GameType}, {ServerId})",
                 server.Title, server.GameType, server.ServerId);
@@ -300,7 +301,9 @@ public class AgentOrchestrator : BackgroundService
         var now = DateTimeOffset.UtcNow;
         if (now - _lastProcessPublication >= ProcessHealthTelemetry.Interval)
         {
-            _processHealth.Publish(new ProcessHealthTelemetry(_telemetryClient), _configProvider.Inventory, now);
+            var liveRuns = _agents.Where(entry => !entry.Value.Task.IsCompleted)
+                .ToDictionary(entry => entry.Key, entry => entry.Value.RunId);
+            _processHealth.Publish(new ProcessHealthTelemetry(_telemetryClient), _configProvider.Inventory, now, liveRuns);
             _lastProcessPublication = now;
         }
     }

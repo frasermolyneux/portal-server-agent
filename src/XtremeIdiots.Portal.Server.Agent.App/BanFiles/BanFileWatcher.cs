@@ -350,7 +350,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
             LastCheckErrorMessage = checkErrorMessage ?? string.Empty,
             RemoteFilePath = resolvedPath.Path,
             ResolvedForMod = resolvedPath.ResolvedForMod,
-            RemoteFileSize = finalSize,
+            // Only advance the ingestion cursor after the detected tail is durably published.
+            RemoteFileSize = detectedBans.Count > 0 ? lastKnownSize : finalSize,
             LastPushUtc = pushedAt,
             LastPushedETag = (activePathChanged || missingObserved) && pushedEtag is null ? string.Empty : pushedEtag,
             LastPushedSize = pushedSize,
@@ -407,7 +408,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
             {
                 ImportUtc = nowUtc,
                 BanCount = detectedBans.Count,
-                SampleNamesJson = sampleNames
+                SampleNamesJson = sampleNames,
+                RemoteFileSize = finalSize
             }
         };
     }
@@ -427,7 +429,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
         {
             LastImportUtc = acknowledgment.ImportUtc,
             LastImportBanCount = acknowledgment.BanCount,
-            LastImportSampleNames = acknowledgment.SampleNamesJson
+            LastImportSampleNames = acknowledgment.SampleNamesJson,
+            RemoteFileSize = acknowledgment.RemoteFileSize
         };
 
         try

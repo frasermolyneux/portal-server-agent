@@ -27,9 +27,10 @@ public class AgentProcessHealthTests
         var health = new AgentProcessHealth();
         Assert.Equal("unknown", health.Evaluate(inventory, bans, now).Status);
         var assessed = now.AddMinutes(bans ? 16 : 6);
-        health.Heartbeats[healthy] = assessed;
+        health.Heartbeats[healthy] = new(Guid.Empty, assessed);
+        var liveRuns = new Dictionary<Guid, Guid> { [healthy] = Guid.Empty };
         health.BanChecks[healthy] = new(assessed, true, null, null, null);
-        var result = health.Evaluate(inventory with { ObservedAt = assessed }, bans, assessed);
+        var result = health.Evaluate(inventory with { ObservedAt = assessed }, bans, assessed, liveRuns);
         Assert.Equal(("degraded", 2, 1, 1, 0), result);
         health.Heartbeats.Clear();
         health.BanChecks.Clear();
@@ -60,9 +61,31 @@ public class AgentProcessHealthTests
         var id = Guid.NewGuid();
         var health = new AgentProcessHealth();
         var inventory = new AgentInventory(now, [new(id, true, true)]);
-        health.Heartbeats[id] = now;
-        Assert.Equal("operational", health.Evaluate(inventory, false, now).Status);
+        health.Heartbeats[id] = new(Guid.Empty, now);
+        var liveRuns = new Dictionary<Guid, Guid> { [id] = Guid.Empty };
+        Assert.Equal("operational", health.Evaluate(inventory, false, now, liveRuns).Status);
         health.Evaluate(new(now, [new(id, false, false)]), false, now);
         Assert.Equal("unknown", health.Evaluate(inventory, false, now).Status);
+    }
+
+    [Fact]
+    public void StoppedAndRestartedAgentsCannotReuseFreshProgressFromAPreviousRun()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var id = Guid.NewGuid();
+        var oldRun = Guid.NewGuid();
+        var newRun = Guid.NewGuid();
+        var health = new AgentProcessHealth();
+        var inventory = new AgentInventory(now, [new(id, true, false)]);
+        var liveRuns = new Dictionary<Guid, Guid> { [id] = oldRun };
+        health.Heartbeats[id] = new(oldRun, now);
+        Assert.Equal("operational", health.Evaluate(inventory, false, now, liveRuns).Status);
+
+        liveRuns.Clear();
+        Assert.NotEqual("operational", health.Evaluate(inventory, false, now, liveRuns).Status);
+        liveRuns[id] = newRun;
+        Assert.NotEqual("operational", health.Evaluate(inventory, false, now, liveRuns).Status);
+        health.Heartbeats[id] = new(newRun, now);
+        Assert.Equal("operational", health.Evaluate(inventory, false, now, liveRuns).Status);
     }
 }

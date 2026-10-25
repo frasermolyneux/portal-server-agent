@@ -24,7 +24,7 @@ public interface IBanFileWatcher
 
     /// <summary>
     /// Persists the import-status fields (LastImportUtc, LastImportBanCount,
-    /// LastImportSampleNames) after the agent has successfully published the
+    /// LastImportSampleNames) and ingestion offset after the agent has successfully published the
     /// detected bans. Skipped fields are left untouched on the row.
     /// </summary>
     Task AcknowledgeImportAsync(
@@ -65,6 +65,7 @@ public sealed record ImportAcknowledgment
     public required DateTime ImportUtc { get; init; }
     public required int BanCount { get; init; }
     public required string SampleNamesJson { get; init; }
+    public long? RemoteFileSize { get; init; }
 }
 
 /// <summary>
@@ -75,4 +76,3 @@ public sealed record DetectedBanEntry
     public required string PlayerGuid { get; init; }
     public required string PlayerName { get; init; }
 }
-

@@ -20,6 +20,37 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Tests.BanFiles;
 public class BanFileWatcherTests
 {
     [Fact]
+    public async Task UnacknowledgedBansAreRetriedWithoutAdvancingTheirOffsetOrResettingTheirDeadline()
+    {
+        const string content = "pending-guid Manual Ban\n";
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(client => client.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("/mods/test");
+        remote.Setup(client => client.GetFileSizeAsync("/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Encoding.UTF8.GetByteCount(content));
+        remote.Setup(client => client.OpenReadAsync("/mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(content));
+        var health = new AgentProcessHealth();
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object, processHealth: health);
+
+        var first = await watcher.CheckAsync(context, "test");
+        Assert.Single(first.NewBans);
+        var oldest = health.BanChecks[context.ServerId].PendingImportSince;
+        var rows = await repository.BanFileMonitorsApi.GetBanFileMonitors(null, null, context.ServerId, 0, 1, null);
+        Assert.Equal(0, Assert.Single(rows.Result!.Data!.Items!).RemoteFileSize);
+
+        var retry = await watcher.CheckAsync(context, "test");
+        Assert.Equal(first.NewBans, retry.NewBans);
+        Assert.Equal(oldest, health.BanChecks[context.ServerId].PendingImportSince);
+        await watcher.AcknowledgeImportAsync(context.ServerId, retry.ImportAcknowledgment!);
+        rows = await repository.BanFileMonitorsApi.GetBanFileMonitors(null, null, context.ServerId, 0, 1, null);
+        Assert.Equal(Encoding.UTF8.GetByteCount(content), Assert.Single(rows.Result!.Data!.Items!).RemoteFileSize);
+        Assert.Empty((await watcher.CheckAsync(context, "test")).NewBans);
+        Assert.Equal(oldest, health.BanChecks[context.ServerId].PendingImportSince);
+        remote.Verify(client => client.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task UploadFailureCannotBeRecordedAsSuccessfulNoChange()
     {
         var remote = new Mock<IRemoteFileClient>();

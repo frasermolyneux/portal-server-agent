@@ -7,14 +7,16 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Observability;
 internal sealed record BanCheckHealth(DateTimeOffset CheckedAt, bool Success,
     string? PendingETag, DateTimeOffset? PendingDeliverySince, DateTimeOffset? PendingImportSince);
 
+internal sealed record AgentProgress(Guid RunId, DateTimeOffset At);
+
 public sealed class AgentProcessHealth
 {
-    internal ConcurrentDictionary<Guid, DateTimeOffset> Heartbeats { get; } = new();
+    internal ConcurrentDictionary<Guid, AgentProgress> Heartbeats { get; } = new();
     internal ConcurrentDictionary<Guid, BanCheckHealth> BanChecks { get; } = new();
     private readonly Dictionary<(Guid Server, bool Bans), DateTimeOffset> firstExpected = [];
 
     internal (string Status, int Expected, int Healthy, int Failed, int Unknown) Evaluate(
-        AgentInventory? inventory, bool bans, DateTimeOffset now)
+        AgentInventory? inventory, bool bans, DateTimeOffset now, IReadOnlyDictionary<Guid, Guid>? liveRuns = null)
     {
         if (inventory is null || now - inventory.ObservedAt > ProcessHealthTelemetry.Age("freshnessSeconds"))
         {
@@ -50,8 +52,9 @@ public sealed class AgentProcessHealth
             }
             if (!bans)
             {
-                if (Heartbeats.TryGetValue(server.ServerId, out var at)
-                    && now - at <= ProcessHealthTelemetry.Age("agentHeartbeatSeconds"))
+                if (liveRuns is not null && liveRuns.TryGetValue(server.ServerId, out var run)
+                    && Heartbeats.TryGetValue(server.ServerId, out var progress) && progress.RunId == run
+                    && now - progress.At <= ProcessHealthTelemetry.Age("agentHeartbeatSeconds"))
                 {
                     healthy++;
                 }
@@ -90,11 +93,12 @@ public sealed class AgentProcessHealth
             expected.Length, healthy, failed, unknown);
     }
 
-    internal void Publish(ProcessHealthTelemetry telemetry, AgentInventory? inventory, DateTimeOffset now)
+    internal void Publish(ProcessHealthTelemetry telemetry, AgentInventory? inventory, DateTimeOffset now,
+        IReadOnlyDictionary<Guid, Guid> liveRuns)
     {
         foreach (var bans in new[] { false, true })
         {
-            var (Status, Expected, Healthy, Failed, Unknown) = Evaluate(inventory, bans, now);
+            var (Status, Expected, Healthy, Failed, Unknown) = Evaluate(inventory, bans, now, liveRuns);
             telemetry.Publish(bans ? "xi.process.ban-sync.delivery" : "xi.process.server-agent.fleet",
                 Status, now, Expected, Healthy, Failed, Unknown);
         }
