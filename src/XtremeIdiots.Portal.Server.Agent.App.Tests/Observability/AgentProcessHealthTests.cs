@@ -35,7 +35,7 @@ public class AgentProcessHealthTests
         health.Heartbeats.Clear();
         health.BanChecks.Clear();
         Assert.Equal(("degraded", 2, 0, 2, 0),
-            health.Evaluate(inventory with { ObservedAt = assessed }, bans, assessed));
+            health.Evaluate(inventory with { ObservedAt = assessed }, bans, assessed, liveRuns));
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class AgentProcessHealthTests
         var liveRuns = new Dictionary<Guid, Guid> { [id] = Guid.Empty };
         Assert.Equal("operational", health.Evaluate(inventory, false, now, liveRuns).Status);
         health.Evaluate(new(now, [new(id, false, false)]), false, now);
-        Assert.Equal("unknown", health.Evaluate(inventory, false, now).Status);
+        Assert.Equal("unknown", health.Evaluate(inventory, false, now, liveRuns).Status);
     }
 
     [Fact]
