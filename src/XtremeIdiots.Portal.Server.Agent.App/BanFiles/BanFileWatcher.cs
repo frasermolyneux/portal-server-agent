@@ -494,8 +494,10 @@ public sealed class BanFileWatcher : IBanFileWatcher
             var lastPushedEtag = existingMonitor?.LastPushedETag;
             var alreadyPushed = string.Equals(existingMonitor?.RemoteFilePath, resolvedPath.Path, StringComparison.Ordinal)
                 && string.Equals(lastPushedEtag, central.ETag, StringComparison.Ordinal);
+            var needsRepair = alreadyPushed && (currentRemoteSize < central.Length
+                || currentRemoteSize < existingMonitor?.RemoteFileSize);
 
-            if (alreadyPushed && !hasUnreconciledImport)
+            if (alreadyPushed && !needsRepair && !hasUnreconciledImport)
             {
                 _scheduledPushes.TryRemove(laneKey, out _);
                 return PushOutcome.NoPush(central.ETag, nowUtc);
@@ -532,7 +534,7 @@ public sealed class BanFileWatcher : IBanFileWatcher
                     ? existing
                     : new ScheduledPush(central.ETag, nowUtc + RandomJitter()));
 
-            if (nowUtc < scheduled.ScheduledFor)
+            if (!needsRepair && nowUtc < scheduled.ScheduledFor)
             {
                 _logger.LogDebug(
                     "[{Title}] Push deferred to {ScheduledFor:o} (ETag {ETag}, jitter {Remaining})",
@@ -558,6 +560,10 @@ public sealed class BanFileWatcher : IBanFileWatcher
 
             if (currentSizeBeforePush != currentRemoteSize)
             {
+                if (needsRepair)
+                {
+                    throw new IOException("The truncated ban file changed during repair; retry after ingesting its new contents.");
+                }
                 _logger.LogInformation(
                     "[{Title}] Skipping central ban file push to {Path} — remote size changed during fetch ({Expected} -> {Current}); will retry next cycle after manual additions are ingested",
                     context.Title, resolvedPath.Path, currentRemoteSize, currentSizeBeforePush);

@@ -19,6 +19,40 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Tests.BanFiles;
 
 public class BanFileWatcherTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TruncatedFilesAreRepairedEvenWhenTheCentralVersionIsUnchanged(bool uploadFails)
+    {
+        const string content = "central-guid [BANSYNC]-Player\n";
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(client => client.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("/mods/test");
+        remote.Setup(client => client.GetFileSizeAsync("/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        remote.Setup(client => client.OpenReadAsync("/mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(""));
+        if (uploadFails)
+        {
+            remote.Setup(client => client.UploadAsync(It.IsAny<Stream>(), "/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new IOException("Repair upload failed."));
+        }
+        var health = new AgentProcessHealth();
+        var (watcher, context, repository) = CreateCheckWatcher(remote.Object, content, health);
+        var monitor = CreateMonitor(context.ServerId, "etag", DateTime.UtcNow.AddHours(-2),
+            DateTime.UtcNow.AddHours(-1));
+        SetInternalProperty<DateTime?>(monitor, nameof(BanFileMonitorDto.LastImportUtc), null);
+        SetInternalProperty(monitor, nameof(BanFileMonitorDto.RemoteFileSize), (long?)Encoding.UTF8.GetByteCount(content));
+        repository.BanFileMonitorsApi.AddBanFileMonitor(monitor);
+
+        await watcher.CheckAsync(context, "test");
+
+        remote.Verify(client => client.UploadAsync(It.IsAny<Stream>(), "/mods/test/ban.txt", It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal(!uploadFails, health.BanChecks[context.ServerId].Success);
+        Assert.Equal(uploadFails ? "degraded" : "operational",
+            health.Evaluate(new(DateTimeOffset.UtcNow, [new(context.ServerId, true, true)]), true, DateTimeOffset.UtcNow).Status);
+    }
+
     [Fact]
     public async Task UnacknowledgedBansAreRetriedWithoutAdvancingTheirOffsetOrResettingTheirDeadline()
     {
