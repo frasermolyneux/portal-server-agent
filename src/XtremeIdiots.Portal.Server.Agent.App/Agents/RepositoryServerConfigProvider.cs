@@ -13,7 +13,6 @@ using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Shared;
 using RepositoryFileTransportType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.FileTransportType;
-using RepositoryGameServerFilter = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.GameServerFilter;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
@@ -31,6 +30,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
     private readonly IRepositoryApiClient _repositoryClient;
     private readonly ILogger<RepositoryServerConfigProvider> _logger;
+    public AgentInventory? Inventory { get; private set; }
 
     public RepositoryServerConfigProvider(
         IRepositoryApiClient repositoryClient,
@@ -47,24 +47,32 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             var globalAgentNamePrefix = await FetchGlobalAgentNamePrefixAsync(ct);
             var globalCod4xPluginSourceEnabled = await FetchGlobalCod4xPluginEnabledAsync(ct);
 
-            var result = await _repositoryClient.GameServers.V1.GetGameServers(
-                gameTypes: null,
-                gameServerIds: null,
-                filter: RepositoryGameServerFilter.AgentEnabled,
-                skipEntries: 0,
-                takeEntries: 50,
-                order: null,
-                cancellationToken: ct);
-
-            if (!result.IsSuccess || result.Result?.Data?.Items is null)
+            var inventory = new List<GameServerDto>();
+            var identities = new HashSet<Guid>();
+            while (true)
             {
-                _logger.LogError("Failed to retrieve agent-enabled servers from Repository API");
-                return Array.Empty<ServerContext>();
-            }
+                var result = await _repositoryClient.GameServers.V1.GetGameServers(
+                    gameTypes: null, gameServerIds: null, filter: null,
+                    skipEntries: inventory.Count, takeEntries: 50, order: null, cancellationToken: ct);
+                if (!result.IsSuccess || result.Result?.Data?.Items is null)
+                {
+                    throw new HttpRequestException("Failed to retrieve the complete configured server inventory.");
+                }
 
+                var page = result.Result.Data.Items.ToArray();
+                if (page.Length > 50 || page.Any(server => server.GameServerId == Guid.Empty || !identities.Add(server.GameServerId)))
+                {
+                    throw new InvalidDataException("Configured server inventory contains invalid or repeated identities.");
+                }
+                inventory.AddRange(page);
+                if (page.Length < 50)
+                {
+                    break;
+                }
+            }
             var servers = new List<ServerContext>();
 
-            foreach (var dto in result.Result.Data.Items)
+            foreach (var dto in inventory.Where(server => server.AgentEnabled))
             {
                 var configs = await FetchConfigurationsAsync(dto.GameServerId, dto.Title, ct);
 
@@ -249,12 +257,14 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             }
 
             _logger.LogInformation("Loaded {Count} agent-enabled servers from Repository API", servers.Count);
+            Inventory = new(DateTimeOffset.UtcNow, inventory.Select(server =>
+                new ExpectedAgent(server.GameServerId, server.AgentEnabled, server.BanFileSyncEnabled)).ToArray());
             return servers;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Unexpected error fetching servers from Repository API");
-            return Array.Empty<ServerContext>();
+            throw;
         }
     }
 
@@ -368,7 +378,6 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
     /// <summary>
     /// Fetches all configuration namespaces for a server, returning a case-insensitive lookup.
-    /// Returns an empty dictionary on failure so the server will be skipped.
     /// </summary>
     private async Task<Dictionary<string, Dictionary<string, JsonElement>>> FetchConfigurationsAsync(
         Guid serverId, string title, CancellationToken ct)
@@ -380,9 +389,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
             if (!configResult.IsSuccess || configResult.Result?.Data?.Items is null)
             {
-                _logger.LogWarning("No configurations found for server {ServerId} ({Title})",
-                    serverId, title);
-                return new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase);
+                throw new HttpRequestException("Failed to retrieve server configuration.");
             }
 
             return ParseConfigurations(configResult.Result.Data.Items);
@@ -391,7 +398,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         {
             _logger.LogWarning(ex, "Failed to fetch configurations for server {ServerId} ({Title})",
                 serverId, title);
-            return new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase);
+            throw;
         }
     }
 

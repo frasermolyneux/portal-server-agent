@@ -6,11 +6,17 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 /// </summary>
 public interface IServerConfigProvider
 {
+    AgentInventory? Inventory => null;
+
     /// <summary>
     /// Fetch all servers that have agent monitoring enabled.
     /// </summary>
     Task<IReadOnlyList<ServerContext>> GetAgentEnabledServersAsync(CancellationToken ct);
 }
+
+public sealed record ExpectedAgent(Guid ServerId, bool AgentEnabled, bool BanFileSyncEnabled);
+
+public sealed record AgentInventory(DateTimeOffset ObservedAt, IReadOnlyList<ExpectedAgent> Servers);
 
 /// <summary>
 /// Placeholder implementation that returns no servers.
