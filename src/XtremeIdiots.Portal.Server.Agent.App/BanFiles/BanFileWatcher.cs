@@ -367,7 +367,8 @@ public sealed class BanFileWatcher : IBanFileWatcher
         await UpsertStatusAsync(statusDto, context, ct).ConfigureAwait(false);
         _processHealth.BanChecks.TryGetValue(context.ServerId, out var previousHealth);
         var pending = centralEtag is not null && ((activePathChanged && pushedAt is null)
-            || !string.Equals(centralEtag, pushedEtag ?? existingMonitor?.LastPushedETag, StringComparison.Ordinal));
+            || !string.Equals(centralEtag, pushedEtag ?? existingMonitor?.LastPushedETag, StringComparison.Ordinal)
+            || (pushedAt is null && previousHealth?.PendingETag == centralEtag));
         var pendingEtag = centralEtag;
         if (centralEtag is null && pushedAt is null && previousHealth?.PendingETag is { } previousEtag)
         {
@@ -496,6 +497,16 @@ public sealed class BanFileWatcher : IBanFileWatcher
                 && string.Equals(lastPushedEtag, central.ETag, StringComparison.Ordinal);
             var needsRepair = alreadyPushed && (currentRemoteSize < central.Length
                 || currentRemoteSize < existingMonitor?.RemoteFileSize);
+            var requiresDelivery = !alreadyPushed || needsRepair;
+            var observedAt = new DateTimeOffset(nowUtc, TimeSpan.Zero);
+            _processHealth.BanChecks.AddOrUpdate(context.ServerId,
+                _ => new(observedAt, false, requiresDelivery ? central.ETag : null,
+                    requiresDelivery ? observedAt : null, null),
+                (_, previous) => previous with
+                {
+                    PendingETag = requiresDelivery ? central.ETag : null,
+                    PendingDeliverySince = requiresDelivery ? previous.PendingDeliverySince ?? observedAt : null
+                });
 
             if (alreadyPushed && !needsRepair && !hasUnreconciledImport)
             {

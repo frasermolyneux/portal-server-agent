@@ -103,6 +103,37 @@ public class BanFileWatcherTests
     }
 
     [Fact]
+    public async Task FailedFirstPushPreservesItsObservedVersionAndDeadlineAcrossLaterDeferral()
+    {
+        var remote = new Mock<IRemoteFileClient>();
+        remote.Setup(client => client.ResolveDirectoryPathAsync("/mods/test", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("/mods/test");
+        remote.SetupSequence(client => client.GetFileSizeAsync("/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0).ReturnsAsync(0).ReturnsAsync(0).ReturnsAsync(1);
+        remote.Setup(client => client.OpenReadAsync("/mods/test/ban.txt", 0, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => CreateStream(""));
+        remote.Setup(client => client.UploadAsync(It.IsAny<Stream>(), "/mods/test/ban.txt", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("Initial upload failed."));
+        var health = new AgentProcessHealth();
+        var (watcher, context, _) = CreateCheckWatcher(remote.Object, processHealth: health);
+
+        await watcher.CheckAsync(context, "test");
+        var failed = health.BanChecks[context.ServerId];
+        Assert.False(failed.Success);
+        Assert.Equal("etag", failed.PendingETag);
+        Assert.NotNull(failed.PendingDeliverySince);
+
+        await watcher.CheckAsync(context, "test");
+        var deferred = health.BanChecks[context.ServerId];
+        Assert.True(deferred.Success);
+        Assert.Equal(failed.PendingDeliverySince, deferred.PendingDeliverySince);
+        Assert.Equal(failed.PendingETag, deferred.PendingETag);
+        var assessed = failed.CheckedAt.AddMinutes(11);
+        Assert.Equal("degraded", health.Evaluate(new(assessed, [new(context.ServerId, true, true)]), true, assessed).Status);
+        remote.Verify(client => client.UploadAsync(It.IsAny<Stream>(), "/mods/test/ban.txt", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task AnUnacknowledgedPendingImportRequiresCanonicalCoverageBeforeAnyPush()
     {
         const string content = "pending-guid Manual Ban\n";
