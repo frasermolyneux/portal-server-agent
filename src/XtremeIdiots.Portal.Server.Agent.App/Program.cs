@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 using MX.Observability.ApplicationInsights.AspNetCore;
+using MX.Platform.Monitoring;
 using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
@@ -69,7 +70,13 @@ builder.Services.AddApplicationInsightsTelemetry(new ApplicationInsightsServiceO
     EnableAdaptiveSampling = false,
 });
 
-builder.Services.AddObservability(AgentHeartbeatTelemetry.ConfigureFiltering);
+builder.Services.AddObservability(options =>
+{
+    AgentHeartbeatTelemetry.ConfigureFiltering(options);
+    ProcessHealthTelemetry.ConfigureFiltering(options);
+});
+builder.Services.AddSingleton<ProcessHealthTelemetry>();
+builder.Services.AddSingleton<AgentProcessHealth>();
 builder.Services.AddServiceProfiler();
 
 // Repository API client

@@ -18,6 +18,13 @@ publishes server events to Azure Service Bus.
 
 ## Boundaries
 
+- `src/contract/` mirrors platform-monitoring's process-health policy/helper; update
+  it with the strategic contract-sync utility, not independently. Aggregate health
+  must use complete configured intent and actual progress, not game-event volume
+  or successful publication alone. Missing individual agents contribute Degraded;
+  stale/unavailable inventory is Unknown. Preserve bounded five-minute snapshots
+  without public server identifiers or additional paid per-server alert series.
+
 - This service is the event producer. Service Bus processing belongs in
   `portal-server-events`.
 - Preserve the per-server lifecycle: configuration refresh starts, restarts, or

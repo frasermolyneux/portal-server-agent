@@ -38,11 +38,50 @@ public class AgentOrchestratorTests
             .ReturnsAsync(true);
     }
 
-    private AgentOrchestrator CreateOrchestrator() =>
+    private AgentOrchestrator CreateOrchestrator(Microsoft.ApplicationInsights.TelemetryClient? telemetry = null) =>
         new(_mockConfigProvider.Object, _mockTailerFactory.Object, _mockParserFactory.Object,
             _mockPublisher.Object, _mockOffsetStore.Object, _mockServerLock.Object,
             _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _mockOpsSessionCoordinator.Object, _loggerFactory, _logger,
-            new Microsoft.ApplicationInsights.TelemetryClient(new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration { DisableTelemetry = true }));
+            telemetry ?? new Microsoft.ApplicationInsights.TelemetryClient(new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration { DisableTelemetry = true }));
+
+    [Fact]
+    public async Task FailedInventoryRefreshStillPublishesUnknownProcessFeeds()
+    {
+        _mockConfigProvider.Setup(provider => provider.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Inventory unavailable."));
+        var channel = new Mock<Microsoft.ApplicationInsights.Channel.ITelemetryChannel>();
+        var states = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Setup(target => target.Send(It.IsAny<Microsoft.ApplicationInsights.Channel.ITelemetry>()))
+            .Callback<Microsoft.ApplicationInsights.Channel.ITelemetry>(item =>
+            {
+                if (item is Microsoft.ApplicationInsights.DataContracts.EventTelemetry { Name: "ProcessHealthSnapshot" } snapshot)
+                {
+                    states.Enqueue(snapshot.Properties["status"]);
+                    if (states.Count == 2)
+                    {
+                        published.TrySetResult();
+                    }
+                }
+            });
+        using var configuration = new Microsoft.ApplicationInsights.Extensibility.TelemetryConfiguration
+        {
+            ConnectionString = "InstrumentationKey=11111111-1111-1111-1111-111111111111",
+            TelemetryChannel = channel.Object
+        };
+        using var orchestrator = CreateOrchestrator(new(configuration));
+        try
+        {
+            await orchestrator.StartAsync(default);
+            await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(2, states.Count);
+            Assert.All(states, state => Assert.Equal("unknown", state));
+        }
+        finally
+        {
+            await orchestrator.StopAsync(default);
+        }
+    }
 
     [Fact]
     public async Task RefreshAgents_WithNoServers_StartsNoAgents()

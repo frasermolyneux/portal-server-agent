@@ -20,6 +20,16 @@
 
 Portal Server Agent is a .NET 10 worker that tails game-server logs over FTP or SFTP and publishes structured events to Azure Service Bus. It runs in Azure Container Apps and coordinates per-server agents for log parsing, ban-file monitoring, status publication, and RCON-backed vote handling. The produced events are consumed by downstream processing components in the portal event pipeline. Infrastructure and deployment are managed through Terraform and GitHub Actions.
 
+## Process health
+
+The monitoring-owned contract mirrored under `src/contract/` publishes bounded
+five-minute fleet and ban-delivery snapshots. Expected agents come from the full
+paginated inventory, including invalid configurations and disabled-agent ban-sync
+intent. Heartbeats prove loop progress; ban checks additionally report transport
+failure, overdue delivery and import convergence. Publication acknowledgement is
+not database persistence. Individual server failures remain aggregate Degraded;
+operational per-server detail stays in Portal. Missing or stale inventory is Unknown.
+
 ## Contributing
 
 Please read the [contributing](CONTRIBUTING.md) guidance; this is a learning and development project.

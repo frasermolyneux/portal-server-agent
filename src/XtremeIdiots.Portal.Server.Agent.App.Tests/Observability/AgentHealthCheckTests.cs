@@ -68,13 +68,19 @@ public class AgentHealthCheckTests
         Assert.Contains("not running", result.Description);
     }
 
-    [Fact]
-    public async Task CheckHealthAsync_WhenOrchestratorRunningWithNoAgents_ReturnsHealthy()
+    [Theory]
+    [InlineData(0, HealthStatus.Healthy)]
+    [InlineData(1, HealthStatus.Unhealthy)]
+    [InlineData(-1, HealthStatus.Degraded)]
+    public async Task CheckHealthAsync_WhenNoAgentsRun_UsesTheExpectedInventory(int expected, HealthStatus status)
     {
         // Arrange — start the orchestrator to set IsRunning = true, with no servers configured
         var mockConfigProvider = new Mock<IServerConfigProvider>();
         mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<ServerContext>());
+        mockConfigProvider.SetupGet(provider => provider.Inventory).Returns(expected < 0 ? null :
+            new AgentInventory(DateTimeOffset.UtcNow, Enumerable.Range(0, expected)
+                .Select(_ => new ExpectedAgent(Guid.NewGuid(), true, true)).ToArray()));
 
         var orchestrator = new AgentOrchestrator(
             mockConfigProvider.Object,
@@ -111,8 +117,8 @@ public class AgentHealthCheckTests
                 });
 
             // Assert
-            Assert.Equal(HealthStatus.Healthy, result.Status);
-            Assert.Contains("0 active agent(s)", result.Description);
+            Assert.Equal(status, result.Status);
+            Assert.Contains(expected < 0 ? "unavailable" : expected == 0 ? "0 active agent(s)" : "No configured agent", result.Description);
         }
         finally
         {
@@ -141,6 +147,7 @@ public class AgentHealthCheckTests
                 QueryPort = 28960,
                 RconPassword = "secret",
                 FtpEnabled = true,
+                FileTransportEnabled = true,
                 RconEnabled = true,
                 BanFileSyncEnabled = true,
                 BanFileRootPath = "/",
@@ -151,6 +158,8 @@ public class AgentHealthCheckTests
         var mockConfigProvider = new Mock<IServerConfigProvider>();
         mockConfigProvider.Setup(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(servers);
+        mockConfigProvider.SetupGet(provider => provider.Inventory).Returns(new AgentInventory(DateTimeOffset.UtcNow,
+            servers.Select(server => new ExpectedAgent(server.ServerId, true, true)).ToArray()));
 
         var mockTailer = new Mock<ILogTailer>();
         mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
@@ -177,6 +186,10 @@ public class AgentHealthCheckTests
             .ReturnsAsync(true);
         mockServerLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
+        var mockSyncService = new Mock<IServerSyncService>();
+        mockSyncService.Setup(service => service.SyncAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(),
+                It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<PlayerIpResolvedEvent>());
 
         var orchestrator = new AgentOrchestrator(
             mockConfigProvider.Object,
@@ -185,7 +198,7 @@ public class AgentHealthCheckTests
             new Mock<IEventPublisher>().Object,
             mockOffsetStore.Object,
             mockServerLock.Object,
-            new Mock<IServerSyncService>().Object,
+            mockSyncService.Object,
             new Mock<IRconBroadcastService>().Object,
             new Mock<ICod4xCvarProbe>().Object,
             new Mock<ICoD4xPluginLifecycleService>().Object,
@@ -200,8 +213,7 @@ public class AgentHealthCheckTests
         {
             await orchestrator.StartAsync(cts.Token);
 
-            // Wait for orchestrator startup.
-            await WaitForConditionAsync(() => orchestrator.IsRunning, TimeSpan.FromSeconds(5));
+            await WaitForConditionAsync(() => orchestrator.IsRunning && orchestrator.ActiveAgentCount == 1, TimeSpan.FromSeconds(5));
 
             var healthCheck = new AgentHealthCheck(orchestrator);
 
