@@ -99,7 +99,7 @@ public class AgentOrchestratorRefreshIntegrationTests
         Assert.True(cancellationSource.IsCancellationRequested);
         var callbackException = Assert.IsType<InvalidOperationException>(Assert.Single(exception.InnerExceptions));
         Assert.Equal("Cancellation callback failed.", callbackException.Message);
-        Assert.Equal(1, orchestrator.ActiveAgentCount);
+        Assert.Same(cancellationSource, GetAgentCancellationSource(orchestrator, server.ServerId));
         sessionCoordinator.Verify(
             c => c.CloseServerSessionAsync(server.ServerId, It.IsAny<CancellationToken>()),
             Times.Never);
