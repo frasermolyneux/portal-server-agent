@@ -21,6 +21,7 @@ jobs:
     outputs:
       src: ${{ steps.changes.outputs.src }}
       terraform: ${{ steps.changes.outputs.terraform }}
+      workload: ${{ steps.changes.outputs.workload }}
     steps:
       - id: changes
         uses: frasermolyneux/actions/detect-changes@8e7ca58b7821e01192ee4f23756c55e4ee057496
@@ -28,9 +29,12 @@ jobs:
           filters: |
             src:src/**
             terraform:terraform/**
-
+            workload:src/**,terraform/**
   terraform-state-check-dev:
-    if: github.event_name != 'schedule'
+    needs: [detect-changes]
+    if: |
+      (github.event_name != 'schedule') &&
+      (github.event_name != 'push' || needs.detect-changes.outputs.workload == 'true')
     permissions:
       contents: read
       id-token: write
@@ -57,7 +61,9 @@ jobs:
     needs:
       - detect-changes
       - terraform-state-check-dev
-    if: "!failure() && !cancelled() && (needs.detect-changes.outputs.src == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true')"
+    if: |
+      (!failure() && !cancelled() && (needs.detect-changes.outputs.src == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true')) &&
+      (github.event_name != 'push' || needs.detect-changes.outputs.workload == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: frasermolyneux/actions/dotnet-ci@43f7ef20fa9a18564aee2860c8ade81e13715654 # dotnet-ci/v2.1
@@ -235,7 +241,8 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-prd
     if: |
-      !failure() && !cancelled()
+      (!failure() && !cancelled()) &&
+      (github.event_name != 'push' || needs.detect-changes.outputs.workload == 'true')
     steps:
       - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v2.0.0
         if: needs.detect-changes.outputs.terraform == 'true'
@@ -299,7 +306,8 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-prd
     if: |
-      !failure() && !cancelled() 
+      (!failure() && !cancelled()) &&
+      (github.event_name != 'push' || needs.detect-changes.outputs.workload == 'true')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
