@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'src/**'
+      - 'terraform/**'
   workflow_dispatch:
   schedule:
     - cron: "0 5 * * 3"
@@ -299,7 +302,7 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-prd
     if: |
-      !failure() && !cancelled() 
+      !failure() && !cancelled()
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
