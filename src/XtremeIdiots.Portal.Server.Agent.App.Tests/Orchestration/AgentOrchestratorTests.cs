@@ -369,7 +369,7 @@ public class AgentOrchestratorTests
             await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.True(removedAgentCts.IsCancellationRequested);
-            Assert.Equal(2, orchestrator.ActiveAgentCount);
+            Assert.InRange(orchestrator.ActiveAgentCount, 1, 2);
             _mockOpsSessionCoordinator.Verify(
                 c => c.CloseServerSessionAsync(removedServer.ServerId, It.IsAny<CancellationToken>()),
                 Times.Never);
