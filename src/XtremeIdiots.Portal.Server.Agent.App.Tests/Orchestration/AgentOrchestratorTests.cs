@@ -370,6 +370,7 @@ public class AgentOrchestratorTests
 
             Assert.True(removedAgentCts.IsCancellationRequested);
             Assert.InRange(orchestrator.ActiveAgentCount, 1, 2);
+            Assert.Same(removedAgentCts, GetAgentCancellationSource(orchestrator, removedServer.ServerId));
             _mockOpsSessionCoordinator.Verify(
                 c => c.CloseServerSessionAsync(removedServer.ServerId, It.IsAny<CancellationToken>()),
                 Times.Never);
