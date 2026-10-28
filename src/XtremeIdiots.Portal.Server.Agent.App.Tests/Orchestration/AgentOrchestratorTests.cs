@@ -326,6 +326,77 @@ public class AgentOrchestratorTests
     }
 
     [Fact]
+    public async Task RefreshAgents_RemovedAgentWaitsForCancellationCallbacksBeforeClosingSession()
+    {
+        var removedServer = CreateTestServerContext("Removed Server");
+        var unchangedServer = CreateTestServerContext("Unchanged Server");
+        _ = _mockConfigProvider.SetupSequence(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([removedServer, unchangedServer])
+            .ReturnsAsync([unchangedServer])
+            .ReturnsAsync([unchangedServer]);
+
+        SetupFactoryMocks();
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompleted = false;
+        _ = _mockOpsSessionCoordinator
+            .Setup(c => c.CloseServerSessionAsync(removedServer.ServerId, It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                Assert.True(callbackCompleted);
+                return Task.CompletedTask;
+            });
+
+        var orchestrator = CreateOrchestrator();
+        await orchestrator.RefreshAgentsAsync(CancellationToken.None);
+        var removedAgentCts = GetAgentCancellationSource(orchestrator, removedServer.ServerId);
+        _ = removedAgentCts.Token.Register(() =>
+        {
+            _ = callbackEntered.TrySetResult();
+            try
+            {
+                releaseCallback.Task.GetAwaiter().GetResult();
+            }
+            finally
+            {
+                callbackCompleted = true;
+            }
+        });
+
+        var removalRefresh = Task.Run(() => orchestrator.RefreshAgentsAsync(CancellationToken.None));
+        try
+        {
+            await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(removedAgentCts.IsCancellationRequested);
+            Assert.InRange(orchestrator.ActiveAgentCount, 1, 2);
+            Assert.Same(removedAgentCts, GetAgentCancellationSource(orchestrator, removedServer.ServerId));
+            _mockOpsSessionCoordinator.Verify(
+                c => c.CloseServerSessionAsync(removedServer.ServerId, It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+        finally
+        {
+            _ = releaseCallback.TrySetResult();
+        }
+
+        await removalRefresh;
+
+        Assert.Equal(1, orchestrator.ActiveAgentCount);
+        _mockOpsSessionCoordinator.Verify(
+            c => c.CloseServerSessionAsync(removedServer.ServerId, It.IsAny<CancellationToken>()),
+            Times.Once);
+        Assert.False(GetAgentCancellationSource(orchestrator, unchangedServer.ServerId).IsCancellationRequested);
+
+        await orchestrator.RefreshAgentsAsync(CancellationToken.None);
+        _mockOpsSessionCoordinator.Verify(
+            c => c.CloseServerSessionAsync(removedServer.ServerId, It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        await orchestrator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task RefreshAgents_RestartsAgentWhenConfigHashChanges()
     {
         // Arrange
@@ -425,6 +496,16 @@ public class AgentOrchestratorTests
         BanFileRootPath = "/",
         ConfigHash = $"hash-{title}"
     };
+
+    private static CancellationTokenSource GetAgentCancellationSource(AgentOrchestrator orchestrator, Guid serverId)
+    {
+        var agents = typeof(AgentOrchestrator)
+            .GetField("_agents", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(orchestrator)!;
+        var arguments = new object?[] { serverId, null };
+        Assert.True((bool)agents.GetType().GetMethod("TryGetValue")!.Invoke(agents, arguments)!);
+        return (CancellationTokenSource)arguments[1]!.GetType().GetProperty("Cts")!.GetValue(arguments[1])!;
+    }
 
     private void SetupFactoryMocks()
     {
