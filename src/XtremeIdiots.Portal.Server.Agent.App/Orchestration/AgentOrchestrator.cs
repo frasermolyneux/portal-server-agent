@@ -183,7 +183,7 @@ public class AgentOrchestrator : BackgroundService
             if (!serverIds.Contains(serverId))
             {
                 _logger.LogInformation("Stopping agent for removed server {ServerId}", serverId);
-                entry.Cts.Cancel();
+                await entry.Cts.CancelAsync().ConfigureAwait(false);
                 if (_agents.TryRemove(serverId, out _))
                 {
                     await _opsSessionCoordinator.CloseServerSessionAsync(serverId, ct).ConfigureAwait(false);
