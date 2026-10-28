@@ -45,31 +45,31 @@ public class AgentOrchestratorRefreshIntegrationTests
             ConfigHash = "hash-removed"
         };
         var configProvider = new Mock<IServerConfigProvider>();
-        configProvider.SetupSequence(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
+        _ = configProvider.SetupSequence(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([server])
-            .ReturnsAsync(Array.Empty<ServerContext>());
+            .ReturnsAsync([]);
 
         var tailerFactory = new Mock<ILogTailerFactory>();
         var tailer = new Mock<ILogTailer>();
-        tailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+        _ = tailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
-        tailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+        _ = tailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
             .Returns(async (CancellationToken ct) =>
             {
                 await Task.Delay(10, ct);
-                return (IReadOnlyList<string>)Array.Empty<string>();
+                return [];
             });
-        tailerFactory.Setup(f => f.Create(It.IsAny<ServerContext>())).Returns(tailer.Object);
+        _ = tailerFactory.Setup(f => f.Create(It.IsAny<ServerContext>())).Returns(tailer.Object);
 
         var parserFactory = new Mock<ILogParserFactory>();
-        parserFactory.Setup(f => f.Create(It.IsAny<string>())).Returns(new Mock<ILogParser>().Object);
+        _ = parserFactory.Setup(f => f.Create(It.IsAny<string>())).Returns(new Mock<ILogParser>().Object);
         var offsetStore = new Mock<IOffsetStore>();
-        offsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+        _ = offsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
         var serverLock = new Mock<IServerLock>();
-        serverLock.Setup(l => l.TryAcquireAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+        _ = serverLock.Setup(l => l.TryAcquireAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        serverLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+        _ = serverLock.Setup(l => l.RenewAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var sessionCoordinator = new Mock<IRemoteOpsSessionCoordinator>();
         var orchestrator = new AgentOrchestrator(
@@ -91,7 +91,7 @@ public class AgentOrchestratorRefreshIntegrationTests
 
         await orchestrator.RefreshAgentsAsync(CancellationToken.None);
         var cancellationSource = GetAgentCancellationSource(orchestrator, server.ServerId);
-        cancellationSource.Token.Register(() => throw new InvalidOperationException("Cancellation callback failed."));
+        _ = cancellationSource.Token.Register(() => throw new InvalidOperationException("Cancellation callback failed."));
 
         var exception = await Assert.ThrowsAsync<AggregateException>(
             () => orchestrator.RefreshAgentsAsync(CancellationToken.None));

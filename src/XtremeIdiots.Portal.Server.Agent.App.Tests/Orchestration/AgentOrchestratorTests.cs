@@ -330,16 +330,16 @@ public class AgentOrchestratorTests
     {
         var removedServer = CreateTestServerContext("Removed Server");
         var unchangedServer = CreateTestServerContext("Unchanged Server");
-        _mockConfigProvider.SetupSequence(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new[] { removedServer, unchangedServer })
-            .ReturnsAsync(new[] { unchangedServer })
-            .ReturnsAsync(new[] { unchangedServer });
+        _ = _mockConfigProvider.SetupSequence(c => c.GetAgentEnabledServersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([removedServer, unchangedServer])
+            .ReturnsAsync([unchangedServer])
+            .ReturnsAsync([unchangedServer]);
 
         SetupFactoryMocks();
         var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var callbackCompleted = false;
-        _mockOpsSessionCoordinator
+        _ = _mockOpsSessionCoordinator
             .Setup(c => c.CloseServerSessionAsync(removedServer.ServerId, It.IsAny<CancellationToken>()))
             .Returns(() =>
             {
@@ -350,9 +350,9 @@ public class AgentOrchestratorTests
         var orchestrator = CreateOrchestrator();
         await orchestrator.RefreshAgentsAsync(CancellationToken.None);
         var removedAgentCts = GetAgentCancellationSource(orchestrator, removedServer.ServerId);
-        removedAgentCts.Token.Register(() =>
+        _ = removedAgentCts.Token.Register(() =>
         {
-            callbackEntered.TrySetResult();
+            _ = callbackEntered.TrySetResult();
             try
             {
                 releaseCallback.Task.GetAwaiter().GetResult();
@@ -376,7 +376,7 @@ public class AgentOrchestratorTests
         }
         finally
         {
-            releaseCallback.TrySetResult();
+            _ = releaseCallback.TrySetResult();
         }
 
         await removalRefresh;
