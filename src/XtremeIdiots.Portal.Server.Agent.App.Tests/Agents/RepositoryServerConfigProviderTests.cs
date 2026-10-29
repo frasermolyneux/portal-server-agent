@@ -82,7 +82,7 @@ public class RepositoryServerConfigProviderTests
     {
         SetupApiSuccess([]);
         var provider = CreateProvider();
-        await provider.GetAgentEnabledServersAsync(default);
+        Assert.Empty(await provider.GetAgentEnabledServersAsync(default));
         var previous = provider.Inventory;
         var repeated = Enumerable.Range(0, 50).Select(index => CreateGameServerDto(Guid.NewGuid(),
             $"Server {index}", RepositoryGameType.CallOfDuty4)).ToArray();
