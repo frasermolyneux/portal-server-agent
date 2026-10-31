@@ -49,3 +49,5 @@ skip-check:
   - CKV_AZURE_65
   - CKV_AZURE_66
   - CKV_AZURE_24
+  # Approved repository exceptions
+  - CKV_SECRET_6 # The matching values are inert placeholders in JSON test fixtures under src/XtremeIdiots.Portal.Server.Agent.App.Tests/Agents/Fixtures and are never used as credentials.
