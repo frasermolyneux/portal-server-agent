@@ -164,7 +164,7 @@ public sealed class SftpLogTailer : ILogTailer
                     break;
                 }
 
-                memoryStream.Write(buffer, 0, bytesRead);
+                await memoryStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct).ConfigureAwait(false);
                 totalRead += bytesRead;
             }
 
