@@ -12,7 +12,7 @@ using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Publishing;
 
-public class ServiceBusEventPublisherTests
+public class ServiceBusEventPublisherTests : IAsyncLifetime
 {
     private static readonly Guid ServerId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     private const string GameType = "CallOfDuty4";
@@ -35,6 +35,10 @@ public class ServiceBusEventPublisherTests
             _clientMock.Object,
             NullLogger<ServiceBusEventPublisher>.Instance);
     }
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync() => await _publisher.DisposeAsync();
 
     [Fact]
     public async Task PublishAsync_PlayerConnected_SendsToCorrectQueue()
