@@ -46,13 +46,19 @@ public class SftpLogTailerTests
     public async Task PollAsync_WhenCancelledAfterReadingChunk_DoesNotAdvanceOffset()
     {
         using var cancellation = new CancellationTokenSource();
+        var readCount = 0;
         var stream = new TestLogStream(buffer =>
         {
+            if (readCount++ > 0)
+            {
+                return ValueTask.FromResult(0);
+            }
+
             var chunk = "line\n"u8;
             chunk.CopyTo(buffer.Span);
             cancellation.Cancel();
             return ValueTask.FromResult(chunk.Length);
-        });
+        }, enforceCancellation: false);
         var tailer = CreateTailer(stream);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tailer.PollAsync(cancellation.Token));
@@ -231,14 +237,19 @@ public class SftpLogTailerTests
 
     private sealed class TestLogStream(
         Func<Memory<byte>, ValueTask<int>> readAsync,
-        Func<ValueTask>? disposeAsync = null) : MemoryStream
+        Func<ValueTask>? disposeAsync = null,
+        bool enforceCancellation = true) : MemoryStream
     {
         public bool IsDisposed => !CanRead;
         public int DisposeCount { get; private set; }
 
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (enforceCancellation)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
             return readAsync(buffer);
         }
 
