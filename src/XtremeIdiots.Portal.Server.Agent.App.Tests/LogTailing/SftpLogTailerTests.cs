@@ -46,18 +46,17 @@ public class SftpLogTailerTests
     public async Task PollAsync_WhenCancelledAfterReadingChunk_DoesNotAdvanceOffset()
     {
         using var cancellation = new CancellationTokenSource();
-        var readCount = 0;
+        var bytesRead = 0;
         var stream = new TestLogStream(buffer =>
         {
-            if (readCount++ > 0)
+            buffer.Span.Fill((byte)'a');
+            bytesRead += buffer.Length;
+            if (bytesRead == SftpLogTailer.MaxBytesPerPoll)
             {
-                return ValueTask.FromResult(0);
+                cancellation.Cancel();
             }
 
-            var chunk = "line\n"u8;
-            chunk.CopyTo(buffer.Span);
-            cancellation.Cancel();
-            return ValueTask.FromResult(chunk.Length);
+            return ValueTask.FromResult(buffer.Length);
         }, enforceCancellation: false);
         var tailer = CreateTailer(stream);
 
