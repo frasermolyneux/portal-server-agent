@@ -25,7 +25,7 @@ jobs:
       test_report: ${{ steps.shared-tests-1.outputs.test-report }}
     steps:
       - id: shared-tests-1
-        uses: frasermolyneux/actions/dotnet-ci@43f7ef20fa9a18564aee2860c8ade81e13715654 # dotnet-ci/v2.1
+        uses: frasermolyneux/actions/dotnet-ci@a6271c58ed8e8f3b6fbdb738ac7566863fdc38c8 # dotnet-ci/v2.1.2
         with:
           test-reporting: "true"
           dotnet-version: 10.0.x
@@ -47,8 +47,9 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: frasermolyneux/actions/terraform-plan@terraform-plan/v2.0.1
+      - uses: frasermolyneux/actions/terraform-plan@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-plan/v5.0.0
         with:
+          terraform-version: "1.17.1"
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/dev.tfvars"
           terraform-backend-file: "backends/dev.backend.hcl"
@@ -68,8 +69,9 @@ jobs:
     concurrency:
       group: ${{ github.repository }}-dev
     steps:
-      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v2.0.1
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-plan-and-apply/v5.0.0
         with:
+          terraform-version: "1.17.1"
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/dev.tfvars"
           terraform-backend-file: "backends/dev.backend.hcl"
@@ -198,8 +200,9 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: frasermolyneux/actions/terraform-plan@terraform-plan/v2.0.1
+      - uses: frasermolyneux/actions/terraform-plan@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-plan/v5.0.0
         with:
+          terraform-version: "1.17.1"
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/prd.tfvars"
           terraform-backend-file: "backends/prd.backend.hcl"
@@ -218,6 +221,6 @@ jobs:
       group: test-results-${{ github.repository }}-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
-      - uses: frasermolyneux/actions/test-results-summary@43f7ef20fa9a18564aee2860c8ade81e13715654 # test-results-summary/v1
+      - uses: frasermolyneux/actions/test-results-summary@28f6613d746ec836d245f10259ea124897d8254a # test-results-summary/v1.1.0
         with:
           jobs: ${{ toJSON(needs) }}
