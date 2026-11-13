@@ -29,7 +29,7 @@ public class CoD4xCommandPowerReconciliationServiceTests
 
     private readonly Guid _serverId = Guid.NewGuid();
 
-    private CoD4xCommandPowerReconciliationService CreateService()
+    private CoD4xCommandPowerReconciliationService CreateService(IServerConfigProvider? configProvider = null)
     {
         _mockRepositoryApiClient.Setup(x => x.GlobalConfigurations).Returns(_mockVersionedGlobalConfigurationsApi.Object);
         _mockVersionedGlobalConfigurationsApi.Setup(x => x.V1).Returns(_mockGlobalConfigurationsApi.Object);
@@ -40,7 +40,43 @@ public class CoD4xCommandPowerReconciliationServiceTests
         return new CoD4xCommandPowerReconciliationService(
             _mockRepositoryApiClient.Object,
             _mockCoD4xRconApi.Object,
-            NullLogger<CoD4xCommandPowerReconciliationService>.Instance);
+            NullLogger<CoD4xCommandPowerReconciliationService>.Instance,
+            configProvider);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_UsesCurrentRefreshSnapshotForMissingServerSettings()
+    {
+        var provider = new Mock<IServerConfigProvider>();
+        var snapshot = new CommandSettingsSnapshot(
+            new(true, """{"schemaVersion":1,"enabled":true,"commands":{"kick":{"minPower":70}}}"""),
+            new(false, null));
+        provider.Setup(x => x.TryGetCommandSettings(_serverId, out snapshot)).Returns(true);
+        _mockCoD4xRconApi.Setup(x => x.AdminListCommands(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(HttpStatusCode.OK, new ApiResponse<string>("kick 35")));
+        _mockCoD4xRconApi.Setup(x => x.AdminChangeCommandPower(_serverId, It.IsAny<CoD4xAdminChangeCommandPowerRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(HttpStatusCode.OK, new ApiResponse<string>("changed required power of cmd: kick to new power: 70")));
+
+        await CreateService(provider.Object).ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        _mockGlobalConfigurationsApi.Verify(x => x.GetConfiguration(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockGameServerConfigurationsApi.Verify(x => x.GetConfiguration(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.AdminChangeCommandPower(_serverId,
+            It.Is<CoD4xAdminChangeCommandPowerRequestDto>(r => r.Command == "kick" && r.MinPower == 70),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_FallsBackToFreshReadsWhenSnapshotUnavailable()
+    {
+        var provider = new Mock<IServerConfigProvider>();
+        SetupGlobalSettings(new { schemaVersion = Cod4xCommandSettingsConstants.SchemaVersion, enabled = false });
+        SetupServerSettingsNotFound();
+
+        await CreateService(provider.Object).ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        _mockGlobalConfigurationsApi.Verify(x => x.GetConfiguration(Cod4xCommandSettingsConstants.Namespace, It.IsAny<CancellationToken>()), Times.Once);
+        _mockGameServerConfigurationsApi.Verify(x => x.GetConfiguration(_serverId, Cod4xCommandSettingsConstants.Namespace, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

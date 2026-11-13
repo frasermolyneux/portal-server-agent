@@ -17,7 +17,8 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 public sealed class CoD4xCommandPowerReconciliationService(
     IRepositoryApiClient repositoryApiClient,
     ICoD4xRconApi coD4xRconApi,
-    ILogger<CoD4xCommandPowerReconciliationService> logger) : ICoD4xCommandPowerReconciliationService
+    ILogger<CoD4xCommandPowerReconciliationService> logger,
+    IServerConfigProvider? configProvider = null) : ICoD4xCommandPowerReconciliationService
 {
     private static readonly IReadOnlySet<string> extendedManagedCommands =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -145,15 +146,25 @@ public sealed class CoD4xCommandPowerReconciliationService(
 
     private async Task<DesiredCommandPowerBuildResult> BuildDesiredCommandPowersAsync(Guid serverId, CancellationToken ct)
     {
-        var globalFetch = await TryFetchCommandSettingsDocumentAsync(
-            () => repositoryApiClient.GlobalConfigurations.V1.GetConfiguration(Cod4xCommandSettingsConstants.Namespace, ct),
-            serverId,
-            "global").ConfigureAwait(false);
+        SettingsFetchResult globalFetch;
+        SettingsFetchResult serverFetch;
+        if (configProvider is not null && configProvider.TryGetCommandSettings(serverId, out var snapshot))
+        {
+            globalFetch = ParseSnapshot(snapshot.Global, serverId, "global");
+            serverFetch = ParseSnapshot(snapshot.Server, serverId, "server");
+        }
+        else
+        {
+            globalFetch = await TryFetchCommandSettingsDocumentAsync(
+                () => repositoryApiClient.GlobalConfigurations.V1.GetConfiguration(Cod4xCommandSettingsConstants.Namespace, ct),
+                serverId,
+                "global").ConfigureAwait(false);
 
-        var serverFetch = await TryFetchCommandSettingsDocumentAsync(
-            () => repositoryApiClient.GameServerConfigurations.V1.GetConfiguration(serverId, Cod4xCommandSettingsConstants.Namespace, ct),
-            serverId,
-            "server").ConfigureAwait(false);
+            serverFetch = await TryFetchCommandSettingsDocumentAsync(
+                () => repositoryApiClient.GameServerConfigurations.V1.GetConfiguration(serverId, Cod4xCommandSettingsConstants.Namespace, ct),
+                serverId,
+                "server").ConfigureAwait(false);
+        }
 
         if (!globalFetch.Success && !serverFetch.Success)
         {
@@ -209,6 +220,26 @@ public sealed class CoD4xCommandPowerReconciliationService(
             StringComparer.OrdinalIgnoreCase);
 
         return DesiredCommandPowerBuildResult.Enabled(desiredPowersByCommand, ignoredUnknownCommandCount);
+    }
+
+    private SettingsFetchResult ParseSnapshot(ConfigurationSnapshotValue value, Guid serverId, string scope)
+    {
+        if (!value.Exists)
+        {
+            return SettingsFetchResult.NotConfigured();
+        }
+
+        var document = ParseSettingsDocument(value.Configuration);
+        if (document is not null)
+        {
+            return SettingsFetchResult.Configured(document);
+        }
+
+        logger.LogWarning(
+            "Ignoring {Scope} cod4xCommands settings for {ServerId}: invalid or unsupported payload",
+            scope,
+            serverId);
+        return SettingsFetchResult.Failed();
     }
 
     private async Task<SettingsFetchResult> TryFetchCommandSettingsDocumentAsync(
