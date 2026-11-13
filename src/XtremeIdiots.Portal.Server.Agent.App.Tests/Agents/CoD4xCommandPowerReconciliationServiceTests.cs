@@ -49,7 +49,7 @@ public class CoD4xCommandPowerReconciliationServiceTests
     {
         var provider = new Mock<IServerConfigProvider>();
         var snapshot = new CommandSettingsSnapshot(
-            new(true, """{"schemaVersion":1,"enabled":true,"commands":{"kick":{"minPower":70}}}"""),
+            new(true, JsonConvert.SerializeObject(new { schemaVersion = 1, enabled = true, commands = new { kick = new { minPower = 70 } } })),
             new(false, null));
         provider.Setup(x => x.TryGetCommandSettings(_serverId, out snapshot)).Returns(true);
         _mockCoD4xRconApi.Setup(x => x.AdminListCommands(_serverId, It.IsAny<CancellationToken>()))
