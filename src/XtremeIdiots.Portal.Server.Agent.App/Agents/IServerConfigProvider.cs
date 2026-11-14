@@ -7,12 +7,20 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 public interface IServerConfigProvider
 {
     AgentInventory? Inventory => null;
+    bool TryGetCommandSettings(Guid serverId, out CommandSettingsSnapshot snapshot)
+    {
+        snapshot = default;
+        return false;
+    }
 
     /// <summary>
     /// Fetch all servers that have agent monitoring enabled.
     /// </summary>
     Task<IReadOnlyList<ServerContext>> GetAgentEnabledServersAsync(CancellationToken ct);
 }
+
+public readonly record struct ConfigurationSnapshotValue(bool Exists, string? Configuration);
+public readonly record struct CommandSettingsSnapshot(ConfigurationSnapshotValue Global, ConfigurationSnapshotValue Server);
 
 public sealed record ExpectedAgent(Guid ServerId, bool AgentEnabled, bool BanFileSyncEnabled);
 

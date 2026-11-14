@@ -10,6 +10,7 @@ using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Agent;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.BanFiles;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Broadcasts;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xPlugin;
+using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Cod4xCommands;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.Shared;
 using RepositoryFileTransportType = XtremeIdiots.Portal.Repository.Abstractions.Constants.V1.FileTransportType;
@@ -30,22 +31,51 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
     private readonly IRepositoryApiClient _repositoryClient;
     private readonly ILogger<RepositoryServerConfigProvider> _logger;
+    private readonly TimeProvider _timeProvider;
+    private CommandSnapshotBatch? _commandSnapshots;
     public AgentInventory? Inventory { get; private set; }
+
+    private sealed record CommandSnapshotBatch(
+        DateTimeOffset StartedAt,
+        ConfigurationSnapshotValue Global,
+        IReadOnlyDictionary<Guid, ConfigurationSnapshotValue> Servers);
+
+    public bool TryGetCommandSettings(Guid serverId, out CommandSettingsSnapshot snapshot)
+    {
+        var batch = Volatile.Read(ref _commandSnapshots);
+        var age = batch is null ? TimeSpan.MaxValue : _timeProvider.GetUtcNow() - batch.StartedAt;
+        if (batch is not null
+            && age >= TimeSpan.Zero && age < TimeSpan.FromMinutes(1)
+            && batch.Servers.TryGetValue(serverId, out var server))
+        {
+            snapshot = new(batch.Global, server);
+            return true;
+        }
+
+        snapshot = default;
+        return false;
+    }
 
     public RepositoryServerConfigProvider(
         IRepositoryApiClient repositoryClient,
-        ILogger<RepositoryServerConfigProvider> logger)
+        ILogger<RepositoryServerConfigProvider> logger,
+        TimeProvider? timeProvider = null)
     {
         _repositoryClient = repositoryClient;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<IReadOnlyList<ServerContext>> GetAgentEnabledServersAsync(CancellationToken ct)
     {
+        Volatile.Write(ref _commandSnapshots, null);
+        var startedAt = _timeProvider.GetUtcNow();
         try
         {
-            var globalAgentNamePrefix = await FetchGlobalAgentNamePrefixAsync(ct);
-            var globalCod4xPluginSourceEnabled = await FetchGlobalCod4xPluginEnabledAsync(ct);
+            var globalConfigurations = await FetchGlobalConfigurationsAsync(ct);
+            var globalAgentNamePrefix = ResolveGlobalAgentNamePrefix(globalConfigurations ?? []);
+            var globalCod4xPluginSourceEnabled = ResolveGlobalCod4xPluginEnabled(globalConfigurations ?? []);
+            var commandSnapshots = new Dictionary<Guid, ConfigurationSnapshotValue>();
 
             var inventory = new List<GameServerDto>();
             var identities = new HashSet<Guid>();
@@ -74,7 +104,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
             foreach (var dto in inventory.Where(server => server.AgentEnabled))
             {
-                var configs = await FetchConfigurationsAsync(dto.GameServerId, dto.Title, ct);
+                var (configs, commandSettings) = await FetchConfigurationsAsync(dto.GameServerId, dto.Title, ct);
+                commandSnapshots.Add(dto.GameServerId, commandSettings);
 
                 var transportMetadata = ResolveTransportType(dto);
                 if (transportMetadata.IsPresent && !transportMetadata.IsValid)
@@ -259,6 +290,11 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             _logger.LogInformation("Loaded {Count} agent-enabled servers from Repository API", servers.Count);
             Inventory = new(DateTimeOffset.UtcNow, inventory.Select(server =>
                 new ExpectedAgent(server.GameServerId, server.AgentEnabled, server.BanFileSyncEnabled)).ToArray());
+            if (globalConfigurations is not null)
+            {
+                Volatile.Write(ref _commandSnapshots, new CommandSnapshotBatch(
+                    startedAt, GetCommandSettings(globalConfigurations), commandSnapshots));
+            }
             return servers;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -268,69 +304,55 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         }
     }
 
-    private async Task<string> FetchGlobalAgentNamePrefixAsync(CancellationToken ct)
+    private async Task<IReadOnlyList<ConfigurationDto>?> FetchGlobalConfigurationsAsync(CancellationToken ct)
     {
         try
         {
             var result = await _repositoryClient.GlobalConfigurations.V1.GetConfigurations(ct);
             if (!result.IsSuccess || result.Result?.Data?.Items is null)
             {
-                return ServerContext.DefaultAgentNamePrefix;
+                _logger.LogWarning("Failed to fetch global configurations, using defaults");
+                return null;
             }
 
-            var agentConfig = result.Result.Data.Items
-                .FirstOrDefault(x => string.Equals(x.Namespace, AgentSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
+            return result.Result.Data.Items.ToArray();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to fetch global configurations, using defaults");
+            return null;
+        }
+    }
 
-            if (agentConfig is null || string.IsNullOrWhiteSpace(agentConfig.Configuration))
-            {
-                return ServerContext.DefaultAgentNamePrefix;
-            }
+    private static string ResolveGlobalAgentNamePrefix(IReadOnlyList<ConfigurationDto> configurations)
+    {
+        var agentConfig = configurations
+            .FirstOrDefault(x => string.Equals(x.Namespace, AgentSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
 
-            var properties = ParseNamespaceProperties(agentConfig.Configuration);
-            var parsed = ParseAgentSettings(properties);
+        if (agentConfig is not null && !string.IsNullOrWhiteSpace(agentConfig.Configuration))
+        {
+            var parsed = ParseAgentSettings(ParseNamespaceProperties(agentConfig.Configuration));
             if (!string.IsNullOrWhiteSpace(parsed?.AgentName))
             {
                 return parsed.AgentName;
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Failed to fetch global agent prefix, using default");
-        }
-
         return ServerContext.DefaultAgentNamePrefix;
     }
 
-    private async Task<bool> FetchGlobalCod4xPluginEnabledAsync(CancellationToken ct)
+    private static bool ResolveGlobalCod4xPluginEnabled(IReadOnlyList<ConfigurationDto> configurations)
     {
-        try
+        var pluginConfig = configurations
+            .FirstOrDefault(x => string.Equals(x.Namespace, Cod4xPluginSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
+
+        if (pluginConfig is not null && !string.IsNullOrWhiteSpace(pluginConfig.Configuration))
         {
-            var result = await _repositoryClient.GlobalConfigurations.V1.GetConfigurations(ct);
-            if (!result.IsSuccess || result.Result?.Data?.Items is null)
-            {
-                return false;
-            }
-
-            var pluginConfig = result.Result.Data.Items
-                .FirstOrDefault(x => string.Equals(x.Namespace, Cod4xPluginSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
-
-            if (pluginConfig is null || string.IsNullOrWhiteSpace(pluginConfig.Configuration))
-            {
-                return false;
-            }
-
-            var properties = ParseNamespaceProperties(pluginConfig.Configuration);
-            var parsed = ParseCod4xPluginSettings(properties);
+            var parsed = ParseCod4xPluginSettings(ParseNamespaceProperties(pluginConfig.Configuration));
             if (parsed?.Enabled is bool enabled)
             {
                 return enabled;
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Failed to fetch global cod4xPlugin settings, defaulting source flag to disabled");
-        }
-
         return false;
     }
 
@@ -379,7 +401,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
     /// <summary>
     /// Fetches all configuration namespaces for a server, returning a case-insensitive lookup.
     /// </summary>
-    private async Task<Dictionary<string, Dictionary<string, JsonElement>>> FetchConfigurationsAsync(
+    private async Task<(Dictionary<string, Dictionary<string, JsonElement>>, ConfigurationSnapshotValue)> FetchConfigurationsAsync(
         Guid serverId, string title, CancellationToken ct)
     {
         try
@@ -392,14 +414,23 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                 throw new HttpRequestException("Failed to retrieve server configuration.");
             }
 
-            return ParseConfigurations(configResult.Result.Data.Items);
+            var items = configResult.Result.Data.Items.ToArray();
+            return (ParseConfigurations(items), GetCommandSettings(items));
         }
+
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Failed to fetch configurations for server {ServerId} ({Title})",
                 serverId, title);
             throw;
         }
+    }
+
+    private static ConfigurationSnapshotValue GetCommandSettings(IEnumerable<ConfigurationDto> configurations)
+    {
+        var config = configurations.FirstOrDefault(x =>
+            string.Equals(x.Namespace, Cod4xCommandSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
+        return config is null ? new(false, null) : new(true, config.Configuration);
     }
 
     /// <summary>

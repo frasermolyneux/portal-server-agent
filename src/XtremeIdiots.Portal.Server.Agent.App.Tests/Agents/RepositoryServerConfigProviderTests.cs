@@ -59,6 +59,84 @@ public class RepositoryServerConfigProviderTests
         new(_mockClient.Object, _logger);
 
     [Fact]
+    public async Task Refresh_ReusesGlobalAndServerCommandSettingsOnlyUntilNextRefresh()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Server", RepositoryGameType.CallOfDuty4x)]);
+        SetupGlobalConfigApi([CreateConfigDto("cod4xCommands", new { schemaVersion = 1, enabled = true })]);
+        SetupConfigApi(serverId, [CreateConfigDto("cod4xCommands", new { schemaVersion = 1, enabled = false })]);
+        var provider = CreateProvider();
+
+        await provider.GetAgentEnabledServersAsync(default);
+
+        _mockGlobalConfigApi.Verify(api => api.GetConfigurations(It.IsAny<CancellationToken>()), Times.Once);
+        Assert.True(provider.TryGetCommandSettings(serverId, out var first));
+        Assert.True(first.Global.Exists);
+        Assert.True(first.Server.Exists);
+        Assert.Contains("\"enabled\":true", first.Global.Configuration);
+        Assert.Contains("\"enabled\":false", first.Server.Configuration);
+
+        SetupGlobalConfigApi([]);
+        SetupConfigApi(serverId, []);
+        await provider.GetAgentEnabledServersAsync(default);
+        Assert.True(provider.TryGetCommandSettings(serverId, out var next));
+        Assert.False(next.Global.Exists);
+        Assert.False(next.Server.Exists);
+        _mockGlobalConfigApi.Verify(api => api.GetConfigurations(It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task RefreshFailure_DoesNotReusePreviousCommandSnapshot()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Server", RepositoryGameType.CallOfDuty4x)]);
+        var provider = CreateProvider();
+        await provider.GetAgentEnabledServersAsync(default);
+        Assert.True(provider.TryGetCommandSettings(serverId, out _));
+
+        _mockConfigApi.Setup(api => api.GetConfigurations(serverId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("unavailable"));
+        await Assert.ThrowsAsync<HttpRequestException>(() => provider.GetAgentEnabledServersAsync(default));
+        Assert.False(provider.TryGetCommandSettings(serverId, out _));
+    }
+
+    [Fact]
+    public async Task FailedGlobalFetch_DoesNotPublishCommandSnapshot()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Server", RepositoryGameType.CallOfDuty4x)]);
+        _mockGlobalConfigApi.Setup(api => api.GetConfigurations(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("unavailable"));
+        var provider = CreateProvider();
+
+        await provider.GetAgentEnabledServersAsync(default);
+
+        Assert.False(provider.TryGetCommandSettings(serverId, out _));
+        _mockGlobalConfigApi.Verify(api => api.GetConfigurations(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CommandSnapshot_ExpiresOneMinuteAfterRefreshStarted()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Server", RepositoryGameType.CallOfDuty4x)]);
+        var clock = new TestTimeProvider();
+        var provider = new RepositoryServerConfigProvider(_mockClient.Object, _logger, clock);
+
+        await provider.GetAgentEnabledServersAsync(default);
+        clock.Now += TimeSpan.FromSeconds(59);
+        Assert.True(provider.TryGetCommandSettings(serverId, out _));
+        clock.Now += TimeSpan.FromSeconds(1);
+        Assert.False(provider.TryGetCommandSettings(serverId, out _));
+    }
+
+    private sealed class TestTimeProvider : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    [Fact]
     public async Task InventoryIncludesLaterPagesDisabledIntentAndUnstartableConfigurations()
     {
         var first = Enumerable.Range(0, 50).Select(index => CreateGameServerDto(Guid.NewGuid(),
