@@ -14,6 +14,58 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Tests.LogTailing;
 public class SftpLogTailerTests
 {
     [Fact]
+    public async Task PollAsync_WhenMultipleChunksAreRead_EmitsContentAndAdvancesOffsetUntilEof()
+    {
+        var chunks = new[] { "first\nsec"u8.ToArray(), "ond\n"u8.ToArray() };
+        var chunkIndex = 0;
+        var stream = new TestLogStream(buffer =>
+        {
+            if (chunkIndex >= chunks.Length)
+            {
+                return ValueTask.FromResult(0);
+            }
+
+            var chunk = chunks[chunkIndex++];
+            chunk.AsSpan().CopyTo(buffer.Span);
+            return ValueTask.FromResult(chunk.Length);
+        });
+        var tailer = CreateTailer(stream);
+
+        var lines = await tailer.PollAsync();
+
+        Assert.Equal(["first", "second"], lines);
+        Assert.Equal(chunks.Sum(chunk => chunk.Length), tailer.CurrentOffset);
+
+        var linesAtEof = await tailer.PollAsync();
+
+        Assert.Empty(linesAtEof);
+        Assert.Equal(chunks.Sum(chunk => chunk.Length), tailer.CurrentOffset);
+    }
+
+    [Fact]
+    public async Task PollAsync_WhenCancelledAfterReadingChunk_DoesNotAdvanceOffset()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var bytesRead = 0;
+        var stream = new TestLogStream(buffer =>
+        {
+            buffer.Span.Fill((byte)'a');
+            bytesRead += buffer.Length;
+            if (bytesRead == SftpLogTailer.MaxBytesPerPoll)
+            {
+                cancellation.Cancel();
+            }
+
+            return ValueTask.FromResult(buffer.Length);
+        }, enforceCancellation: false);
+        var tailer = CreateTailer(stream);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tailer.PollAsync(cancellation.Token));
+
+        Assert.Equal(0, tailer.CurrentOffset);
+    }
+
+    [Fact]
     public Task DisposeAsync_AwaitsLogStreamDisposal()
     {
         return AssertDisposalIsAwaited(tailer => tailer.DisposeAsync().AsTask());
@@ -184,13 +236,19 @@ public class SftpLogTailerTests
 
     private sealed class TestLogStream(
         Func<Memory<byte>, ValueTask<int>> readAsync,
-        Func<ValueTask>? disposeAsync = null) : MemoryStream
+        Func<ValueTask>? disposeAsync = null,
+        bool enforceCancellation = true) : MemoryStream
     {
         public bool IsDisposed => !CanRead;
         public int DisposeCount { get; private set; }
 
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            if (enforceCancellation)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
             return readAsync(buffer);
         }
 
