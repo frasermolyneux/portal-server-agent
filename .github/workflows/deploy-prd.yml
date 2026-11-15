@@ -26,7 +26,7 @@ jobs:
       terraform: ${{ steps.changes.outputs.terraform }}
     steps:
       - id: changes
-        uses: frasermolyneux/actions/detect-changes@8e7ca58b7821e01192ee4f23756c55e4ee057496 # detect-changes/v1.0.4
+        uses: frasermolyneux/actions/detect-changes@f335f9f14d0062304978193d016f4a43a2e797f4 # detect-changes/v3.0.0
         with:
           filters: |
             src:src/**
@@ -44,7 +44,7 @@ jobs:
       state_tainted: ${{ steps.state-check.outputs.state_tainted }}
     steps:
       - id: state-check
-        uses: frasermolyneux/actions/terraform-state-check@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-state-check/v2.0.2
+        uses: frasermolyneux/actions/terraform-state-check@977ddbedf7f5c6e2fae98ff1d6ec6a9c7669d778 # terraform-state-check/v6.0.0
         with:
           terraform-version: "1.17.1"
           terraform-folder: "terraform"
@@ -83,7 +83,7 @@ jobs:
   #  concurrency:
   #    group: ${{ github.repository }}-dev
   #  steps:
-  #    - uses: frasermolyneux/actions/terraform-plan-and-apply@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-plan-and-apply/v5.0.0
+  #    - uses: frasermolyneux/actions/terraform-plan-and-apply@977ddbedf7f5c6e2fae98ff1d6ec6a9c7669d778 # terraform-plan-and-apply/v6.0.0
   #      if: needs.detect-changes.outputs.terraform == 'true' || needs.terraform-state-check-dev.outputs.state_tainted == 'true'
   #      with:
   #        terraform-folder: "terraform"
@@ -93,7 +93,7 @@ jobs:
   #        AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
   #        AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 #
-  #    - uses: frasermolyneux/actions/terraform-output@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-output/v2.0.2
+  #    - uses: frasermolyneux/actions/terraform-output@977ddbedf7f5c6e2fae98ff1d6ec6a9c7669d778 # terraform-output/v6.0.0
   #      if: needs.detect-changes.outputs.terraform != 'true' && needs.terraform-state-check-dev.outputs.state_tainted != 'true'
   #      with:
   #        terraform-folder: "terraform"
@@ -241,7 +241,7 @@ jobs:
     if: |
       !failure() && !cancelled()
     steps:
-      - uses: frasermolyneux/actions/terraform-plan-and-apply@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-plan-and-apply/v5.0.0
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@977ddbedf7f5c6e2fae98ff1d6ec6a9c7669d778 # terraform-plan-and-apply/v6.0.0
         if: needs.detect-changes.outputs.terraform == 'true'
         with:
           terraform-version: "1.17.1"
@@ -252,7 +252,7 @@ jobs:
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: frasermolyneux/actions/terraform-output@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-output/v2.0.2
+      - uses: frasermolyneux/actions/terraform-output@977ddbedf7f5c6e2fae98ff1d6ec6a9c7669d778 # terraform-output/v6.0.0
         if: needs.detect-changes.outputs.terraform != 'true'
         with:
           terraform-version: "1.17.1"
