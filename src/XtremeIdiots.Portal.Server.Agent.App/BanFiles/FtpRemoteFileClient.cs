@@ -6,15 +6,20 @@ namespace XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 
 public sealed class FtpRemoteFileClient : IRemoteFileClient
 {
-    private readonly AsyncFtpClient _client;
+    private readonly IAsyncFtpClient _client;
 
     public FtpRemoteFileClient(ServerContext context)
-    {
-        _client = new AsyncFtpClient(
+        : this(new AsyncFtpClient(
             context.EffectiveFileTransportHostname,
             context.EffectiveFileTransportUsername,
             context.EffectiveFileTransportPassword,
-            context.EffectiveFileTransportPort);
+            context.EffectiveFileTransportPort))
+    {
+    }
+
+    internal FtpRemoteFileClient(IAsyncFtpClient client)
+    {
+        _client = client ?? throw new ArgumentNullException(nameof(client));
     }
 
     public async Task ConnectAsync(CancellationToken ct = default)
@@ -89,7 +94,7 @@ public sealed class FtpRemoteFileClient : IRemoteFileClient
             await _client.Disconnect().ConfigureAwait(false);
         }
 
-        _client.Dispose();
+        await _client.DisposeAsync().ConfigureAwait(false);
     }
 
     public Task<string> ResolveDirectoryPathAsync(string directoryPath, CancellationToken ct = default)
