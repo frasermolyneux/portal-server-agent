@@ -226,6 +226,148 @@ public class ServerSyncServiceTests
     }
 
     [Fact]
+    public async Task SyncWithRosterCallbackAsync_WhenStatusTimesOut_ReportsUnavailableWithoutInferringAbsence()
+    {
+        _mockCod5RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TimeoutException());
+        var calls = 0;
+        var result = await CreateService().SyncWithRosterCallbackAsync(_serverId, _mockParser.Object, "CallOfDuty5", false,
+            (roster, _) =>
+            {
+                Assert.Null(roster);
+                calls++;
+                return Task.CompletedTask;
+            });
+
+        Assert.Equal(1, calls);
+        Assert.Null(result.Roster);
+        _mockParser.Verify(p => p.RemovePlayer(It.IsAny<int>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SyncWithRosterCallbackAsync_WhenCancelled_PropagatesWithoutReportingFailure()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _mockCod5RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+        var calls = 0;
+        var service = CreateService();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.SyncWithRosterCallbackAsync(_serverId, _mockParser.Object, "CallOfDuty5", false,
+                (_, _) => { calls++; return Task.CompletedTask; }, cts.Token));
+
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public async Task CaptureRosterAsync_UsesFreshStatusWithoutQueryOrParserSynchronization()
+    {
+        var dto = new RconStatusResponseDto
+        {
+            Players = [new() { Num = 1, Guid = "one", Name = "Alice" }],
+            Roster = new RconRosterObservationDto
+            {
+                State = RconRosterState.Partial,
+                Players = [new() { Slot = 1, PlayerIdentifier = "one" }]
+            }
+        };
+        _mockCod4RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<RconStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<RconStatusResponseDto>(dto)));
+        ServerRosterSnapshot? captured = null;
+        var before = DateTime.UtcNow;
+
+        var success = await CreateService().CaptureRosterAsync(_serverId, "CallOfDuty4",
+            (roster, _) => { captured = roster; return Task.CompletedTask; });
+
+        Assert.True(success);
+        Assert.NotNull(captured);
+        Assert.InRange(captured.ObservedUtc, before, DateTime.UtcNow);
+        Assert.Equal(RconRosterState.Partial, captured.State);
+        Assert.Equal("one", Assert.Single(captured.Players).PlayerGuid);
+        _mockQueryApi.Verify(q => q.GetServerStatus(It.IsAny<Guid>()), Times.Never);
+        _mockParser.Verify(p => p.SetPlayer(It.IsAny<int>(), It.IsAny<PlayerInfo>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CaptureRosterAsync_WhenStatusFails_ReportsUnavailableAndRequestsBackoff()
+    {
+        _mockCod5RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TimeoutException());
+        var calls = 0;
+
+        var success = await CreateService().CaptureRosterAsync(_serverId, "CallOfDuty5",
+            (roster, _) =>
+            {
+                Assert.Null(roster);
+                calls++;
+                return Task.CompletedTask;
+            });
+
+        Assert.False(success);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task CaptureRosterAsync_WhenStatusHangs_CancelsAndReportsUnavailable()
+    {
+        _mockCod5RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .Returns(async (Guid _, CancellationToken token) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return null!;
+            });
+        var calls = 0;
+        var service = CreateService();
+
+        var success = await service.CaptureRosterAsync(_serverId, "CallOfDuty5",
+            (roster, _) =>
+            {
+                Assert.Null(roster);
+                calls++;
+                return Task.CompletedTask;
+            }).WaitAsync(TimeSpan.FromSeconds(20));
+
+        Assert.False(success);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task CaptureRosterAsync_WhenCancelled_PropagatesWithoutReportingFailure()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _mockCod5RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+        var calls = 0;
+        var service = CreateService();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.CaptureRosterAsync(_serverId, "CallOfDuty5",
+                (_, _) => { calls++; return Task.CompletedTask; }, cts.Token));
+
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public async Task CaptureRosterAsync_WhenRecordingFails_RequestsBackoff()
+    {
+        var dto = new RconStatusResponseDto
+        {
+            Players = [],
+            Roster = new RconRosterObservationDto { State = RconRosterState.Partial, Players = [] }
+        };
+        _mockCod4RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<RconStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<RconStatusResponseDto>(dto)));
+
+        var success = await CreateService().CaptureRosterAsync(_serverId, "CallOfDuty4",
+            (_, _) => Task.FromException(new IOException("storage unavailable")));
+
+        Assert.False(success);
+    }
+
+    [Fact]
     public async Task SyncWithRosterAsync_WhenRosterMissing_DoesNotInferFromLegacyPlayers()
     {
         var dto = new CoD4xStatusResponseDto

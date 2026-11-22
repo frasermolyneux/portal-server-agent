@@ -70,15 +70,17 @@ internal sealed class PlaytimeProducer
             return;
         }
 
+        var namedPlayers = roster.Players.Where(player => !string.IsNullOrWhiteSpace(player.Username)).ToArray();
+        var missingNames = roster.Players.Count - namedPlayers.Length;
         var completeness = roster.State switch
         {
-            RconRosterState.Complete => PlaytimeCompleteness.Complete,
+            RconRosterState.Complete when missingNames == 0 => PlaytimeCompleteness.Complete,
+            RconRosterState.Complete => PlaytimeCompleteness.Partial,
             RconRosterState.Partial => PlaytimeCompleteness.Partial,
             RconRosterState.Failed => PlaytimeCompleteness.Failed,
             _ => throw new InvalidOperationException("Unsupported RCON roster state.")
         };
         if (roster.State == RconRosterState.Complete && (roster.UnparsedRowCount != 0 || roster.MissingIdentityCount != 0)
-            || roster.Players.Any(player => string.IsNullOrWhiteSpace(player.Username))
             || roster.Players.Select(player => player.SlotId).Distinct().Count() != roster.Players.Count)
         {
             await RecordGapAsync(PlaytimeGapReason.InvalidRoster, ct).ConfigureAwait(false);
@@ -101,7 +103,7 @@ internal sealed class PlaytimeProducer
             Completeness = completeness,
             Epoch = _coverage?.Epoch ?? _epoch,
             ProducerSequence = null,
-            Players = roster.Players.Select(player =>
+            Players = namedPlayers.Select(player =>
                 new PlaytimeRosterPlayer(player.PlayerGuid, player.Username!, player.SlotId, player.IsBot)).ToImmutableArray()
         };
         try
@@ -135,6 +137,10 @@ internal sealed class PlaytimeProducer
 
         _pending = observation;
         await PersistPendingAsync(ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Playtime roster captured for server {ServerId} game {GameType}: state {RosterState}, completeness {Completeness}, identities {IdentityCount}, unknown bot status {UnknownBotCount}, unparsed rows {UnparsedRowCount}, missing identities {MissingIdentityCount}, missing names {MissingNameCount}",
+            _serverId, _gameType, roster.State, completeness, namedPlayers.Length, namedPlayers.Count(player => player.IsBot is null),
+            roster.UnparsedRowCount, roster.MissingIdentityCount, missingNames);
         if (dispatch)
         {
             await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
@@ -199,7 +205,7 @@ internal sealed class PlaytimeProducer
 
     private async Task RecordGapAsync(PlaytimeGapReason reason, CancellationToken ct)
     {
-        _logger.LogWarning("Playtime roster coverage gap for server {ServerId}: {Reason}", _serverId, reason);
+        _logger.LogWarning("Playtime roster coverage gap for server {ServerId} game {GameType}: {Reason}", _serverId, _gameType, reason);
         await _outbox.RecordGapAsync(_serverId, reason, ct).ConfigureAwait(false);
     }
 

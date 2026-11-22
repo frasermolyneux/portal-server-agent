@@ -90,6 +90,64 @@ public class GameServerAgentTests
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
     [Fact]
+    public async Task PlaytimeRosterSchedule_RefreshesAndBacksOffAfterFailure()
+    {
+        var context = _testContext with { GameType = "CallOfDuty4" };
+        var producer = new PlaytimeProducer(context.ServerId, context.GameType, new Mock<IPlaytimeOutbox>().Object,
+            (_, _) => Task.CompletedTask, NullLogger.Instance);
+        _mockSyncService.SetupSequence(s => s.CaptureRosterAsync(context.ServerId, context.GameType,
+                It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true)
+            .ReturnsAsync(false);
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), playtimeProducer: producer);
+        var now = DateTime.UtcNow;
+        agent.SchedulePlaytimeRosterSync(now.AddMinutes(-1), captured: true);
+
+        await agent.RefreshPlaytimeRosterIfDueAsync(now, CancellationToken.None);
+        await agent.RefreshPlaytimeRosterIfDueAsync(now.AddSeconds(30), CancellationToken.None);
+        await agent.RefreshPlaytimeRosterIfDueAsync(now.AddSeconds(61), CancellationToken.None);
+        await agent.RefreshPlaytimeRosterIfDueAsync(now.AddMinutes(2), CancellationToken.None);
+
+        _mockSyncService.Verify(s => s.CaptureRosterAsync(context.ServerId, context.GameType,
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task PlaytimeRosterSchedule_WhenPluginOnly_DoesNotCaptureAgentRoster()
+    {
+        var agent = CreateAgent();
+        var now = DateTime.UtcNow;
+        agent.SchedulePlaytimeRosterSync(now.AddMinutes(-1), captured: true);
+
+        await agent.RefreshPlaytimeRosterIfDueAsync(now, CancellationToken.None);
+
+        _mockSyncService.Verify(s => s.CaptureRosterAsync(It.IsAny<Guid>(), It.IsAny<string>(),
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PlaytimeRosterSchedule_WhenFullSyncFails_WaitsForNormalRetry()
+    {
+        var context = _testContext with { GameType = "CallOfDuty4" };
+        var producer = new PlaytimeProducer(context.ServerId, context.GameType, new Mock<IPlaytimeOutbox>().Object,
+            (_, _) => Task.CompletedTask, NullLogger.Instance);
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), playtimeProducer: producer);
+        var now = DateTime.UtcNow;
+        agent.SchedulePlaytimeRosterSync(now, captured: false);
+
+        await agent.RefreshPlaytimeRosterIfDueAsync(now.AddMinutes(2), CancellationToken.None);
+
+        _mockSyncService.Verify(s => s.CaptureRosterAsync(It.IsAny<Guid>(), It.IsAny<string>(),
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RunAsync_QuietPluginServerWithoutMap_ReportsOperationalHeartbeat()
     {
         var context = _testContext with { IsCod4xPluginSourceEnabled = true };

@@ -4,6 +4,7 @@ using MX.Api.Abstractions;
 
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 using XtremeIdiots.Portal.Server.Agent.App.Playtime;
@@ -46,12 +47,14 @@ public sealed class GameServerAgent
     private DateTime _lastHeartbeat = DateTime.MinValue;
     private DateTime _lastBroadcastAt = DateTime.MinValue;
     private DateTime _lastPlaytimeFlush = DateTime.MinValue;
+    private DateTime _nextPlaytimeRosterSync = DateTime.MaxValue;
     private int _nextBroadcastIndex;
 
     internal static readonly TimeSpan OffsetSaveInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan StatusPublishInterval = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan LeaseRenewInterval = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan RconSyncInterval = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan PlaytimeRosterSyncInterval = TimeSpan.FromMinutes(1);
     internal static readonly TimeSpan PluginLifecycleCheckInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan BanFileCheckInterval = TimeSpan.FromSeconds(ServerContext.DefaultBanFileCheckIntervalSeconds);
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
@@ -188,8 +191,9 @@ public sealed class GameServerAgent
             }
 
             // 4. Initial RCON sync — populate slot map with current players
-            await SyncPlayersAsync(ct);
+            var rosterCaptured = await SyncPlayersAsync(ct);
             _lastRconSync = DateTime.UtcNow;
+            SchedulePlaytimeRosterSync(_lastRconSync, rosterCaptured);
 
             // 4a. One-shot CoD4x cvar probe (no-op for other game types). Self-gates
             // so it runs at most once per agent lifecycle per server.
@@ -264,9 +268,12 @@ public sealed class GameServerAgent
                     // Periodic RCON sync (every 5 minutes)
                     if (DateTime.UtcNow - _lastRconSync > RconSyncInterval)
                     {
-                        await SyncPlayersAsync(ct);
+                        rosterCaptured = await SyncPlayersAsync(ct);
                         _lastRconSync = DateTime.UtcNow;
+                        SchedulePlaytimeRosterSync(_lastRconSync, rosterCaptured);
                     }
+
+                    await RefreshPlaytimeRosterIfDueAsync(DateTime.UtcNow, ct);
 
                     if (_playtimeProducer is not null && DateTime.UtcNow - _lastPlaytimeFlush > TimeSpan.FromSeconds(5))
                     {
@@ -368,20 +375,36 @@ public sealed class GameServerAgent
         }
     }
 
-    private async Task SyncPlayersAsync(CancellationToken ct)
+    private async Task<bool> SyncPlayersAsync(CancellationToken ct)
     {
         if (_playtimeProducer is null)
         {
             var events = await _syncService.SyncAsync(_context.ServerId, _parser, _context.GameType,
                 _context.IsCod4xPluginSourceEnabled, ct);
             await PublishIpResolvedEventsAsync(events, ct);
-            return;
+            return false;
         }
 
         var result = await _syncService.SyncWithRosterCallbackAsync(_context.ServerId, _parser, _context.GameType,
             _context.IsCod4xPluginSourceEnabled, _playtimeProducer.CaptureRosterAsync, ct);
         await PublishIpResolvedEventsAsync(result.IpResolvedEvents, ct);
+        return result.Roster is { State: RconRosterState.Complete or RconRosterState.Partial, CaptureDuration.TotalSeconds: <= 10 };
     }
+
+    internal async Task RefreshPlaytimeRosterIfDueAsync(DateTime now, CancellationToken ct)
+    {
+        if (_playtimeProducer is null || now < _nextPlaytimeRosterSync)
+        {
+            return;
+        }
+
+        var captured = await _syncService.CaptureRosterAsync(_context.ServerId, _context.GameType,
+            _playtimeProducer.CaptureRosterAsync, ct);
+        _nextPlaytimeRosterSync = DateTime.UtcNow + (captured ? PlaytimeRosterSyncInterval : RconSyncInterval);
+    }
+
+    internal void SchedulePlaytimeRosterSync(DateTime now, bool captured)
+        => _nextPlaytimeRosterSync = now + (captured ? PlaytimeRosterSyncInterval : RconSyncInterval);
 
     private async Task FlushPlaytimeAsync(CancellationToken ct)
     {
