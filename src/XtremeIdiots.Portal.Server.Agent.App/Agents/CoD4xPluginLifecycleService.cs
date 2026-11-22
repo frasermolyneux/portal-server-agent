@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 using Azure;
 using Azure.Identity;
@@ -621,7 +622,6 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
                 healthResult.ErrorMessage,
                 healthStatus: "unhealthy",
                 healthDetails: healthResult.Details,
-                reportedVersion: targetVersion,
                 rolloutStage: rolloutDecision.Stage,
                 rolloutGatePassed: rolloutDecision.GatePassed);
     }
@@ -696,7 +696,6 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
                 healthResult.ErrorMessage,
                 healthStatus: "unhealthy",
                 healthDetails: healthResult.Details,
-                reportedVersion: rollbackVersion,
                 rolloutStage: rolloutDecision.Stage,
                 rolloutGatePassed: rolloutDecision.GatePassed);
     }
@@ -755,7 +754,8 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             return (PluginProbeState.Drifted, PluginHealthResult.Failure("Plugin health check did not return plugin info output."));
         }
 
-        if (!pluginInfo.Contains(expectedVersion, StringComparison.OrdinalIgnoreCase))
+        var versionPattern = $@"(?<![\p{{L}}\p{{N}}._-])v?{Regex.Escape(expectedVersion)}(?![\p{{L}}\p{{N}}._-])";
+        if (!Regex.IsMatch(pluginInfo, versionPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
         {
             return (
                 PluginProbeState.Drifted,
