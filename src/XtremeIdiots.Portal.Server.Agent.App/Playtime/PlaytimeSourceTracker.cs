@@ -12,10 +12,10 @@ internal sealed class PlaytimeSourceTracker
 {
     private static readonly Regex JoinTeamPattern = new(
         @"^\s*(?:\d+(?::\d+)?\s+)?JT;(?<guid>[^;]+);(?<slot>\d{1,2});",
-        RegexOptions.Compiled);
+        RegexOptions.Compiled | RegexOptions.NonBacktracking, TimeSpan.FromSeconds(1));
     private static readonly Regex QuitPattern = new(
         @"^\s*(?:\d+(?::\d+)?\s+)?Q;[^;]+;(?<slot>\d{1,2});",
-        RegexOptions.Compiled);
+        RegexOptions.Compiled | RegexOptions.NonBacktracking, TimeSpan.FromSeconds(1));
     private readonly IPlaytimeOutbox _outbox;
     private readonly Guid _serverId;
     private readonly string _gameType;
