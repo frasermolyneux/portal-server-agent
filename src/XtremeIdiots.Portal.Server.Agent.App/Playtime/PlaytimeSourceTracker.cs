@@ -31,6 +31,8 @@ internal sealed class PlaytimeSourceTracker
     private long _boundary;
     private bool _boundaryUncertain;
     private PlaytimeGapReason? _waitingForEnd;
+    private SourceReset? _pendingReset;
+    private bool _skippedDuringReset;
 
     public PlaytimeSourceTracker(IPlaytimeOutbox outbox, Guid serverId, string gameType,
         Func<CancellationToken, Task> dispatch, Func<long> nextSequence, ILogger? logger = null)
@@ -50,7 +52,7 @@ internal sealed class PlaytimeSourceTracker
         };
     }
 
-    public bool HasPending => _pending.Count != 0;
+    public bool HasPending => _pending.Count != 0 || _pendingReset is not null;
 
     public async Task InitializeAsync(ILogTailer tailer, CancellationToken ct)
     {
@@ -91,16 +93,8 @@ internal sealed class PlaytimeSourceTracker
             var next = new PlaytimeSourceCursor(Guid.NewGuid(),
                 tailer.CurrentFilePath ?? throw new InvalidOperationException("The log tailer has no file path."),
                 tailer.CurrentOffset);
-            await _outbox.RecordGapAndResetCursorAsync(_serverId, cursor, next, reason, ct).ConfigureAwait(false);
-            _logger?.LogWarning("Playtime source coverage gap for server {ServerId}: {Reason}", _serverId, reason);
-            _cursor = next;
-            _boundary = next.Offset;
-            _boundaryUncertain = next.Offset != 0;
-            _continuityVersion = tailer.ContinuityVersion;
-            _waitingForEnd = null;
-            _parser.Reset();
-            _players.Clear();
-            _mapReentries.Clear();
+            _pendingReset = new SourceReset(cursor, next, reason, tailer.ContinuityVersion);
+            await FlushPendingAsync(ct).ConfigureAwait(false);
             return;
         }
 
@@ -163,6 +157,21 @@ internal sealed class PlaytimeSourceTracker
             _cursor = batch.Next;
             _pending.Dequeue();
         }
+        if (_pendingReset is { } reset)
+        {
+            await _outbox.RecordGapAndResetCursorAsync(_serverId, reset.Expected, reset.Next, reset.Reason, ct).ConfigureAwait(false);
+            _logger?.LogWarning("Playtime source coverage gap for server {ServerId}: {Reason}", _serverId, reset.Reason);
+            _cursor = reset.Next;
+            _boundary = reset.Next.Offset;
+            _boundaryUncertain = reset.Next.Offset != 0;
+            _continuityVersion = reset.ContinuityVersion;
+            _waitingForEnd = _skippedDuringReset ? PlaytimeGapReason.Backlog : null;
+            _skippedDuringReset = false;
+            _pendingReset = null;
+            _parser.Reset();
+            _players.Clear();
+            _mapReentries.Clear();
+        }
     }
 
     public Task ObservePollFailureAsync(CancellationToken ct)
@@ -172,7 +181,17 @@ internal sealed class PlaytimeSourceTracker
         return Task.CompletedTask;
     }
 
-    public void MarkSkippedPoll() => _waitingForEnd ??= PlaytimeGapReason.Backlog;
+    public void MarkSkippedPoll()
+    {
+        if (_pendingReset is not null)
+        {
+            _skippedDuringReset = true;
+        }
+        else
+        {
+            _waitingForEnd ??= PlaytimeGapReason.Backlog;
+        }
+    }
 
     public void ObserveRoster(ServerRosterSnapshot roster, PlaytimeCompleteness completeness)
     {
@@ -306,4 +325,7 @@ internal sealed class PlaytimeSourceTracker
 
     private sealed record SourceBatch(PlaytimeSourceCursor Expected, PlaytimeSourceCursor Next,
         IReadOnlyList<PlaytimeObservation> Observations);
+
+    private sealed record SourceReset(PlaytimeSourceCursor Expected, PlaytimeSourceCursor Next,
+        PlaytimeGapReason Reason, long ContinuityVersion);
 }

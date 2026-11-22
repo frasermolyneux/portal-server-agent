@@ -136,9 +136,10 @@ internal sealed class PlaytimeProducer
             return false;
         }
 
+        await SourceTracker.FlushPendingAsync(ct).ConfigureAwait(false);
         _pending = observation;
-        await PersistPendingAsync(ct).ConfigureAwait(false);
         SourceTracker.ObserveRoster(roster, completeness);
+        await PersistPendingAsync(ct).ConfigureAwait(false);
         _logger.LogInformation(
             "Playtime roster captured for server {ServerId} game {GameType}: state {RosterState}, completeness {Completeness}, identities {IdentityCount}, unknown bot status {UnknownBotCount}, unparsed rows {UnparsedRowCount}, missing identities {MissingIdentityCount}, missing names {MissingNameCount}",
             _serverId, _gameType, roster.State, completeness, namedPlayers.Length, namedPlayers.Count(player => player.IsBot is null),
@@ -159,6 +160,7 @@ internal sealed class PlaytimeProducer
 
     private async Task PersistPendingAsync(CancellationToken ct)
     {
+        await SourceTracker.FlushPendingAsync(ct).ConfigureAwait(false);
         await FlushPendingDropAsync(ct).ConfigureAwait(false);
         if (_pending is not null)
         {

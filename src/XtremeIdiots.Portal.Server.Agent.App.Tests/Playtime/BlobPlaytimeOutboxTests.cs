@@ -10,6 +10,7 @@ using Moq;
 
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
+using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Playtime;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Playtime;
@@ -599,8 +600,91 @@ public sealed class BlobPlaytimeOutboxTests
         Assert.Equal(new PlaytimeGapSummary(1, PlaytimeGapReason.Rotation),
             await restarted.GetGapSummaryAsync(observation.ServerId));
         Assert.Equal(observation, Assert.Single(await restarted.GetPendingAsync(observation.ServerId)));
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            restarted.RecordGapAndResetCursorAsync(observation.ServerId, advanced, rotated, PlaytimeGapReason.Rotation));
+        await restarted.RecordGapAndResetCursorAsync(observation.ServerId, advanced, rotated, PlaytimeGapReason.Rotation);
+        Assert.Equal(new PlaytimeGapSummary(1, PlaytimeGapReason.Rotation), await restarted.GetGapSummaryAsync(observation.ServerId));
+    }
+
+    [Fact]
+    public async Task SourceReset_WhenCommittedResponseIsLost_RetriesSameGenerationWithoutDoubleCounting()
+    {
+        var storage = new InMemoryBlob();
+        var serverId = Guid.NewGuid();
+        var store = storage.CreateStore();
+        var tailer = new Mock<ILogTailer>();
+        tailer.SetupGet(t => t.CurrentFilePath).Returns("/logs/game.log");
+        tailer.SetupGet(t => t.LastPollReachedEnd).Returns(true);
+        tailer.SetupGet(t => t.CurrentOffset).Returns(20);
+        var tracker = new PlaytimeSourceTracker(store, serverId, "CallOfDuty2", _ => Task.CompletedTask, () => 1);
+        await tracker.InitializeAsync(tailer.Object, CancellationToken.None);
+        tailer.SetupGet(t => t.ContinuityVersion).Returns(1);
+        storage.FailAfterNextUpload = true;
+
+        await Assert.ThrowsAsync<RequestFailedException>(() => tracker.ObservePollAsync(tailer.Object, CancellationToken.None));
+        var committed = await store.GetSourceCursorAsync(serverId);
+        tracker.MarkSkippedPoll();
+        await tracker.FlushPendingAsync(CancellationToken.None);
+        Assert.Equal(committed, await store.GetSourceCursorAsync(serverId));
+        Assert.Equal(new PlaytimeGapSummary(1, PlaytimeGapReason.ContinuityLost), await store.GetGapSummaryAsync(serverId));
+
+        tailer.SetupGet(t => t.CurrentOffset).Returns(40);
+        await tracker.ObservePollAsync(tailer.Object, CancellationToken.None);
+        Assert.Equal(new PlaytimeGapSummary(2, PlaytimeGapReason.Backlog), await store.GetGapSummaryAsync(serverId));
+        Assert.Equal(40, (await store.GetSourceCursorAsync(serverId))!.Offset);
+    }
+
+    [Fact]
+    public async Task Producer_RetriesAmbiguousSourceBatchBeforeRosterDispatch()
+    {
+        var storage = new InMemoryBlob();
+        var serverId = Guid.NewGuid();
+        var store = storage.CreateStore();
+        var sent = new List<PlaytimeObservation>();
+        var producer = new PlaytimeProducer(serverId, "CallOfDuty2", store,
+            (item, _) => { sent.Add(item); return Task.CompletedTask; }, NullLogger.Instance);
+        var tailer = new Mock<ILogTailer>();
+        tailer.SetupGet(t => t.CurrentFilePath).Returns("/logs/game.log");
+        tailer.SetupGet(t => t.CurrentOffset).Returns(20);
+        tailer.SetupGet(t => t.LastPollRecords).Returns([new LogTailRecord("J;123456;1;Player", 0, 20)]);
+        await producer.SourceTracker.InitializeAsync(tailer.Object, CancellationToken.None);
+        storage.FailAfterNextUpload = true;
+        await Assert.ThrowsAsync<RequestFailedException>(() =>
+            producer.SourceTracker.ObservePollAsync(tailer.Object, CancellationToken.None));
+
+        await producer.ObserveRosterAsync(new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial, [], 0, 0, 0),
+            CancellationToken.None);
+
+        Assert.False(producer.SourceTracker.HasPending);
+        Assert.Equal([PlaytimeEventKind.Join, PlaytimeEventKind.Roster], sent.Select(item => item.Kind));
+        Assert.Empty(await store.GetPendingAsync(serverId));
+    }
+
+    [Fact]
+    public async Task Producer_ReconcilesAcceptedRosterEvenWhenPersistenceFails()
+    {
+        var storage = new InMemoryBlob();
+        var serverId = Guid.NewGuid();
+        var store = storage.CreateStore();
+        var producer = new PlaytimeProducer(serverId, "CallOfDuty2", store, (_, _) => Task.CompletedTask, NullLogger.Instance);
+        var tailer = new Mock<ILogTailer>();
+        tailer.SetupGet(t => t.CurrentFilePath).Returns("/logs/game.log");
+        tailer.SetupGet(t => t.CurrentOffset).Returns(40);
+        tailer.SetupGet(t => t.LastPollRecords).Returns(
+        [
+            new LogTailRecord("J;123456;1;Player", 0, 20),
+            new LogTailRecord("InitGame: \\mapname\\mp_test\\g_gametype\\war", 20, 40)
+        ]);
+        await producer.SourceTracker.InitializeAsync(tailer.Object, CancellationToken.None);
+        await producer.SourceTracker.ObservePollAsync(tailer.Object, CancellationToken.None);
+        storage.UploadFailuresRemaining = 1;
+        await Assert.ThrowsAsync<RequestFailedException>(() => producer.CaptureRosterAsync(
+            new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Complete, [], 0, 0, 0), CancellationToken.None));
+        await producer.FlushAsync(CancellationToken.None);
+        tailer.SetupGet(t => t.CurrentOffset).Returns(60);
+        tailer.SetupGet(t => t.LastPollRecords).Returns([new LogTailRecord("J;123456;1;Player", 40, 60)]);
+
+        await producer.SourceTracker.ObservePollAsync(tailer.Object, CancellationToken.None);
+
+        Assert.Equal(PlaytimeEventKind.Join, Assert.Single(await store.GetPendingAsync(serverId)).Kind);
     }
 
     [Fact]
