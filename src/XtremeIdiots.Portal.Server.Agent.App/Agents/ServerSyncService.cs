@@ -56,7 +56,7 @@ public sealed class ServerSyncService : IServerSyncService
         ILogParser parser,
         string? gameType,
         bool isCod4xPluginSourceEnabled,
-        Func<ServerRosterSnapshot?, CancellationToken, Task> onRoster,
+        Func<ServerRosterSnapshot?, CancellationToken, Task<bool>> onRoster,
         CancellationToken ct = default)
         => SyncCoreAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled,
             onRoster ?? throw new ArgumentNullException(nameof(onRoster)), ct);
@@ -64,7 +64,7 @@ public sealed class ServerSyncService : IServerSyncService
     public async Task<bool> CaptureRosterAsync(
         Guid serverId,
         string gameType,
-        Func<ServerRosterSnapshot?, CancellationToken, Task> onRoster,
+        Func<ServerRosterSnapshot?, CancellationToken, Task<bool>> onRoster,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(onRoster);
@@ -98,12 +98,13 @@ public sealed class ServerSyncService : IServerSyncService
         ILogParser parser,
         string? gameType,
         bool isCod4xPluginSourceEnabled,
-        Func<ServerRosterSnapshot?, CancellationToken, Task>? onRoster,
+        Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>? onRoster,
         CancellationToken ct)
     {
         var ipResolvedEvents = new List<PlayerIpResolvedEvent>();
         ServerRosterSnapshot? roster = null;
         var rosterNotified = false;
+        var rosterRecorded = false;
 
         try
         {
@@ -117,7 +118,7 @@ public sealed class ServerSyncService : IServerSyncService
             if (onRoster is not null)
             {
                 rosterNotified = true;
-                await NotifyRosterAsync(onRoster, roster, serverId, ct).ConfigureAwait(false);
+                rosterRecorded = await NotifyRosterAsync(onRoster, roster, serverId, ct).ConfigureAwait(false);
             }
 
             if (!isSupportedGameType)
@@ -128,7 +129,7 @@ public sealed class ServerSyncService : IServerSyncService
                     gameType);
 
                 await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
-                return new ServerSyncResult(ipResolvedEvents, roster);
+                return new ServerSyncResult(ipResolvedEvents, roster, rosterRecorded);
             }
 
             if (rconPlayers is null)
@@ -141,7 +142,7 @@ public sealed class ServerSyncService : IServerSyncService
                 // starves server -> portal ban import.
                 await RunCoD4xReconciliationAsync(scope, serverId, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false);
 
-                return new ServerSyncResult(ipResolvedEvents, roster);
+                return new ServerSyncResult(ipResolvedEvents, roster, rosterRecorded);
             }
 
             var now = DateTime.UtcNow;
@@ -240,19 +241,18 @@ public sealed class ServerSyncService : IServerSyncService
             }
         }
 
-        return new ServerSyncResult(ipResolvedEvents, roster);
+        return new ServerSyncResult(ipResolvedEvents, roster, rosterRecorded);
     }
 
     private async Task<bool> NotifyRosterAsync(
-        Func<ServerRosterSnapshot?, CancellationToken, Task> onRoster,
+        Func<ServerRosterSnapshot?, CancellationToken, Task<bool>> onRoster,
         ServerRosterSnapshot? roster,
         Guid serverId,
         CancellationToken ct)
     {
         try
         {
-            await onRoster(roster, ct).ConfigureAwait(false);
-            return true;
+            return await onRoster(roster, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

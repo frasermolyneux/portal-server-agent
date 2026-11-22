@@ -127,13 +127,33 @@ public class PlaytimeProducerTests
             [new ServerRosterPlayer(1, "one", "Player", null), new ServerRosterPlayer(2, "two", null, null)],
             0, 0, 0);
 
-        await producer.CaptureRosterAsync(roster, CancellationToken.None);
+        Assert.True(await producer.CaptureRosterAsync(roster, CancellationToken.None));
 
         var observation = Assert.Single(pending);
         Assert.Equal(PlaytimeCompleteness.Partial, observation.Completeness);
         var player = Assert.Single(observation.Players);
         Assert.Equal("one", player.GameIdentifier);
         Assert.Null(player.IsBot);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CaptureRoster_InvalidRosterReturnsFalseAndRecordsGap(bool incompleteComplete)
+    {
+        var outbox = CreateOutbox(out var pending);
+        var producer = new PlaytimeProducer(Guid.NewGuid(), "CallOfDuty4", outbox.Object,
+            (_, _) => Task.CompletedTask, NullLogger.Instance);
+        var roster = incompleteComplete
+            ? new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Complete, [], 1, 0, 0)
+            : new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial,
+                [new ServerRosterPlayer(1, "one", "One", null), new ServerRosterPlayer(1, "two", "Two", null)], 0, 0, 0);
+
+        var recorded = await producer.CaptureRosterAsync(roster, CancellationToken.None);
+
+        Assert.False(recorded);
+        Assert.Empty(pending);
+        outbox.Verify(o => o.RecordGapAsync(It.IsAny<Guid>(), PlaytimeGapReason.InvalidRoster, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -174,7 +194,7 @@ public class PlaytimeProducerTests
         var observed = DateTime.UtcNow;
         var roster = new ServerRosterSnapshot(observed, RconRosterState.Partial, [], 0, 0, 0);
 
-        await producer.CaptureRosterAsync(roster, CancellationToken.None);
+        Assert.True(await producer.CaptureRosterAsync(roster, CancellationToken.None));
 
         Assert.Null(sent);
         Assert.Equal(observed, Assert.Single(pending).EventUtc.UtcDateTime);

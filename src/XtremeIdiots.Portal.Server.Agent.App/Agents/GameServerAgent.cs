@@ -388,7 +388,8 @@ public sealed class GameServerAgent
         var result = await _syncService.SyncWithRosterCallbackAsync(_context.ServerId, _parser, _context.GameType,
             _context.IsCod4xPluginSourceEnabled, _playtimeProducer.CaptureRosterAsync, ct);
         await PublishIpResolvedEventsAsync(result.IpResolvedEvents, ct);
-        return result.Roster is { State: RconRosterState.Complete or RconRosterState.Partial, CaptureDuration.TotalSeconds: <= 10 };
+        return result.RosterRecorded
+            && result.Roster is { State: RconRosterState.Complete or RconRosterState.Partial, CaptureDuration.TotalSeconds: <= 10 };
     }
 
     internal async Task RefreshPlaytimeRosterIfDueAsync(DateTime now, CancellationToken ct)

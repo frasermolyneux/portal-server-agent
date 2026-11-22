@@ -190,9 +190,10 @@ public class ServerSyncServiceTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SyncWithRosterCallbackAsync_RecordsBeforeQueryAndPreservesLegacySync(bool callbackFails)
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task SyncWithRosterCallbackAsync_RecordsBeforeQueryAndPreservesLegacySync(bool callbackFails, bool accepted)
     {
         var dto = new RconStatusResponseDto
         {
@@ -216,11 +217,12 @@ public class ServerSyncServiceTests
             {
                 Assert.NotNull(roster);
                 captured = true;
-                return callbackFails ? Task.FromException(new IOException("storage unavailable")) : Task.CompletedTask;
+                return callbackFails ? Task.FromException<bool>(new IOException("storage unavailable")) : Task.FromResult(accepted);
             });
 
         Assert.True(captured);
         Assert.NotNull(result.Roster);
+        Assert.Equal(!callbackFails && accepted, result.RosterRecorded);
         _mockQueryApi.Verify(q => q.GetServerStatus(_serverId), Times.Once);
         _mockParser.Verify(p => p.SetPlayer(1, It.Is<PlayerInfo>(player => player.Guid == "one")), Times.Once);
     }
@@ -236,7 +238,7 @@ public class ServerSyncServiceTests
             {
                 Assert.Null(roster);
                 calls++;
-                return Task.CompletedTask;
+                return Task.FromResult(false);
             });
 
         Assert.Equal(1, calls);
@@ -256,7 +258,7 @@ public class ServerSyncServiceTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             service.SyncWithRosterCallbackAsync(_serverId, _mockParser.Object, "CallOfDuty5", false,
-                (_, _) => { calls++; return Task.CompletedTask; }, cts.Token));
+                (_, _) => { calls++; return Task.FromResult(false); }, cts.Token));
 
         Assert.Equal(0, calls);
     }
@@ -279,7 +281,7 @@ public class ServerSyncServiceTests
         var before = DateTime.UtcNow;
 
         var success = await CreateService().CaptureRosterAsync(_serverId, "CallOfDuty4",
-            (roster, _) => { captured = roster; return Task.CompletedTask; });
+            (roster, _) => { captured = roster; return Task.FromResult(true); });
 
         Assert.True(success);
         Assert.NotNull(captured);
@@ -302,7 +304,7 @@ public class ServerSyncServiceTests
             {
                 Assert.Null(roster);
                 calls++;
-                return Task.CompletedTask;
+                return Task.FromResult(false);
             });
 
         Assert.False(success);
@@ -326,7 +328,7 @@ public class ServerSyncServiceTests
             {
                 Assert.Null(roster);
                 calls++;
-                return Task.CompletedTask;
+                return Task.FromResult(false);
             }).WaitAsync(TimeSpan.FromSeconds(20));
 
         Assert.False(success);
@@ -345,7 +347,7 @@ public class ServerSyncServiceTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             service.CaptureRosterAsync(_serverId, "CallOfDuty5",
-                (_, _) => { calls++; return Task.CompletedTask; }, cts.Token));
+                (_, _) => { calls++; return Task.FromResult(false); }, cts.Token));
 
         Assert.Equal(0, calls);
     }
@@ -362,7 +364,24 @@ public class ServerSyncServiceTests
             .ReturnsAsync(new ApiResult<RconStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<RconStatusResponseDto>(dto)));
 
         var success = await CreateService().CaptureRosterAsync(_serverId, "CallOfDuty4",
-            (_, _) => Task.FromException(new IOException("storage unavailable")));
+            (_, _) => Task.FromException<bool>(new IOException("storage unavailable")));
+
+        Assert.False(success);
+    }
+
+    [Fact]
+    public async Task CaptureRosterAsync_WhenRecordingRejectsRoster_RequestsBackoff()
+    {
+        var dto = new RconStatusResponseDto
+        {
+            Players = [],
+            Roster = new RconRosterObservationDto { State = RconRosterState.Partial, Players = [] }
+        };
+        _mockCod4RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<RconStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<RconStatusResponseDto>(dto)));
+
+        var success = await CreateService().CaptureRosterAsync(_serverId, "CallOfDuty4",
+            (_, _) => Task.FromResult(false));
 
         Assert.False(success);
     }

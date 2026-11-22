@@ -55,7 +55,7 @@ public interface IServerSyncService
         ILogParser parser,
         string? gameType,
         bool isCod4xPluginSourceEnabled,
-        Func<ServerRosterSnapshot?, CancellationToken, Task> onRoster,
+        Func<ServerRosterSnapshot?, CancellationToken, Task<bool>> onRoster,
         CancellationToken ct = default);
 
     /// <summary>
@@ -65,13 +65,14 @@ public interface IServerSyncService
     Task<bool> CaptureRosterAsync(
         Guid serverId,
         string gameType,
-        Func<ServerRosterSnapshot?, CancellationToken, Task> onRoster,
+        Func<ServerRosterSnapshot?, CancellationToken, Task<bool>> onRoster,
         CancellationToken ct = default);
 }
 
 public sealed record ServerSyncResult(
     IReadOnlyList<PlayerIpResolvedEvent> IpResolvedEvents,
-    ServerRosterSnapshot? Roster);
+    ServerRosterSnapshot? Roster,
+    bool RosterRecorded = false);
 
 public sealed record ServerRosterSnapshot(
     DateTime ObservedUtc,

@@ -96,7 +96,7 @@ public class GameServerAgentTests
         var producer = new PlaytimeProducer(context.ServerId, context.GameType, new Mock<IPlaytimeOutbox>().Object,
             (_, _) => Task.CompletedTask, NullLogger.Instance);
         _mockSyncService.SetupSequence(s => s.CaptureRosterAsync(context.ServerId, context.GameType,
-                It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()))
+                It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true)
             .ReturnsAsync(false);
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
@@ -112,7 +112,7 @@ public class GameServerAgentTests
         await agent.RefreshPlaytimeRosterIfDueAsync(now.AddMinutes(2), CancellationToken.None);
 
         _mockSyncService.Verify(s => s.CaptureRosterAsync(context.ServerId, context.GameType,
-            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class GameServerAgentTests
         await agent.RefreshPlaytimeRosterIfDueAsync(now, CancellationToken.None);
 
         _mockSyncService.Verify(s => s.CaptureRosterAsync(It.IsAny<Guid>(), It.IsAny<string>(),
-            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class GameServerAgentTests
         await agent.RefreshPlaytimeRosterIfDueAsync(now.AddMinutes(2), CancellationToken.None);
 
         _mockSyncService.Verify(s => s.CaptureRosterAsync(It.IsAny<Guid>(), It.IsAny<string>(),
-            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -313,13 +313,13 @@ public class GameServerAgentTests
             IpAddress = "127.0.0.1"
         };
         _mockSyncService.Setup(s => s.SyncWithRosterCallbackAsync(context.ServerId, _mockParser.Object,
-                context.GameType, false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()))
-            .Returns(async (Guid _, ILogParser _, string? _, bool _, Func<ServerRosterSnapshot?, CancellationToken, Task> callback, CancellationToken token) =>
+                context.GameType, false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()))
+            .Returns(async (Guid _, ILogParser _, string? _, bool _, Func<ServerRosterSnapshot?, CancellationToken, Task<bool>> callback, CancellationToken token) =>
             {
                 var roster = new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial,
                     [new ServerRosterPlayer(1, "id", "Player", null)], 0, 0, 0);
-                await callback(roster, token);
-                return new ServerSyncResult([resolved], roster);
+                var recorded = await callback(roster, token);
+                return new ServerSyncResult([resolved], roster, recorded);
             });
         _mockTailer.SetupGet(t => t.CurrentFilePath).Returns(context.LogFilePath);
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<string>());
@@ -370,7 +370,7 @@ public class GameServerAgentTests
 
         Assert.Equal(PlaytimeCompleteness.Partial, observation.Completeness);
         _mockSyncService.Verify(s => s.SyncWithRosterCallbackAsync(context.ServerId, _mockParser.Object, context.GameType,
-            false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+            false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()), Times.Once);
         _mockSyncService.Verify(s => s.SyncAsync(context.ServerId, _mockParser.Object, context.GameType,
             false, It.IsAny<CancellationToken>()), Times.Never);
         _mockPublisher.Verify(p => p.PublishAsync(resolved, context.ServerId, context.GameType,
