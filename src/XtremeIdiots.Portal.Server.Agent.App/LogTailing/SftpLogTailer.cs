@@ -32,8 +32,9 @@ public sealed class SftpLogTailer : ILogTailer
     private Stream? _logStream;
     private FileTransportTailerConfig? _config;
     private long _lastFileSize;
-    private string _partialLine = string.Empty;
+    private byte[] _partialLine = [];
     private int _reconnectAttempts;
+    private long _continuityVersion;
     private DateTime _rotationCheckAt = DateTime.MinValue;
 
     private bool _hostKeyValidated;
@@ -66,7 +67,11 @@ public sealed class SftpLogTailer : ILogTailer
 
     public bool IsConnected => _isConnectedOverride?.Invoke() ?? (_client?.IsConnected == true);
 
-    public long CurrentOffset => _lastFileSize;
+    public long CurrentOffset => _lastFileSize - _partialLine.Length;
+
+    public long InitialEndOffset { get; private set; }
+
+    public long ContinuityVersion => _continuityVersion;
 
     public string? CurrentFilePath => _config?.FilePath;
 
@@ -91,6 +96,7 @@ public sealed class SftpLogTailer : ILogTailer
         await EstablishConnectionAsync(ct).ConfigureAwait(false);
 
         var currentFileSize = await GetFileSizeAsync(config.FilePath, ct).ConfigureAwait(false);
+        InitialEndOffset = currentFileSize;
 
         if (startOffset.HasValue && startOffset.Value <= currentFileSize)
         {
@@ -100,12 +106,18 @@ public sealed class SftpLogTailer : ILogTailer
         }
         else
         {
+            if (startOffset.HasValue)
+            {
+                _logger.LogWarning("Saved offset {Offset} exceeds the current size {FileSize} for {FilePath}; unread log records may have been lost",
+                    startOffset.Value, currentFileSize, config.FilePath);
+            }
+
             _lastFileSize = currentFileSize;
             _logger.LogInformation("Connected and tailing from end of file at offset {Offset} for {FilePath}",
                 _lastFileSize, config.FilePath);
         }
 
-        _partialLine = string.Empty;
+        _partialLine = [];
         _reconnectAttempts = 0;
 
         await OpenLogStreamAsync(config.FilePath, ct).ConfigureAwait(false);
@@ -123,6 +135,7 @@ public sealed class SftpLogTailer : ILogTailer
         {
             if (!IsConnected)
             {
+                _continuityVersion++;
                 await ReconnectAsync(ct).ConfigureAwait(false);
             }
 
@@ -135,12 +148,13 @@ public sealed class SftpLogTailer : ILogTailer
 
                 if (statSize < _lastFileSize)
                 {
+                    _continuityVersion++;
                     _logger.LogWarning(
-                        "Log rotation detected for {FilePath}: size went from {OldSize} to {NewSize}, resetting offset",
+                        "Log rotation detected for {FilePath}: size went from {OldSize} to {NewSize}; unread log records may have been lost, resetting offset",
                         _config.FilePath, _lastFileSize, statSize);
 
                     _lastFileSize = 0;
-                    _partialLine = string.Empty;
+                    _partialLine = [];
                     statSize = null;
 
                     await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
@@ -177,8 +191,9 @@ public sealed class SftpLogTailer : ILogTailer
             // reopen the handle so we start reading from the new file.
             if (totalRead == 0 && statSize.HasValue && statSize.Value > _lastFileSize)
             {
+                _continuityVersion++;
                 _logger.LogWarning(
-                    "Rename-rotation suspected for {FilePath}: stat shows {StatSize} bytes but stream returned 0; reopening handle",
+                    "Rename-rotation suspected for {FilePath}: stat shows {StatSize} bytes but stream returned 0; unread log records may have been lost, reopening handle",
                     _config.FilePath, statSize.Value);
 
                 await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
@@ -202,6 +217,7 @@ public sealed class SftpLogTailer : ILogTailer
         }
         catch (SftpPathNotFoundException ex)
         {
+            _continuityVersion++;
             _logger.LogError(ex, "SFTP path not found while polling {FilePath}, will attempt reconnect", _config.FilePath);
             await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;
@@ -210,6 +226,7 @@ public sealed class SftpLogTailer : ILogTailer
         }
         catch (SshException ex)
         {
+            _continuityVersion++;
             _logger.LogError(ex, "SFTP error while polling {FilePath}, will attempt reconnect", _config.FilePath);
             await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;
@@ -218,6 +235,7 @@ public sealed class SftpLogTailer : ILogTailer
         }
         catch (IOException ex)
         {
+            _continuityVersion++;
             _logger.LogError(ex, "IO error while polling {FilePath}, will attempt reconnect", _config.FilePath);
             await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
             _logStream = null;

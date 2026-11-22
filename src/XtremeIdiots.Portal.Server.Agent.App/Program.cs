@@ -20,6 +20,7 @@ using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Observability;
 using XtremeIdiots.Portal.Server.Agent.App.Orchestration;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
+using XtremeIdiots.Portal.Server.Agent.App.Playtime;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 var builder = WebApplication.CreateBuilder(args);
 
@@ -130,6 +131,7 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<ILogTailerFactory, LogTailerFactory>();
 builder.Services.AddSingleton<ILogParserFactory, LogParserFactory>();
 builder.Services.AddSingleton<IEventPublisher, ServiceBusEventPublisher>();
+builder.Services.AddSingleton<PlaytimeServiceBusPublisher>();
 builder.Services.AddSingleton<IOffsetStore, BlobOffsetStore>();
 builder.Services.AddSingleton<IServerLock, BlobServerLock>();
 builder.Services.AddSingleton<IServerSyncService, ServerSyncService>();

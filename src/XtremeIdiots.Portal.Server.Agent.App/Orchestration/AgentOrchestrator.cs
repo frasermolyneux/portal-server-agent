@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 
+using Azure.Storage.Blobs;
 using Microsoft.ApplicationInsights;
 using MX.Platform.Monitoring;
 
@@ -8,6 +9,7 @@ using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Observability;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
+using XtremeIdiots.Portal.Server.Agent.App.Playtime;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Orchestration;
@@ -34,6 +36,8 @@ public class AgentOrchestrator : BackgroundService
     private readonly ILogger<AgentOrchestrator> _logger;
     private readonly TelemetryClient _telemetryClient;
     private readonly AgentProcessHealth _processHealth;
+    private readonly BlobServiceClient? _playtimeStorage;
+    private readonly PlaytimeServiceBusPublisher? _playtimePublisher;
     private DateTimeOffset _lastProcessPublication;
 
     private readonly ConcurrentDictionary<Guid, AgentEntry> _agents = new();
@@ -58,7 +62,9 @@ public class AgentOrchestrator : BackgroundService
         ILoggerFactory loggerFactory,
         ILogger<AgentOrchestrator> logger,
         TelemetryClient telemetryClient,
-        AgentProcessHealth? processHealth = null)
+        AgentProcessHealth? processHealth = null,
+        BlobServiceClient? playtimeStorage = null,
+        PlaytimeServiceBusPublisher? playtimePublisher = null)
     {
         _configProvider = configProvider ?? throw new ArgumentNullException(nameof(configProvider));
         _tailerFactory = tailerFactory ?? throw new ArgumentNullException(nameof(tailerFactory));
@@ -76,6 +82,8 @@ public class AgentOrchestrator : BackgroundService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _telemetryClient = telemetryClient ?? throw new ArgumentNullException(nameof(telemetryClient));
         _processHealth = processHealth ?? new AgentProcessHealth();
+        _playtimeStorage = playtimeStorage;
+        _playtimePublisher = playtimePublisher;
     }
 
     /// <summary>
@@ -273,8 +281,13 @@ public class AgentOrchestrator : BackgroundService
             var parser = _parserFactory.Create(server.GameType);
             var agentLogger = _loggerFactory.CreateLogger($"GameServerAgent.{server.Title}");
             var runId = Guid.NewGuid();
+            var playtime = PlaytimeProducer.SupportsGame(server.GameType)
+                && _playtimeStorage is not null && _playtimePublisher is not null
+                ? new PlaytimeProducer(server.ServerId, server.GameType,
+                    new BlobPlaytimeOutbox(_playtimeStorage, _serverLock), _playtimePublisher.SendAsync, agentLogger)
+                : null;
 
-            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _coD4xPluginLifecycleService, _banFileWatcher, agentLogger,
+            var agent = new GameServerAgent(server, tailer, parser, _publisher, _offsetStore, _serverLock, _syncService, _broadcastService, _cvarProbe, _coD4xPluginLifecycleService, _banFileWatcher, agentLogger, Random.Shared,
                 () =>
                 {
                     _processHealth.Heartbeats[server.ServerId] = new(runId, DateTimeOffset.UtcNow);
@@ -284,7 +297,7 @@ public class AgentOrchestrator : BackgroundService
                         ["GameType"] = server.GameType,
                         ["SourceMode"] = server.IsCod4xPluginSourceEnabled ? "Plugin" : "Log"
                     });
-                });
+                }, playtimeProducer: playtime);
 
             var task = Task.Run(() => agent.RunAsync(cts.Token), cts.Token);
             _agents.TryAdd(server.ServerId, new AgentEntry(task, cts, server.ConfigHash, runId));

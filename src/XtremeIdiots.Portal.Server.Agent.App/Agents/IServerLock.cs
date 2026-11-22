@@ -18,6 +18,12 @@ public interface IServerLock
     Task<bool> RenewAsync(Guid serverId, CancellationToken ct = default);
 
     /// <summary>
+    /// Gets the currently held lease ID for storage operations on the lock blob.
+    /// The storage service validates it again when the operation is performed.
+    /// </summary>
+    bool TryGetLeaseId(Guid serverId, out string leaseId);
+
+    /// <summary>
     /// Release the lock, allowing other instances to acquire it.
     /// </summary>
     Task ReleaseAsync(Guid serverId, CancellationToken ct = default);
