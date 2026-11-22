@@ -25,6 +25,12 @@ public interface ILogTailer : IAsyncDisposable
     /// </summary>
     Task<IReadOnlyList<string>> PollAsync(CancellationToken ct = default);
 
+    /// <summary>Complete nonempty lines and their byte positions from the last poll.</summary>
+    IReadOnlyList<LogTailRecord> LastPollRecords { get; }
+
+    /// <summary>Whether the last successful poll reached the observed end of the source.</summary>
+    bool LastPollReachedEnd { get; }
+
     /// <summary>
     /// Whether the tailer is currently connected to the FTP server.
     /// </summary>
@@ -52,3 +58,5 @@ public interface ILogTailer : IAsyncDisposable
     /// </summary>
     string? CurrentFilePath { get; }
 }
+
+public sealed record LogTailRecord(string Text, long StartOffset, long EndOffset);

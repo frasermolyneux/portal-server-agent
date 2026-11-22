@@ -322,6 +322,10 @@ internal sealed class BlobPlaytimeOutbox : IPlaytimeOutbox
         {
             if (state.SourceCursor != expectedCursor)
             {
+                if (state.SourceCursor == nextCursor)
+                {
+                    return state;
+                }
                 throw new InvalidOperationException("The playtime source cursor changed; the gap cannot be committed.");
             }
 

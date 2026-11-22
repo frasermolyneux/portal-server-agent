@@ -142,6 +142,22 @@ public class FtpLogTailerTests
         Assert.Empty(partial);
     }
 
+    [Fact]
+    public void SplitIntoRecords_PreservesBytePositionsAcrossPartialUtf8()
+    {
+        var data = Encoding.UTF8.GetBytes("\nA\u00e9\r\nnext\npartial");
+        byte[] partial = [];
+
+        var first = FtpLogTailer.SplitIntoRecords(data[..3], ref partial, 100);
+        var second = FtpLogTailer.SplitIntoRecords(data[3..], ref partial, 101);
+
+        Assert.Empty(first);
+        Assert.Collection(second,
+            record => { Assert.Equal("A\u00e9", record.Text); Assert.Equal(101, record.StartOffset); Assert.Equal(106, record.EndOffset); },
+            record => { Assert.Equal("next", record.Text); Assert.Equal(106, record.StartOffset); Assert.Equal(111, record.EndOffset); });
+        Assert.Equal("partial", Encoding.UTF8.GetString(partial));
+    }
+
     #endregion
 
     #region Constructor and State Tests
