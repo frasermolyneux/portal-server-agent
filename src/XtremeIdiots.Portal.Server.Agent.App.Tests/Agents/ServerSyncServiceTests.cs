@@ -104,6 +104,129 @@ public class ServerSyncServiceTests
             pi.Guid == "guid-b" && pi.Name == "Bob" && pi.IpAddress == "5.6.7.8" && pi.Ping == 50 && pi.Rate == 20000)), Times.Once);
     }
 
+    [Theory]
+    [InlineData(RconRosterState.Complete, RconRosterState.Complete)]
+    [InlineData(RconRosterState.Partial, RconRosterState.Partial)]
+    [InlineData(RconRosterState.Failed, RconRosterState.Failed)]
+    [InlineData(RconRosterState.Unknown, RconRosterState.Unknown)]
+    public async Task SyncWithRosterAsync_UsesObservedIdentitiesAndPreservesUncertainty(
+        RconRosterState sourceState, RconRosterState expectedState)
+    {
+        var dto = new CoD4xStatusResponseDto
+        {
+            Players =
+            [
+                new() { Num = 1, PlayerIdentifier = "one", Name = "Alice" },
+                new() { Num = 2, PlayerIdentifier = "different", Name = "Wrong player" }
+            ],
+            Roster = new RconRosterObservationDto
+            {
+                State = sourceState,
+                Players =
+                [
+                    new() { Slot = 1, PlayerIdentifier = "one" },
+                    new() { Slot = 2, PlayerIdentifier = "two" }
+                ],
+                UnparsedRowCount = 1,
+                MissingIdentityCount = 2,
+                KnownBotCount = 3
+            }
+        };
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<CoD4xStatusResponseDto>(dto)));
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+        var before = DateTime.UtcNow;
+
+        var result = await CreateService().SyncWithRosterAsync(_serverId, _mockParser.Object, "CallOfDuty4x", false);
+
+        var roster = Assert.IsType<ServerRosterSnapshot>(result.Roster);
+        Assert.Equal(expectedState, roster.State);
+        Assert.InRange(roster.ObservedUtc, before, DateTime.UtcNow);
+        Assert.Equal(DateTimeKind.Utc, roster.ObservedUtc.Kind);
+        Assert.Equal(1, roster.UnparsedRowCount);
+        Assert.Equal(2, roster.MissingIdentityCount);
+        Assert.Equal(3, roster.KnownBotCount);
+        if (sourceState is RconRosterState.Partial or RconRosterState.Complete)
+        {
+            Assert.Equal("Alice", roster.Players[0].Username);
+            Assert.Null(roster.Players[1].Username);
+        }
+        else
+        {
+            Assert.Empty(roster.Players);
+        }
+        Assert.All(roster.Players, player => Assert.Null(player.IsBot));
+    }
+
+    [Theory]
+    [InlineData("CallOfDuty2")]
+    [InlineData("CallOfDuty4")]
+    [InlineData("CallOfDuty5")]
+    public async Task SyncWithRosterAsync_UsesEachGamesExistingStatusCall(string gameType)
+    {
+        var dto = new RconStatusResponseDto
+        {
+            Players = [new() { Num = 1, Guid = "one", Name = "Alice" }],
+            Roster = new RconRosterObservationDto
+            {
+                State = RconRosterState.Partial,
+                Players = [new() { Slot = 1, PlayerIdentifier = "one" }]
+            }
+        };
+        var response = new ApiResult<RconStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<RconStatusResponseDto>(dto));
+        _mockCod2RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>())).ReturnsAsync(response);
+        _mockCod4RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>())).ReturnsAsync(response);
+        _mockCod5RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>())).ReturnsAsync(response);
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var result = await CreateService().SyncWithRosterAsync(_serverId, _mockParser.Object, gameType, false);
+
+        var roster = Assert.IsType<ServerRosterSnapshot>(result.Roster);
+        Assert.Equal(RconRosterState.Partial, roster.State);
+        var player = Assert.Single(roster.Players);
+        Assert.Equal("one", player.PlayerGuid);
+        Assert.Equal("Alice", player.Username);
+        Assert.Null(player.IsBot);
+    }
+
+    [Fact]
+    public async Task SyncWithRosterAsync_WhenRosterMissing_DoesNotInferFromLegacyPlayers()
+    {
+        var dto = new CoD4xStatusResponseDto
+        {
+            Players = [new() { Num = 1, PlayerIdentifier = "one", Name = "Alice" }]
+        };
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<CoD4xStatusResponseDto>(dto)));
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var result = await CreateService().SyncWithRosterAsync(_serverId, _mockParser.Object, "CallOfDuty4x", false);
+
+        Assert.Null(result.Roster);
+    }
+
+    [Fact]
+    public async Task SyncWithRosterAsync_WhenRosterMalformed_PreservesLegacyReconciliation()
+    {
+        var dto = new CoD4xStatusResponseDto
+        {
+            Players = [new() { Num = 1, PlayerIdentifier = "one", Name = "Alice" }],
+            Roster = new RconRosterObservationDto
+            {
+                State = RconRosterState.Partial,
+                Players = [new() { Slot = 1, PlayerIdentifier = "" }]
+            }
+        };
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<CoD4xStatusResponseDto>(dto)));
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var result = await CreateService().SyncWithRosterAsync(_serverId, _mockParser.Object, "CallOfDuty4x", false);
+
+        Assert.Null(result.Roster);
+        _mockParser.Verify(p => p.SetPlayer(1, It.Is<PlayerInfo>(player => player.Guid == "one")), Times.Once);
+    }
+
     [Fact]
     public async Task SyncAsync_RemovesStalePlayers()
     {

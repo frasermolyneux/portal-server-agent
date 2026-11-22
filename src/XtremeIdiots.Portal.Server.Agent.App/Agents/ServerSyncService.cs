@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
 
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 
@@ -38,15 +40,26 @@ public sealed class ServerSyncService : IServerSyncService
         string? gameType,
         bool isCod4xPluginSourceEnabled,
         CancellationToken ct = default)
+        => (await SyncWithRosterAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false)).IpResolvedEvents;
+
+    public async Task<ServerSyncResult> SyncWithRosterAsync(
+        Guid serverId,
+        ILogParser parser,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        CancellationToken ct = default)
     {
         var ipResolvedEvents = new List<PlayerIpResolvedEvent>();
+        ServerRosterSnapshot? roster = null;
 
         try
         {
             using var scope = _scopeFactory.CreateScope();
             var serversApiClient = scope.ServiceProvider.GetRequiredService<IServersApiClient>();
 
-            var (isSupportedGameType, rconPlayers) = await TryGetRconPlayersAsync(serversApiClient, serverId, gameType, ct).ConfigureAwait(false);
+            var started = Stopwatch.GetTimestamp();
+            var (isSupportedGameType, rconPlayers, observedRoster) = await TryGetRconPlayersAsync(serversApiClient, serverId, gameType, ct).ConfigureAwait(false);
+            roster = observedRoster is null ? null : observedRoster with { CaptureDuration = Stopwatch.GetElapsedTime(started) };
 
             if (!isSupportedGameType)
             {
@@ -56,7 +69,7 @@ public sealed class ServerSyncService : IServerSyncService
                     gameType);
 
                 await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
-                return ipResolvedEvents;
+                return new ServerSyncResult(ipResolvedEvents, roster);
             }
 
             if (rconPlayers is null)
@@ -69,7 +82,7 @@ public sealed class ServerSyncService : IServerSyncService
                 // starves server -> portal ban import.
                 await RunCoD4xReconciliationAsync(scope, serverId, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false);
 
-                return ipResolvedEvents;
+                return new ServerSyncResult(ipResolvedEvents, roster);
             }
 
             var now = DateTime.UtcNow;
@@ -160,7 +173,7 @@ public sealed class ServerSyncService : IServerSyncService
             _logger.LogWarning(ex, "RCON sync failed for server {ServerId}", serverId);
         }
 
-        return ipResolvedEvents;
+        return new ServerSyncResult(ipResolvedEvents, roster);
     }
 
     /// <summary>
@@ -203,7 +216,7 @@ public sealed class ServerSyncService : IServerSyncService
         }
     }
 
-    private async Task<(bool IsSupportedGameType, IReadOnlyList<RconPlayerSnapshot>? Players)> TryGetRconPlayersAsync(
+    private async Task<(bool IsSupportedGameType, IReadOnlyList<RconPlayerSnapshot>? Players, ServerRosterSnapshot? Roster)> TryGetRconPlayersAsync(
         IServersApiClient serversApiClient,
         Guid serverId,
         string? gameType,
@@ -215,16 +228,17 @@ public sealed class ServerSyncService : IServerSyncService
             if (!result.IsSuccess || result.Result?.Data?.Players is null)
             {
                 _logger.LogWarning("RCON sync failed for server {ServerId}: CoD4x status returned non-success or no data", serverId);
-                return (true, null);
+                return (true, null, null);
             }
 
-            return (true, result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
+            var players = result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
                 player.Num,
                 player.PlayerIdentifier,
                 player.Name,
                 player.IpAddress,
                 player.Ping ?? 0,
-                player.Rate)).ToList());
+                player.Rate)).ToList();
+            return (true, players, CreateRosterSnapshot(serverId, result.Result.Data.Roster, players));
         }
 
         if (string.Equals(gameType, CallOfDuty2GameType, StringComparison.OrdinalIgnoreCase))
@@ -233,16 +247,17 @@ public sealed class ServerSyncService : IServerSyncService
             if (!result.IsSuccess || result.Result?.Data?.Players is null)
             {
                 _logger.LogWarning("RCON sync failed for server {ServerId}: CoD2 status returned non-success or no data", serverId);
-                return (true, null);
+                return (true, null, null);
             }
 
-            return (true, result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
+            var players = result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
                 player.Num,
                 player.Guid,
                 player.Name,
                 player.IpAddress,
                 player.Ping,
-                player.Rate)).ToList());
+                player.Rate)).ToList();
+            return (true, players, CreateRosterSnapshot(serverId, result.Result.Data.Roster, players));
         }
 
         if (string.Equals(gameType, CallOfDuty4GameType, StringComparison.OrdinalIgnoreCase))
@@ -251,16 +266,17 @@ public sealed class ServerSyncService : IServerSyncService
             if (!result.IsSuccess || result.Result?.Data?.Players is null)
             {
                 _logger.LogWarning("RCON sync failed for server {ServerId}: CoD4 status returned non-success or no data", serverId);
-                return (true, null);
+                return (true, null, null);
             }
 
-            return (true, result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
+            var players = result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
                 player.Num,
                 player.Guid,
                 player.Name,
                 player.IpAddress,
                 player.Ping,
-                player.Rate)).ToList());
+                player.Rate)).ToList();
+            return (true, players, CreateRosterSnapshot(serverId, result.Result.Data.Roster, players));
         }
 
         if (string.Equals(gameType, CallOfDuty5GameType, StringComparison.OrdinalIgnoreCase))
@@ -269,19 +285,51 @@ public sealed class ServerSyncService : IServerSyncService
             if (!result.IsSuccess || result.Result?.Data?.Players is null)
             {
                 _logger.LogWarning("RCON sync failed for server {ServerId}: CoD5 status returned non-success or no data", serverId);
-                return (true, null);
+                return (true, null, null);
             }
 
-            return (true, result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
+            var players = result.Result.Data.Players.Select(player => new RconPlayerSnapshot(
                 player.Num,
                 player.Guid,
                 player.Name,
                 player.IpAddress,
                 player.Ping,
-                player.Rate)).ToList());
+                player.Rate)).ToList();
+            return (true, players, CreateRosterSnapshot(serverId, result.Result.Data.Roster, players));
         }
 
-        return (false, null);
+        return (false, null, null);
+    }
+
+    private ServerRosterSnapshot? CreateRosterSnapshot(
+        Guid serverId,
+        RconRosterObservationDto? roster,
+        IReadOnlyList<RconPlayerSnapshot> players)
+    {
+        if (roster is null)
+        {
+            return null;
+        }
+
+        if (!Enum.IsDefined(roster.State) || roster.Players is null || roster.UnparsedRowCount < 0 ||
+            roster.MissingIdentityCount < 0 || roster.KnownBotCount < 0 ||
+            roster.Players.Any(p => p is null || string.IsNullOrWhiteSpace(p.PlayerIdentifier) || p.Slot < 0))
+        {
+            _logger.LogWarning("RCON roster for server {ServerId} is invalid; ignoring roster metadata", serverId);
+            return null;
+        }
+
+        var observedPlayers = (roster.State is RconRosterState.Partial or RconRosterState.Complete
+            ? roster.Players
+            : []).Select(player => new ServerRosterPlayer(
+            player.Slot,
+            player.PlayerIdentifier,
+            players.FirstOrDefault(p => p.Num == player.Slot &&
+                string.Equals(p.Guid, player.PlayerIdentifier, StringComparison.OrdinalIgnoreCase))?.Name,
+            null)).ToArray();
+
+        return new ServerRosterSnapshot(DateTime.UtcNow, roster.State, observedPlayers,
+            roster.UnparsedRowCount, roster.MissingIdentityCount, roster.KnownBotCount);
     }
 
     private static bool IsCoD4xGameType(string? gameType)

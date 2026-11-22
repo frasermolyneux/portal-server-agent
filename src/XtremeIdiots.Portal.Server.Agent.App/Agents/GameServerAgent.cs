@@ -6,6 +6,7 @@ using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
+using XtremeIdiots.Portal.Server.Agent.App.Playtime;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
@@ -32,6 +33,8 @@ public sealed class GameServerAgent
     private readonly ILogger _logger;
     private readonly Random _startupJitterRandom;
     private readonly Action? _reportHeartbeat;
+    private PlaytimeSourceTracker? _playtimeSourceTracker;
+    private readonly PlaytimeProducer? _playtimeProducer;
 
     private long _sequenceId;
     private DateTime _lastOffsetSave = DateTime.MinValue;
@@ -42,6 +45,7 @@ public sealed class GameServerAgent
     private DateTime _lastBanFileCheck = DateTime.MinValue;
     private DateTime _lastHeartbeat = DateTime.MinValue;
     private DateTime _lastBroadcastAt = DateTime.MinValue;
+    private DateTime _lastPlaytimeFlush = DateTime.MinValue;
     private int _nextBroadcastIndex;
 
     internal static readonly TimeSpan OffsetSaveInterval = TimeSpan.FromSeconds(30);
@@ -98,7 +102,9 @@ public sealed class GameServerAgent
         IBanFileWatcher banFileWatcher,
         ILogger logger,
         Random startupJitterRandom,
-        Action? reportHeartbeat = null)
+        Action? reportHeartbeat = null,
+        PlaytimeSourceTracker? playtimeSourceTracker = null,
+        PlaytimeProducer? playtimeProducer = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _tailer = tailer ?? throw new ArgumentNullException(nameof(tailer));
@@ -114,6 +120,8 @@ public sealed class GameServerAgent
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _startupJitterRandom = startupJitterRandom ?? throw new ArgumentNullException(nameof(startupJitterRandom));
         _reportHeartbeat = reportHeartbeat;
+        _playtimeProducer = playtimeProducer;
+        _playtimeSourceTracker = playtimeSourceTracker ?? playtimeProducer?.SourceTracker;
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -168,6 +176,7 @@ public sealed class GameServerAgent
             };
 
             await _tailer.ConnectAsync(tailerConfig, startOffset, ct);
+            await TrackPlaytimeSourceAsync(initialize: true, ct);
 
             // 2a. Broadcast startup status once after successful connection.
             await SendStartupOnlineBroadcastAsync(ct);
@@ -179,13 +188,7 @@ public sealed class GameServerAgent
             }
 
             // 4. Initial RCON sync — populate slot map with current players
-            var initialIpEvents = await _syncService.SyncAsync(
-                _context.ServerId,
-                _parser,
-                _context.GameType,
-                _context.IsCod4xPluginSourceEnabled,
-                ct);
-            await PublishIpResolvedEventsAsync(initialIpEvents, ct);
+            await SyncPlayersAsync(ct);
             _lastRconSync = DateTime.UtcNow;
 
             // 4a. One-shot CoD4x cvar probe (no-op for other game types). Self-gates
@@ -199,7 +202,21 @@ public sealed class GameServerAgent
             {
                 try
                 {
-                    var lines = await _tailer.PollAsync(ct);
+                    IReadOnlyList<string> lines;
+                    try
+                    {
+                        lines = await _tailer.PollAsync(ct);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        await TrackPlaytimePollFailureAsync(ct);
+                        throw;
+                    }
+                    await TrackPlaytimeSourceAsync(initialize: false, ct);
 
                     foreach (var line in lines)
                     {
@@ -247,14 +264,14 @@ public sealed class GameServerAgent
                     // Periodic RCON sync (every 5 minutes)
                     if (DateTime.UtcNow - _lastRconSync > RconSyncInterval)
                     {
-                        var ipEvents = await _syncService.SyncAsync(
-                            _context.ServerId,
-                            _parser,
-                            _context.GameType,
-                            _context.IsCod4xPluginSourceEnabled,
-                            ct);
-                        await PublishIpResolvedEventsAsync(ipEvents, ct);
+                        await SyncPlayersAsync(ct);
                         _lastRconSync = DateTime.UtcNow;
+                    }
+
+                    if (_playtimeProducer is not null && DateTime.UtcNow - _lastPlaytimeFlush > TimeSpan.FromSeconds(5))
+                    {
+                        await FlushPlaytimeAsync(ct);
+                        _lastPlaytimeFlush = DateTime.UtcNow;
                     }
 
                     if (DateTime.UtcNow - _lastPluginLifecycleCheck > PluginLifecycleCheckInterval)
@@ -299,10 +316,120 @@ public sealed class GameServerAgent
             await SaveOffsetAsync(shutdownCts.Token);
             await _tailer.DisposeAsync();
 
+            if (_playtimeProducer?.HasUnpersistedObservation == true)
+            {
+                try
+                {
+                    await FlushPlaytimeAsync(shutdownCts.Token);
+                }
+                catch (OperationCanceledException) when (shutdownCts.IsCancellationRequested)
+                {
+                    _logger.LogWarning("[{Title}] Timed out persisting pending playtime data", _context.Title);
+                }
+                if (_playtimeProducer.HasUnpersistedObservation)
+                {
+                    _logger.LogWarning("[{Title}] Unpersisted playtime data was lost during shutdown", _context.Title);
+                }
+            }
+
             // Release the distributed lock
             await _serverLock.ReleaseAsync(_context.ServerId, CancellationToken.None);
 
             _logger.LogInformation("[{Title}] Agent stopped for server {ServerId}", _context.Title, _context.ServerId);
+        }
+    }
+
+    private async Task TrackPlaytimeSourceAsync(bool initialize, CancellationToken ct)
+    {
+        if (_playtimeSourceTracker is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (initialize)
+            {
+                await _playtimeSourceTracker.InitializeAsync(_tailer, ct);
+            }
+            else
+            {
+                await _playtimeSourceTracker.ObservePollAsync(_tailer, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{Title}] Playtime source tracking failed; tracking is disabled for this agent run", _context.Title);
+            _playtimeSourceTracker = null;
+        }
+    }
+
+    private async Task SyncPlayersAsync(CancellationToken ct)
+    {
+        if (_playtimeProducer is null)
+        {
+            var events = await _syncService.SyncAsync(_context.ServerId, _parser, _context.GameType,
+                _context.IsCod4xPluginSourceEnabled, ct);
+            await PublishIpResolvedEventsAsync(events, ct);
+            return;
+        }
+
+        var result = await _syncService.SyncWithRosterAsync(_context.ServerId, _parser, _context.GameType,
+            _context.IsCod4xPluginSourceEnabled, ct);
+        await PublishIpResolvedEventsAsync(result.IpResolvedEvents, ct);
+        try
+        {
+            await _playtimeProducer.ObserveRosterAsync(result.Roster, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{Title}] Playtime roster recording failed; any retained observation will be retried", _context.Title);
+        }
+    }
+
+    private async Task FlushPlaytimeAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _playtimeProducer!.FlushAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{Title}] Playtime dispatch failed; pending observations will be retried", _context.Title);
+        }
+    }
+
+    private async Task TrackPlaytimePollFailureAsync(CancellationToken ct)
+    {
+        if (_playtimeSourceTracker is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _playtimeSourceTracker.ObservePollFailureAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{Title}] Playtime source tracking failed; tracking is disabled for this agent run", _context.Title);
+            _playtimeSourceTracker = null;
         }
     }
 

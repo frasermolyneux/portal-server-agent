@@ -25,8 +25,9 @@ public sealed class FtpLogTailer : ILogTailer
     private AsyncFtpClient? _client;
     private FileTransportTailerConfig? _config;
     private long _lastFileSize;
-    private string _partialLine = string.Empty;
+    private byte[] _partialLine = [];
     private int _reconnectAttempts;
+    private long _continuityVersion;
 
     /// <summary>
     /// Creates a new <see cref="FtpLogTailer"/> instance.
@@ -41,7 +42,11 @@ public sealed class FtpLogTailer : ILogTailer
     public bool IsConnected => _client?.IsConnected == true;
 
     /// <inheritdoc />
-    public long CurrentOffset => _lastFileSize;
+    public long CurrentOffset => _lastFileSize - _partialLine.Length;
+
+    public long InitialEndOffset { get; private set; }
+
+    public long ContinuityVersion => _continuityVersion;
 
     /// <inheritdoc />
     public string? CurrentFilePath => _config?.FilePath;
@@ -70,6 +75,8 @@ public sealed class FtpLogTailer : ILogTailer
                 "The file may not exist or the FTP server did not return a valid size.");
         }
 
+        InitialEndOffset = currentFileSize;
+
         if (startOffset.HasValue && startOffset.Value <= currentFileSize)
         {
             _lastFileSize = startOffset.Value;
@@ -78,13 +85,19 @@ public sealed class FtpLogTailer : ILogTailer
         }
         else
         {
+            if (startOffset.HasValue)
+            {
+                _logger.LogWarning("Saved offset {Offset} exceeds the current size {FileSize} for {FilePath}; unread log records may have been lost",
+                    startOffset.Value, currentFileSize, config.FilePath);
+            }
+
             // Start tailing from end of file so we only get new data
             _lastFileSize = currentFileSize;
             _logger.LogInformation("Connected and tailing from end of file at offset {Offset} for {FilePath}",
                 _lastFileSize, config.FilePath);
         }
 
-        _partialLine = string.Empty;
+        _partialLine = [];
         _reconnectAttempts = 0;
     }
 
@@ -100,6 +113,7 @@ public sealed class FtpLogTailer : ILogTailer
         {
             if (!IsConnected)
             {
+                _continuityVersion++;
                 await ReconnectAsync(ct);
             }
 
@@ -107,16 +121,18 @@ public sealed class FtpLogTailer : ILogTailer
 
             if (currentSize < 0)
             {
+                _continuityVersion++;
                 _logger.LogWarning("Unable to determine file size for {FilePath}, skipping poll", _config.FilePath);
                 return Array.Empty<string>();
             }
 
             if (currentSize < _lastFileSize)
             {
-                _logger.LogWarning("Log rotation detected for {FilePath}: size went from {OldSize} to {NewSize}, resetting offset",
+                _continuityVersion++;
+                _logger.LogWarning("Log rotation detected for {FilePath}: size went from {OldSize} to {NewSize}; unread log records may have been lost, resetting offset",
                     _config.FilePath, _lastFileSize, currentSize);
                 _lastFileSize = 0;
-                _partialLine = string.Empty;
+                _partialLine = [];
             }
 
             // Stat succeeded - connection is healthy even if there is no new data.
@@ -144,18 +160,21 @@ public sealed class FtpLogTailer : ILogTailer
         }
         catch (FtpException ex)
         {
+            _continuityVersion++;
             _logger.LogError(ex, "FTP error while polling {FilePath}, will attempt reconnect", _config.FilePath);
             await ReconnectAsync(ct);
             return Array.Empty<string>();
         }
         catch (IOException ex)
         {
+            _continuityVersion++;
             _logger.LogError(ex, "IO error while polling {FilePath}, will attempt reconnect", _config.FilePath);
             await ReconnectAsync(ct);
             return Array.Empty<string>();
         }
         catch (System.Net.Sockets.SocketException ex)
         {
+            _continuityVersion++;
             _logger.LogError(ex, "Socket error while polling {FilePath}, will attempt reconnect", _config.FilePath);
             await ReconnectAsync(ct);
             return Array.Empty<string>();
@@ -188,27 +207,27 @@ public sealed class FtpLogTailer : ILogTailer
     /// On exit, updated with any incomplete trailing line from this chunk.
     /// </param>
     /// <returns>A list of complete lines (without line endings).</returns>
-    internal static IReadOnlyList<string> SplitIntoLines(byte[] data, ref string partialLine)
+    internal static IReadOnlyList<string> SplitIntoLines(byte[] data, ref byte[] partialLine)
     {
         if (data.Length == 0)
         {
             return Array.Empty<string>();
         }
 
-        var text = partialLine + Encoding.UTF8.GetString(data);
+        var bytes = new byte[partialLine.Length + data.Length];
+        partialLine.CopyTo(bytes, 0);
+        data.CopyTo(bytes, partialLine.Length);
         var lines = new List<string>();
 
         var startIndex = 0;
-        for (var i = 0; i < text.Length; i++)
+        for (var i = 0; i < bytes.Length; i++)
         {
-            if (text[i] == '\n')
+            if (bytes[i] == (byte)'\n')
             {
-                var end = i > 0 && text[i - 1] == '\r' ? i - 1 : i;
-                var line = text[startIndex..end];
-
-                if (line.Length > 0)
+                var end = i > startIndex && bytes[i - 1] == (byte)'\r' ? i - 1 : i;
+                if (end > startIndex)
                 {
-                    lines.Add(line);
+                    lines.Add(Encoding.UTF8.GetString(bytes, startIndex, end - startIndex));
                 }
 
                 startIndex = i + 1;
@@ -216,7 +235,7 @@ public sealed class FtpLogTailer : ILogTailer
         }
 
         // Whatever remains after the last newline is a partial line
-        partialLine = startIndex < text.Length ? text[startIndex..] : string.Empty;
+        partialLine = bytes[startIndex..];
 
         return lines;
     }
