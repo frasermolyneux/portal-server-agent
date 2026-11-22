@@ -2205,6 +2205,85 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("0.2.35", "Portal CoD4x plugin skeleton (v0.2.5)")]
+    [InlineData("0.2.3", "Portal CoD4x plugin skeleton (v0.2.35)")]
+    [InlineData("0.2.35", "Portal CoD4x plugin skeleton (v0.2.35-rc1)")]
+    public async Task ExecuteAsync_InstallWithDifferentReportedVersion_FailsWithoutClaimingTargetWasReported(
+        string targetVersion,
+        string pluginInfo)
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.0.0" },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-version-mismatch",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = targetVersion,
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+
+        try
+        {
+            SetupConfiguration(settings);
+            _mockCoD4xRconApi.Setup(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessResult(pluginInfo));
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId, Cod4xPluginSettingsConstants.Namespace, It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            await CreateService().ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Equal("1.0.0", final.RuntimeState.CurrentVersion);
+            Assert.Contains("did not report expected version", final.RuntimeState.LastError);
+            var report = final.RuntimeState.ExtensionData!["healthReport"];
+            Assert.Equal(JsonValueKind.Null, report.GetProperty("ReportedVersion").ValueKind);
+            Assert.Contains(pluginInfo, report.GetProperty("Details").GetString());
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("Portal CoD4x plugin skeleton (v0.2.35)")]
+    [InlineData("portal-cod4x-plugin version 0.2.35")]
+    public async Task ExecuteAsync_AlreadyOnTarget_WithExactReportedVersion_DoesNotRedeploy(string pluginInfo)
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "0.2.35" },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-install-exact-version",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "0.2.35",
+                RequestedBy = "tester"
+            }
+        };
+        SetupConfiguration(settings);
+        _mockCoD4xRconApi.Setup(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessResult(pluginInfo));
+
+        await CreateService().ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task ExecuteAsync_InstallWithEmptyPluginInfo_SetsFailedState()
     {
