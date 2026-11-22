@@ -2206,10 +2206,12 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData("0.2.35", "Portal CoD4x plugin skeleton (v0.2.5)")]
-    [InlineData("0.2.3", "Portal CoD4x plugin skeleton (v0.2.35)")]
-    [InlineData("0.2.35", "Portal CoD4x plugin skeleton (v0.2.35-rc1)")]
-    public async Task ExecuteAsync_InstallWithDifferentReportedVersion_FailsWithoutClaimingTargetWasReported(
+    [InlineData(Cod4xPluginOperationAction.Install, "0.2.35", "Portal CoD4x plugin skeleton (v0.2.5)")]
+    [InlineData(Cod4xPluginOperationAction.Install, "0.2.3", "Portal CoD4x plugin skeleton (v0.2.35)")]
+    [InlineData(Cod4xPluginOperationAction.Install, "0.2.35", "Portal CoD4x plugin skeleton (v0.2.35-rc1)")]
+    [InlineData(Cod4xPluginOperationAction.Rollback, "0.2.35", "Portal CoD4x plugin skeleton (v0.2.5)")]
+    public async Task ExecuteAsync_WithDifferentReportedVersion_FailsWithoutClaimingTargetWasReported(
+        Cod4xPluginOperationAction action,
         string targetVersion,
         string pluginInfo)
     {
@@ -2218,11 +2220,11 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         {
             SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
             Enabled = true,
-            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.0.0" },
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.0.0", PreviousKnownGoodVersion = targetVersion },
             OperationRequest = new Cod4xPluginOperationRequest
             {
                 OperationId = "op-install-version-mismatch",
-                Action = Cod4xPluginOperationAction.Install,
+                Action = action,
                 TargetVersion = targetVersion,
                 RequestedBy = "tester",
                 ExtensionData = CreateExtensionData("artifactPath", artifactPath)
@@ -2243,7 +2245,9 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             await CreateService().ExecuteAsync(CreateContext(), CancellationToken.None);
 
             var final = DeserializeSettings(persistedPayloads[^1].Configuration);
-            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Equal(action == Cod4xPluginOperationAction.Rollback
+                ? Cod4xPluginOperationStatus.RollbackFailed
+                : Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
             Assert.Equal("1.0.0", final.RuntimeState.CurrentVersion);
             Assert.Contains("did not report expected version", final.RuntimeState.LastError);
             var report = final.RuntimeState.ExtensionData!["healthReport"];
