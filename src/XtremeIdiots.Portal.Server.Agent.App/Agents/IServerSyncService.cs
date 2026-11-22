@@ -1,4 +1,5 @@
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
@@ -37,4 +38,38 @@ public interface IServerSyncService
         string? gameType,
         bool isCod4xPluginSourceEnabled,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Performs the same sync and returns the roster observed by that RCON call, when available.
+    /// Observation time is the agent's response time, not the players' join time.
+    /// </summary>
+    Task<ServerSyncResult> SyncWithRosterAsync(
+        Guid serverId,
+        ILogParser parser,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        CancellationToken ct = default);
+
+    Task<ServerSyncResult> SyncWithRosterCallbackAsync(
+        Guid serverId,
+        ILogParser parser,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        Func<ServerRosterSnapshot?, CancellationToken, Task> onRoster,
+        CancellationToken ct = default);
 }
+
+public sealed record ServerSyncResult(
+    IReadOnlyList<PlayerIpResolvedEvent> IpResolvedEvents,
+    ServerRosterSnapshot? Roster);
+
+public sealed record ServerRosterSnapshot(
+    DateTime ObservedUtc,
+    RconRosterState State,
+    IReadOnlyList<ServerRosterPlayer> Players,
+    int UnparsedRowCount,
+    int MissingIdentityCount,
+    int KnownBotCount,
+    TimeSpan CaptureDuration = default);
+
+public sealed record ServerRosterPlayer(int SlotId, string PlayerGuid, string? Username, bool? IsBot);

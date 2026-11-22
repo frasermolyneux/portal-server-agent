@@ -35,11 +35,34 @@ public class SftpLogTailerTests
 
         Assert.Equal(["first", "second"], lines);
         Assert.Equal(chunks.Sum(chunk => chunk.Length), tailer.CurrentOffset);
+        Assert.Equal(0, tailer.ContinuityVersion);
 
         var linesAtEof = await tailer.PollAsync();
 
         Assert.Empty(linesAtEof);
         Assert.Equal(chunks.Sum(chunk => chunk.Length), tailer.CurrentOffset);
+    }
+
+    [Fact]
+    public async Task PollAsync_WithIncompleteLine_ExcludesItsBytesFromCheckpoint()
+    {
+        var chunk = "first\npartial"u8.ToArray();
+        var read = false;
+        var stream = new TestLogStream(buffer =>
+        {
+            if (read)
+            {
+                return ValueTask.FromResult(0);
+            }
+
+            read = true;
+            chunk.AsSpan().CopyTo(buffer.Span);
+            return ValueTask.FromResult(chunk.Length);
+        });
+        var tailer = CreateTailer(stream);
+
+        Assert.Equal(["first"], await tailer.PollAsync());
+        Assert.Equal(6, tailer.CurrentOffset);
     }
 
     [Fact]
@@ -126,6 +149,26 @@ public class SftpLogTailerTests
 
         Assert.Equal(1, openCount);
         Assert.True(original.IsDisposed);
+        Assert.Equal(1, tailer.ContinuityVersion);
+    }
+
+    [Fact]
+    public async Task PollAsync_WhenFileShrinks_ReportsPossibleMissingRecords()
+    {
+        var logger = new Mock<ILogger<SftpLogTailer>>();
+        var stream = new TestLogStream(_ => ValueTask.FromResult(0));
+        var tailer = new SftpLogTailer(
+            logger.Object, CreateConfig(), stream, 10, () => true,
+            (_, _) => Task.FromResult(0L),
+            (_, _) => Task.FromResult<Stream>(new TestLogStream(_ => ValueTask.FromResult(0))),
+            _ => Task.CompletedTask);
+
+        await tailer.PollAsync();
+
+        logger.Verify(l => l.Log(
+            LogLevel.Warning, It.IsAny<EventId>(),
+            It.Is<It.IsAnyType>((state, _) => state != null && state.ToString()!.Contains("unread log records may have been lost")),
+            It.IsAny<Exception?>(), It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
     }
 
     [Theory, InlineData("missing"), InlineData("sftp"), InlineData("io")]
@@ -163,6 +206,7 @@ public class SftpLogTailerTests
 
         Assert.True(original.IsDisposed);
         Assert.True(reconnectStarted.Task.IsCompleted);
+        Assert.Equal(1, tailer.ContinuityVersion);
     }
 
     [Fact]

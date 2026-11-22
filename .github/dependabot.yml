@@ -57,6 +57,11 @@ updates:
       all-updates:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "mcr.microsoft.com/dotnet/aspnet"
+        versions: [">=11.0"]
+      - dependency-name: "mcr.microsoft.com/dotnet/sdk"
+        versions: [">=11.0"]
 
   - package-ecosystem: "devcontainers"
     assignees: ["frasermolyneux"]
