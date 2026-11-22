@@ -49,6 +49,14 @@ public interface IServerSyncService
         string? gameType,
         bool isCod4xPluginSourceEnabled,
         CancellationToken ct = default);
+
+    Task<ServerSyncResult> SyncWithRosterCallbackAsync(
+        Guid serverId,
+        ILogParser parser,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        Func<ServerRosterSnapshot?, CancellationToken, Task> onRoster,
+        CancellationToken ct = default);
 }
 
 public sealed record ServerSyncResult(

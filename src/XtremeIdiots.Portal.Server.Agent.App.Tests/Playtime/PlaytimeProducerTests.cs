@@ -147,6 +147,25 @@ public class PlaytimeProducerTests
     }
 
     [Fact]
+    public async Task CaptureRoster_PersistsBeforeDispatchAndPreservesCaptureTime()
+    {
+        var outbox = CreateOutbox(out var pending);
+        PlaytimeObservation? sent = null;
+        var producer = new PlaytimeProducer(Guid.NewGuid(), "CallOfDuty4", outbox.Object,
+            (item, _) => { sent = item; return Task.CompletedTask; }, NullLogger.Instance);
+        var observed = DateTime.UtcNow;
+        var roster = new ServerRosterSnapshot(observed, RconRosterState.Partial, [], 0, 0, 0);
+
+        await producer.CaptureRosterAsync(roster, CancellationToken.None);
+
+        Assert.Null(sent);
+        Assert.Equal(observed, Assert.Single(pending).EventUtc.UtcDateTime);
+        await producer.FlushAsync(CancellationToken.None);
+        Assert.NotNull(sent);
+        Assert.Equal(observed, sent.EventUtc.UtcDateTime);
+    }
+
+    [Fact]
     public async Task CompleteRosterRetry_PreservesSnapshotTimeCompletenessAndUnknownBot()
     {
         var outbox = CreateOutbox(out _);

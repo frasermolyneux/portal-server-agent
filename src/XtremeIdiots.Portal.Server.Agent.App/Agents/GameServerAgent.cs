@@ -378,21 +378,9 @@ public sealed class GameServerAgent
             return;
         }
 
-        var result = await _syncService.SyncWithRosterAsync(_context.ServerId, _parser, _context.GameType,
-            _context.IsCod4xPluginSourceEnabled, ct);
+        var result = await _syncService.SyncWithRosterCallbackAsync(_context.ServerId, _parser, _context.GameType,
+            _context.IsCod4xPluginSourceEnabled, _playtimeProducer.CaptureRosterAsync, ct);
         await PublishIpResolvedEventsAsync(result.IpResolvedEvents, ct);
-        try
-        {
-            await _playtimeProducer.ObserveRosterAsync(result.Roster, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[{Title}] Playtime roster recording failed; any retained observation will be retried", _context.Title);
-        }
     }
 
     private async Task FlushPlaytimeAsync(CancellationToken ct)

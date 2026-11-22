@@ -47,7 +47,13 @@ internal sealed class PlaytimeProducer
             || string.Equals(gameType, "CallOfDuty4", StringComparison.OrdinalIgnoreCase)
             || string.Equals(gameType, "CallOfDuty5", StringComparison.OrdinalIgnoreCase);
 
-    public async Task ObserveRosterAsync(ServerRosterSnapshot? roster, CancellationToken ct)
+    public Task ObserveRosterAsync(ServerRosterSnapshot? roster, CancellationToken ct)
+        => ObserveRosterAsync(roster, dispatch: true, ct);
+
+    public Task CaptureRosterAsync(ServerRosterSnapshot? roster, CancellationToken ct)
+        => ObserveRosterAsync(roster, dispatch: false, ct);
+
+    private async Task ObserveRosterAsync(ServerRosterSnapshot? roster, bool dispatch, CancellationToken ct)
     {
         if (roster is null || roster.State == RconRosterState.Unknown)
         {
@@ -128,10 +134,20 @@ internal sealed class PlaytimeProducer
         }
 
         _pending = observation;
-        await FlushAsync(ct).ConfigureAwait(false);
+        await PersistPendingAsync(ct).ConfigureAwait(false);
+        if (dispatch)
+        {
+            await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
+        }
     }
 
     public async Task FlushAsync(CancellationToken ct)
+    {
+        await PersistPendingAsync(ct).ConfigureAwait(false);
+        await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
+    }
+
+    private async Task PersistPendingAsync(CancellationToken ct)
     {
         await FlushPendingDropAsync(ct).ConfigureAwait(false);
         if (_pending is not null)
@@ -154,7 +170,6 @@ internal sealed class PlaytimeProducer
             _pending = null;
         }
 
-        await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
     }
 
     private async Task FlushPendingDropAsync(CancellationToken ct)

@@ -42,12 +42,31 @@ public sealed class ServerSyncService : IServerSyncService
         CancellationToken ct = default)
         => (await SyncWithRosterAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false)).IpResolvedEvents;
 
-    public async Task<ServerSyncResult> SyncWithRosterAsync(
+    public Task<ServerSyncResult> SyncWithRosterAsync(
         Guid serverId,
         ILogParser parser,
         string? gameType,
         bool isCod4xPluginSourceEnabled,
         CancellationToken ct = default)
+        => SyncCoreAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled, null, ct);
+
+    public Task<ServerSyncResult> SyncWithRosterCallbackAsync(
+        Guid serverId,
+        ILogParser parser,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        Func<ServerRosterSnapshot?, CancellationToken, Task> onRoster,
+        CancellationToken ct = default)
+        => SyncCoreAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled,
+            onRoster ?? throw new ArgumentNullException(nameof(onRoster)), ct);
+
+    private async Task<ServerSyncResult> SyncCoreAsync(
+        Guid serverId,
+        ILogParser parser,
+        string? gameType,
+        bool isCod4xPluginSourceEnabled,
+        Func<ServerRosterSnapshot?, CancellationToken, Task>? onRoster,
+        CancellationToken ct)
     {
         var ipResolvedEvents = new List<PlayerIpResolvedEvent>();
         ServerRosterSnapshot? roster = null;
@@ -60,6 +79,26 @@ public sealed class ServerSyncService : IServerSyncService
             var started = Stopwatch.GetTimestamp();
             var (isSupportedGameType, rconPlayers, observedRoster) = await TryGetRconPlayersAsync(serversApiClient, serverId, gameType, ct).ConfigureAwait(false);
             roster = observedRoster is null ? null : observedRoster with { CaptureDuration = Stopwatch.GetElapsedTime(started) };
+
+            if (onRoster is not null)
+            {
+                try
+                {
+                    await onRoster(roster, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Playtime roster recording failed for server {ServerId}; legacy synchronization continues", serverId);
+                }
+            }
 
             if (!isSupportedGameType)
             {

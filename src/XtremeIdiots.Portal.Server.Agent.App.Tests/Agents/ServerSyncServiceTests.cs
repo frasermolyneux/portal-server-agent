@@ -189,6 +189,42 @@ public class ServerSyncServiceTests
         Assert.Null(player.IsBot);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SyncWithRosterCallbackAsync_RecordsBeforeQueryAndPreservesLegacySync(bool callbackFails)
+    {
+        var dto = new RconStatusResponseDto
+        {
+            Players = [new() { Num = 1, Guid = "one", Name = "Alice" }],
+            Roster = new RconRosterObservationDto
+            {
+                State = RconRosterState.Partial,
+                Players = [new() { Slot = 1, PlayerIdentifier = "one" }]
+            }
+        };
+        _mockCod4RconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<RconStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<RconStatusResponseDto>(dto)));
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+        var captured = false;
+        _mockQueryApi.Setup(q => q.GetServerStatus(_serverId))
+            .Callback(() => Assert.True(captured))
+            .ThrowsAsync(new HttpRequestException("query unavailable"));
+
+        var result = await CreateService().SyncWithRosterCallbackAsync(_serverId, _mockParser.Object, "CallOfDuty4", false,
+            (roster, _) =>
+            {
+                Assert.NotNull(roster);
+                captured = true;
+                return callbackFails ? Task.FromException(new IOException("storage unavailable")) : Task.CompletedTask;
+            });
+
+        Assert.True(captured);
+        Assert.NotNull(result.Roster);
+        _mockQueryApi.Verify(q => q.GetServerStatus(_serverId), Times.Once);
+        _mockParser.Verify(p => p.SetPlayer(1, It.Is<PlayerInfo>(player => player.Guid == "one")), Times.Once);
+    }
+
     [Fact]
     public async Task SyncWithRosterAsync_WhenRosterMissing_DoesNotInferFromLegacyPlayers()
     {
