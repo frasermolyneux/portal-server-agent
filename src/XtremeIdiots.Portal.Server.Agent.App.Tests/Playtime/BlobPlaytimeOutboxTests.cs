@@ -659,6 +659,51 @@ public sealed class BlobPlaytimeOutboxTests
     }
 
     [Fact]
+    public async Task Producer_SourceCapacityDispatchReconcilesAmbiguousRosterBeforePartialFailure()
+    {
+        var storage = new InMemoryBlob();
+        var serverId = Guid.NewGuid();
+        var store = storage.CreateStore();
+        var sent = new List<PlaytimeObservation>();
+        var fail = true;
+        var producer = new PlaytimeProducer(serverId, "CallOfDuty2", store, (item, _) =>
+        {
+            if (fail && item.Kind == PlaytimeEventKind.Roster)
+            {
+                throw new IOException("send failed");
+            }
+            sent.Add(item);
+            return Task.CompletedTask;
+        }, NullLogger.Instance);
+        var tailer = new Mock<ILogTailer>();
+        tailer.SetupGet(t => t.CurrentFilePath).Returns("/logs/game.log");
+        tailer.SetupGet(t => t.CurrentOffset).Returns(40);
+        tailer.SetupGet(t => t.LastPollRecords).Returns(
+        [
+            new LogTailRecord("J;123456;1;Player", 0, 20),
+            new LogTailRecord("Q;123456;1;Player", 20, 40)
+        ]);
+        await producer.SourceTracker.InitializeAsync(tailer.Object, CancellationToken.None);
+        await store.GetOrCreateCoverageAsync(serverId, Guid.NewGuid(), DateTimeOffset.UtcNow.AddSeconds(-1));
+        for (var index = 0; index < 127; index++)
+        {
+            await store.EnqueueAsync(serverId, CreateJoin() with { ServerId = serverId, EventId = Guid.NewGuid() });
+        }
+        storage.FailAfterNextUpload = true;
+        await Assert.ThrowsAsync<RequestFailedException>(() => producer.CaptureRosterAsync(
+            new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial, [], 0, 0, 0), CancellationToken.None));
+
+        await Assert.ThrowsAsync<IOException>(() => producer.SourceTracker.ObservePollAsync(tailer.Object, CancellationToken.None));
+        fail = false;
+        await producer.FlushAsync(CancellationToken.None);
+
+        Assert.False(producer.HasUnpersistedObservation);
+        Assert.Empty(await store.GetPendingAsync(serverId));
+        Assert.Single(sent, item => item.Kind == PlaytimeEventKind.Roster);
+        Assert.Equal(130, sent.Count);
+    }
+
+    [Fact]
     public async Task Producer_ReconcilesAcceptedRosterEvenWhenPersistenceFails()
     {
         var storage = new InMemoryBlob();

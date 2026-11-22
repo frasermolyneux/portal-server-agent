@@ -37,7 +37,7 @@ internal sealed class PlaytimeProducer
         _logger = logger;
         _dispatcher = new PlaytimeOutboxDispatcher(outbox, send, logger);
         SourceTracker = new PlaytimeSourceTracker(outbox, serverId, gameType,
-            ct => _dispatcher.DispatchAsync(serverId, ct), () => checked(++_sequence), logger);
+            DispatchForSourceCapacityAsync, () => checked(++_sequence), logger);
     }
 
     public PlaytimeSourceTracker SourceTracker { get; }
@@ -155,6 +155,24 @@ internal sealed class PlaytimeProducer
     {
         await SourceTracker.FlushPendingAsync(ct).ConfigureAwait(false);
         await PersistPendingAsync(ct).ConfigureAwait(false);
+        await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
+    }
+
+    private async Task DispatchForSourceCapacityAsync(CancellationToken ct)
+    {
+        if (_pending is { Coverage: not null } pending)
+        {
+            try
+            {
+                await _outbox.EnqueueAsync(_serverId, pending, ct).ConfigureAwait(false);
+                _pending = null;
+            }
+            catch (PlaytimeOutboxCapacityExceededException)
+            {
+                // The roster is not in the full outbox; retain it until space is available.
+            }
+        }
+
         await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
     }
 
