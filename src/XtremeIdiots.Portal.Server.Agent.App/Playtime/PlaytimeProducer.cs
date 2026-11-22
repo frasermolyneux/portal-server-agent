@@ -50,15 +50,15 @@ internal sealed class PlaytimeProducer
     public Task ObserveRosterAsync(ServerRosterSnapshot? roster, CancellationToken ct)
         => ObserveRosterAsync(roster, dispatch: true, ct);
 
-    public Task CaptureRosterAsync(ServerRosterSnapshot? roster, CancellationToken ct)
+    public Task<bool> CaptureRosterAsync(ServerRosterSnapshot? roster, CancellationToken ct)
         => ObserveRosterAsync(roster, dispatch: false, ct);
 
-    private async Task ObserveRosterAsync(ServerRosterSnapshot? roster, bool dispatch, CancellationToken ct)
+    private async Task<bool> ObserveRosterAsync(ServerRosterSnapshot? roster, bool dispatch, CancellationToken ct)
     {
         if (roster is null || roster.State == RconRosterState.Unknown)
         {
             await RecordGapAsync(PlaytimeGapReason.RosterUnavailable, ct).ConfigureAwait(false);
-            return;
+            return false;
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -67,22 +67,24 @@ internal sealed class PlaytimeProducer
             || roster.ObservedUtc > now)
         {
             await RecordGapAsync(PlaytimeGapReason.RosterStale, ct).ConfigureAwait(false);
-            return;
+            return false;
         }
 
+        var namedPlayers = roster.Players.Where(player => !string.IsNullOrWhiteSpace(player.Username)).ToArray();
+        var missingNames = roster.Players.Count - namedPlayers.Length;
         var completeness = roster.State switch
         {
-            RconRosterState.Complete => PlaytimeCompleteness.Complete,
+            RconRosterState.Complete when missingNames == 0 => PlaytimeCompleteness.Complete,
+            RconRosterState.Complete => PlaytimeCompleteness.Partial,
             RconRosterState.Partial => PlaytimeCompleteness.Partial,
             RconRosterState.Failed => PlaytimeCompleteness.Failed,
             _ => throw new InvalidOperationException("Unsupported RCON roster state.")
         };
         if (roster.State == RconRosterState.Complete && (roster.UnparsedRowCount != 0 || roster.MissingIdentityCount != 0)
-            || roster.Players.Any(player => string.IsNullOrWhiteSpace(player.Username))
             || roster.Players.Select(player => player.SlotId).Distinct().Count() != roster.Players.Count)
         {
             await RecordGapAsync(PlaytimeGapReason.InvalidRoster, ct).ConfigureAwait(false);
-            return;
+            return false;
         }
 
         var sequence = checked(++_sequence);
@@ -101,7 +103,7 @@ internal sealed class PlaytimeProducer
             Completeness = completeness,
             Epoch = _coverage?.Epoch ?? _epoch,
             ProducerSequence = null,
-            Players = roster.Players.Select(player =>
+            Players = namedPlayers.Select(player =>
                 new PlaytimeRosterPlayer(player.PlayerGuid, player.Username!, player.SlotId, player.IsBot)).ToImmutableArray()
         };
         try
@@ -111,7 +113,7 @@ internal sealed class PlaytimeProducer
         catch (ArgumentException)
         {
             await RecordGapAsync(PlaytimeGapReason.InvalidRoster, ct).ConfigureAwait(false);
-            return;
+            return false;
         }
 
         if (_pending is not null)
@@ -130,15 +132,20 @@ internal sealed class PlaytimeProducer
             _pendingCoverage = true;
             _logger.LogWarning("Playtime roster dropped for server {ServerId}: {Reason}", _serverId, PlaytimeGapReason.Backlog);
             await FlushPendingDropAsync(ct).ConfigureAwait(false);
-            return;
+            return false;
         }
 
         _pending = observation;
         await PersistPendingAsync(ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Playtime roster captured for server {ServerId} game {GameType}: state {RosterState}, completeness {Completeness}, identities {IdentityCount}, unknown bot status {UnknownBotCount}, unparsed rows {UnparsedRowCount}, missing identities {MissingIdentityCount}, missing names {MissingNameCount}",
+            _serverId, _gameType, roster.State, completeness, namedPlayers.Length, namedPlayers.Count(player => player.IsBot is null),
+            roster.UnparsedRowCount, roster.MissingIdentityCount, missingNames);
         if (dispatch)
         {
             await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
         }
+        return true;
     }
 
     public async Task FlushAsync(CancellationToken ct)
@@ -199,7 +206,7 @@ internal sealed class PlaytimeProducer
 
     private async Task RecordGapAsync(PlaytimeGapReason reason, CancellationToken ct)
     {
-        _logger.LogWarning("Playtime roster coverage gap for server {ServerId}: {Reason}", _serverId, reason);
+        _logger.LogWarning("Playtime roster coverage gap for server {ServerId} game {GameType}: {Reason}", _serverId, _gameType, reason);
         await _outbox.RecordGapAsync(_serverId, reason, ct).ConfigureAwait(false);
     }
 

@@ -97,25 +97,63 @@ public class PlaytimeProducerTests
     }
 
     [Fact]
-    public async Task ObserveRoster_RejectsStaleAndMissingNamesWithoutClaimingAbsence()
+    public async Task ObserveRoster_RejectsStaleAndInvalidCompleteRosterWithoutClaimingAbsence()
     {
         var outbox = CreateOutbox(out var pending);
         var producer = new PlaytimeProducer(Guid.NewGuid(), "CallOfDuty5", outbox.Object,
             (_, _) => throw new InvalidOperationException("must not send"), NullLogger.Instance);
         var stale = new ServerRosterSnapshot(DateTime.UtcNow.AddMinutes(-1), RconRosterState.Complete, [], 0, 0, 0);
         var slow = new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial, [], 0, 0, 0, TimeSpan.FromSeconds(11));
-        var missingName = new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Complete,
-            [new ServerRosterPlayer(1, "id", null, null)], 0, 0, 0);
         var incomplete = new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Complete, [], 1, 0, 0);
 
         await producer.ObserveRosterAsync(stale, CancellationToken.None);
         await producer.ObserveRosterAsync(slow, CancellationToken.None);
-        await producer.ObserveRosterAsync(missingName, CancellationToken.None);
         await producer.ObserveRosterAsync(incomplete, CancellationToken.None);
 
         Assert.Empty(pending);
         outbox.Verify(o => o.RecordGapAsync(It.IsAny<Guid>(), PlaytimeGapReason.RosterStale, It.IsAny<CancellationToken>()), Times.Exactly(2));
-        outbox.Verify(o => o.RecordGapAsync(It.IsAny<Guid>(), PlaytimeGapReason.InvalidRoster, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        outbox.Verify(o => o.RecordGapAsync(It.IsAny<Guid>(), PlaytimeGapReason.InvalidRoster, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(RconRosterState.Complete)]
+    [InlineData(RconRosterState.Partial)]
+    public async Task ObserveRoster_MissingNamePreservesOtherPlayersWithoutClaimingCompleteness(RconRosterState state)
+    {
+        var outbox = CreateOutbox(out var pending);
+        var producer = new PlaytimeProducer(Guid.NewGuid(), "CallOfDuty5", outbox.Object,
+            (_, _) => Task.CompletedTask, NullLogger.Instance);
+        var roster = new ServerRosterSnapshot(DateTime.UtcNow, state,
+            [new ServerRosterPlayer(1, "one", "Player", null), new ServerRosterPlayer(2, "two", null, null)],
+            0, 0, 0);
+
+        Assert.True(await producer.CaptureRosterAsync(roster, CancellationToken.None));
+
+        var observation = Assert.Single(pending);
+        Assert.Equal(PlaytimeCompleteness.Partial, observation.Completeness);
+        var player = Assert.Single(observation.Players);
+        Assert.Equal("one", player.GameIdentifier);
+        Assert.Null(player.IsBot);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CaptureRoster_InvalidRosterReturnsFalseAndRecordsGap(bool incompleteComplete)
+    {
+        var outbox = CreateOutbox(out var pending);
+        var producer = new PlaytimeProducer(Guid.NewGuid(), "CallOfDuty4", outbox.Object,
+            (_, _) => Task.CompletedTask, NullLogger.Instance);
+        var roster = incompleteComplete
+            ? new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Complete, [], 1, 0, 0)
+            : new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial,
+                [new ServerRosterPlayer(1, "one", "One", null), new ServerRosterPlayer(1, "two", "Two", null)], 0, 0, 0);
+
+        var recorded = await producer.CaptureRosterAsync(roster, CancellationToken.None);
+
+        Assert.False(recorded);
+        Assert.Empty(pending);
+        outbox.Verify(o => o.RecordGapAsync(It.IsAny<Guid>(), PlaytimeGapReason.InvalidRoster, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -156,7 +194,7 @@ public class PlaytimeProducerTests
         var observed = DateTime.UtcNow;
         var roster = new ServerRosterSnapshot(observed, RconRosterState.Partial, [], 0, 0, 0);
 
-        await producer.CaptureRosterAsync(roster, CancellationToken.None);
+        Assert.True(await producer.CaptureRosterAsync(roster, CancellationToken.None));
 
         Assert.Null(sent);
         Assert.Equal(observed, Assert.Single(pending).EventUtc.UtcDateTime);
