@@ -20,6 +20,26 @@
 
 Portal Server Agent is a .NET 10 worker that tails game-server logs over FTP or SFTP and publishes structured events to Azure Service Bus. It runs in Azure Container Apps and coordinates per-server agents for log parsing, ban-file monitoring, status publication, and RCON-backed vote handling. The produced events are consumed by downstream processing components in the portal event pipeline. Infrastructure and deployment are managed through Terraform and GitHub Actions.
 
+Detected truncation or rotation is logged as a possible data gap; replacement
+files that grow past the previous offset may not be detectable.
+
+The dedicated playtime producer uses the existing RCON poll for bounded
+CoD2, CoD4 and CoD5 roster observations. CoD4x playtime is reserved for the
+plugin; the agent does not emit CoD4x observations. Log records with
+unverified freshness are not emitted as playtime. Sanitized pending
+observations and source cursors use the existing server lock blob, with the
+blob lease fencing writes. Coverage counters use a durable per-server producer
+epoch (retained across process restarts) and are frozen with each roster; a roster skipped because the in-memory
+outbox backlog is occupied increments the capacity counter. Send failures are
+retried, not counted as attempt drops. Pending observations more than 24 hours
+old are dropped and counted atomically because first submissions beyond that
+age are rejected downstream. Stale or untrusted source data is recorded
+separately as a gap rather than an outbox age drop. Gaps are logged
+and recorded in the blob; they are not all represented by the coverage counters.
+An observation or drop held only in memory while blob storage is unavailable
+can be lost on abrupt termination. A stored gap does not establish that the
+replacement log is fresh or that all source losses were detected.
+
 ## Process health
 
 The monitoring-owned contract mirrored under `src/contract/` publishes bounded

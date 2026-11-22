@@ -1,4 +1,5 @@
 using System.Net;
+using System.Collections.Immutable;
 
 using Moq;
 
@@ -8,10 +9,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 using MX.Api.Abstractions;
 
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
+using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.BanFiles;
 using XtremeIdiots.Portal.Server.Agent.App.LogTailing;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
+using XtremeIdiots.Portal.Server.Agent.App.Playtime;
 using XtremeIdiots.Portal.Server.Agent.App.Publishing;
 using XtremeIdiots.Portal.Settings.Contracts.V1.Contracts.FileTransport;
 
@@ -239,6 +242,213 @@ public class GameServerAgentTests
             p => p.PublishAsync(testEvent, _testContext.ServerId, _testContext.GameType,
                 It.IsAny<long>(), It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_NonCod4x_UsesSameSyncForLegacyAndPlaytimeRoster()
+    {
+        var context = _testContext with { GameType = "CallOfDuty4" };
+        var resolved = new PlayerIpResolvedEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "id",
+            IpAddress = "127.0.0.1"
+        };
+        _mockSyncService.Setup(s => s.SyncWithRosterCallbackAsync(context.ServerId, _mockParser.Object,
+                context.GameType, false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()))
+            .Returns(async (Guid _, ILogParser _, string? _, bool _, Func<ServerRosterSnapshot?, CancellationToken, Task> callback, CancellationToken token) =>
+            {
+                var roster = new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial,
+                    [new ServerRosterPlayer(1, "id", "Player", null)], 0, 0, 0);
+                await callback(roster, token);
+                return new ServerSyncResult([resolved], roster);
+            });
+        _mockTailer.SetupGet(t => t.CurrentFilePath).Returns(context.LogFilePath);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<string>());
+        var pending = new List<PlaytimeObservation>();
+        var outbox = new Mock<IPlaytimeOutbox>();
+        outbox.Setup(o => o.GetOrCreateCoverageAsync(context.ServerId, It.IsAny<Guid>(),
+                It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid epoch, DateTimeOffset started, CancellationToken _) =>
+                new PlaytimeCoverageState(epoch, new PlaytimeCoverage
+                {
+                    ProducerStartedUtc = started,
+                    DroppedCapacity = 0,
+                    DroppedAttempts = 0,
+                    DroppedAge = 0
+                }));
+        outbox.Setup(o => o.EnqueueAsync(context.ServerId, It.IsAny<PlaytimeObservation>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, PlaytimeObservation, CancellationToken>((_, observation, _) => pending.Add(observation))
+            .Returns(Task.CompletedTask);
+        outbox.Setup(o => o.GetPendingAsync(context.ServerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => pending.ToImmutableArray());
+        outbox.Setup(o => o.PreparePublishAsync(context.ServerId, It.IsAny<Guid>(),
+                It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid id, DateTimeOffset when, CancellationToken _) =>
+            {
+                var index = pending.FindIndex(item => item.EventId == id);
+                if (index < 0)
+                {
+                    return null;
+                }
+                pending[index] = pending[index] with { EventPublishedUtc = pending[index].EventPublishedUtc ?? when };
+                return pending[index];
+            });
+        outbox.Setup(o => o.AcknowledgeAsync(context.ServerId, It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid id, CancellationToken _) => pending.RemoveAll(x => x.EventId == id) != 0);
+        var sent = new TaskCompletionSource<PlaytimeObservation>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var producer = new PlaytimeProducer(context.ServerId, context.GameType, outbox.Object,
+            (observation, _) => { sent.TrySetResult(observation); return Task.CompletedTask; }, _logger);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), playtimeProducer: producer);
+
+        var run = agent.RunAsync(cts.Token);
+        var observation = await sent.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await run;
+
+        Assert.Equal(PlaytimeCompleteness.Partial, observation.Completeness);
+        _mockSyncService.Verify(s => s.SyncWithRosterCallbackAsync(context.ServerId, _mockParser.Object, context.GameType,
+            false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockSyncService.Verify(s => s.SyncAsync(context.ServerId, _mockParser.Object, context.GameType,
+            false, It.IsAny<CancellationToken>()), Times.Never);
+        _mockPublisher.Verify(p => p.PublishAsync(resolved, context.ServerId, context.GameType,
+            It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_TracksUnverifiedSourceGapWithoutChangingLegacyPublication()
+    {
+        var evt = new PlayerConnectedEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "abc123",
+            Username = "TestPlayer",
+            SlotId = 0
+        };
+        var offset = 0L;
+        var outbox = new Mock<IPlaytimeOutbox>();
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        _mockTailer.SetupGet(t => t.CurrentFilePath).Returns(_testContext.LogFilePath);
+        _mockTailer.SetupGet(t => t.InitialEndOffset).Returns(10);
+        _mockTailer.SetupGet(t => t.CurrentOffset).Returns(() => offset);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>())).ReturnsAsync(() =>
+        {
+            offset = 20;
+            return new[] { "join" };
+        });
+        _mockParser.Setup(p => p.ParseLine("join")).Returns(evt);
+        _mockPublisher.Setup(p => p.PublishAsync(evt, It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                published.TrySetResult();
+                return Task.CompletedTask;
+            });
+        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId);
+        var agent = new GameServerAgent(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), playtimeSourceTracker: tracker);
+
+        var running = agent.RunAsync(cts.Token);
+        await published.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await running;
+
+        outbox.Verify(o => o.CommitSourceBatchAsync(_testContext.ServerId, null,
+            It.Is<PlaytimeSourceCursor>(cursor => cursor.Offset == 10),
+            It.Is<IReadOnlyList<PlaytimeObservation>>(items => items.Count == 0), It.IsAny<CancellationToken>()), Times.Once);
+        outbox.Verify(o => o.PauseSourceAsync(_testContext.ServerId, It.IsAny<PlaytimeSourceCursor>(),
+            PlaytimeGapReason.UnverifiedFreshness, It.IsAny<CancellationToken>()), Times.Once);
+        _mockPublisher.Verify(p => p.PublishAsync(evt, _testContext.ServerId, _testContext.GameType,
+            It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenPollThrows_RecordsGapAndContinuesLegacyPolling()
+    {
+        var evt = new PlayerConnectedEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "abc123",
+            Username = "TestPlayer",
+            SlotId = 0
+        };
+        var outbox = new Mock<IPlaytimeOutbox>();
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        _mockTailer.SetupGet(t => t.CurrentFilePath).Returns(_testContext.LogFilePath);
+        _mockTailer.SetupGet(t => t.InitialEndOffset).Returns(10);
+        _mockTailer.SetupSequence(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("poll failed"))
+            .ReturnsAsync(new[] { "join" });
+        _mockParser.Setup(p => p.ParseLine("join")).Returns(evt);
+        _mockPublisher.Setup(p => p.PublishAsync(evt, It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                published.TrySetResult();
+                return Task.CompletedTask;
+            });
+        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId);
+        var agent = new GameServerAgent(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), playtimeSourceTracker: tracker);
+
+        var running = agent.RunAsync(cts.Token);
+        await published.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await running;
+
+        outbox.Verify(o => o.PauseSourceAsync(_testContext.ServerId,
+            It.Is<PlaytimeSourceCursor>(cursor => cursor.Offset == 10), PlaytimeGapReason.PollFailure,
+            It.IsAny<CancellationToken>()), Times.Once);
+        _mockPublisher.Verify(p => p.PublishAsync(evt, _testContext.ServerId, _testContext.GameType,
+            It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenPlaytimeTrackingFails_StillPublishesLegacyEvents()
+    {
+        var evt = new PlayerConnectedEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "abc123",
+            Username = "TestPlayer",
+            SlotId = 0
+        };
+        var outbox = new Mock<IPlaytimeOutbox>();
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        _mockTailer.SetupGet(t => t.CurrentFilePath).Returns(_testContext.LogFilePath);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { "join" });
+        _mockParser.Setup(p => p.ParseLine("join")).Returns(evt);
+        outbox.Setup(o => o.GetSourceCursorAsync(_testContext.ServerId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("storage unavailable"));
+        _mockPublisher.Setup(p => p.PublishAsync(evt, It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                published.TrySetResult();
+                return Task.CompletedTask;
+            });
+        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId);
+        var agent = new GameServerAgent(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), playtimeSourceTracker: tracker);
+
+        var running = agent.RunAsync(cts.Token);
+        await published.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await running;
+
+        _mockPublisher.Verify(p => p.PublishAsync(evt, _testContext.ServerId, _testContext.GameType,
+            It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Once);
+        outbox.Verify(o => o.GetSourceCursorAsync(_testContext.ServerId, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

@@ -81,6 +81,9 @@ public class BlobServerLock : IServerLock
         }
     }
 
+    public bool TryGetLeaseId(Guid serverId, out string leaseId)
+        => _leaseIds.TryGetValue(serverId, out leaseId!);
+
     public async Task ReleaseAsync(Guid serverId, CancellationToken ct = default)
     {
         if (!_leaseIds.TryRemove(serverId, out var leaseId))

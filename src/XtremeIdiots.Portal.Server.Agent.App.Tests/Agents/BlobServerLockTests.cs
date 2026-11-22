@@ -195,12 +195,15 @@ public class BlobServerLockTests
 
         var serverLock = CreateLock();
         await serverLock.TryAcquireAsync(_serverId);
+        Assert.True(serverLock.TryGetLeaseId(_serverId, out var acquiredLease));
+        Assert.Equal("lease-id-123", acquiredLease);
 
         // Act
         await serverLock.ReleaseAsync(_serverId);
 
         // Assert
         _mockLeaseClient.Verify(l => l.ReleaseAsync(null, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.False(serverLock.TryGetLeaseId(_serverId, out _));
     }
 
     [Fact]

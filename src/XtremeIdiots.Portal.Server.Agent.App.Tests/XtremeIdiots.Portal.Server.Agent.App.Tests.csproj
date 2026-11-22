@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="10.1.0">
+    <PackageReference Include="coverlet.collector" Version="10.1.1">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
@@ -17,11 +17,11 @@
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="11.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
     <PackageReference Include="Moq" Version="4.21.0" />
-    <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Abstractions.V1" Version="4.1.78" />
-    <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1" Version="4.1.78" />
-    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.Testing" Version="4.2.106" />
-    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.V1" Version="4.2.106" />
-    <PackageReference Include="XtremeIdiots.Portal.Server.Events.Abstractions.V1" Version="1.1.224" />
+    <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Abstractions.V1" Version="4.1.83" />
+    <PackageReference Include="XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1" Version="4.1.83" />
+    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.Testing" Version="4.2.112" />
+    <PackageReference Include="XtremeIdiots.Portal.Repository.Api.Client.V1" Version="4.2.112" />
+    <PackageReference Include="XtremeIdiots.Portal.Server.Events.Abstractions.V1" Version="1.1.232" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
   </ItemGroup>

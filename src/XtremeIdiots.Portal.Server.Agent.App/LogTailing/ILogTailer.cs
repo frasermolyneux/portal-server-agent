@@ -31,9 +31,21 @@ public interface ILogTailer : IAsyncDisposable
     bool IsConnected { get; }
 
     /// <summary>
-    /// The current byte offset in the tailed file (i.e. how far we have read).
+    /// The byte offset after the last complete line read. Incomplete lines are
+    /// excluded so they can be reread after a restart.
     /// </summary>
     long CurrentOffset { get; }
+
+    /// <summary>
+    /// File size observed at initial connection. This is not evidence that the game flushed its log.
+    /// </summary>
+    long InitialEndOffset { get; }
+
+    /// <summary>
+    /// Changes when a poll detects a failure, reconnect, truncation or suspected rotation.
+    /// An unchanged value does not prove that the file has not been replaced.
+    /// </summary>
+    long ContinuityVersion { get; }
 
     /// <summary>
     /// The remote file path currently being tailed, or null if not connected.
