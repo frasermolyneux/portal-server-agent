@@ -90,6 +90,64 @@ public class GameServerAgentTests
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object, _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
 
     [Fact]
+    public async Task PlaytimeRosterSchedule_RefreshesAndBacksOffAfterFailure()
+    {
+        var context = _testContext with { GameType = "CallOfDuty4" };
+        var producer = new PlaytimeProducer(context.ServerId, context.GameType, new Mock<IPlaytimeOutbox>().Object,
+            (_, _) => Task.CompletedTask, NullLogger.Instance);
+        _mockSyncService.SetupSequence(s => s.CaptureRosterAsync(context.ServerId, context.GameType,
+                It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true)
+            .ReturnsAsync(false);
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), playtimeProducer: producer);
+        var now = DateTime.UtcNow;
+        agent.SchedulePlaytimeRosterSync(now.AddMinutes(-1), captured: true);
+
+        await agent.RefreshPlaytimeRosterIfDueAsync(now, CancellationToken.None);
+        await agent.RefreshPlaytimeRosterIfDueAsync(now.AddSeconds(30), CancellationToken.None);
+        await agent.RefreshPlaytimeRosterIfDueAsync(now.AddSeconds(61), CancellationToken.None);
+        await agent.RefreshPlaytimeRosterIfDueAsync(now.AddMinutes(2), CancellationToken.None);
+
+        _mockSyncService.Verify(s => s.CaptureRosterAsync(context.ServerId, context.GameType,
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task PlaytimeRosterSchedule_WhenPluginOnly_DoesNotCaptureAgentRoster()
+    {
+        var agent = CreateAgent();
+        var now = DateTime.UtcNow;
+        agent.SchedulePlaytimeRosterSync(now.AddMinutes(-1), captured: true);
+
+        await agent.RefreshPlaytimeRosterIfDueAsync(now, CancellationToken.None);
+
+        _mockSyncService.Verify(s => s.CaptureRosterAsync(It.IsAny<Guid>(), It.IsAny<string>(),
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PlaytimeRosterSchedule_WhenFullSyncFails_WaitsForNormalRetry()
+    {
+        var context = _testContext with { GameType = "CallOfDuty4" };
+        var producer = new PlaytimeProducer(context.ServerId, context.GameType, new Mock<IPlaytimeOutbox>().Object,
+            (_, _) => Task.CompletedTask, NullLogger.Instance);
+        var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
+            _logger, new ZeroRandom(), playtimeProducer: producer);
+        var now = DateTime.UtcNow;
+        agent.SchedulePlaytimeRosterSync(now, captured: false);
+
+        await agent.RefreshPlaytimeRosterIfDueAsync(now.AddMinutes(2), CancellationToken.None);
+
+        _mockSyncService.Verify(s => s.CaptureRosterAsync(It.IsAny<Guid>(), It.IsAny<string>(),
+            It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RunAsync_QuietPluginServerWithoutMap_ReportsOperationalHeartbeat()
     {
         var context = _testContext with { IsCod4xPluginSourceEnabled = true };
@@ -255,13 +313,13 @@ public class GameServerAgentTests
             IpAddress = "127.0.0.1"
         };
         _mockSyncService.Setup(s => s.SyncWithRosterCallbackAsync(context.ServerId, _mockParser.Object,
-                context.GameType, false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()))
-            .Returns(async (Guid _, ILogParser _, string? _, bool _, Func<ServerRosterSnapshot?, CancellationToken, Task> callback, CancellationToken token) =>
+                context.GameType, false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()))
+            .Returns(async (Guid _, ILogParser _, string? _, bool _, Func<ServerRosterSnapshot?, CancellationToken, Task<bool>> callback, CancellationToken token) =>
             {
                 var roster = new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial,
                     [new ServerRosterPlayer(1, "id", "Player", null)], 0, 0, 0);
-                await callback(roster, token);
-                return new ServerSyncResult([resolved], roster);
+                var recorded = await callback(roster, token);
+                return new ServerSyncResult([resolved], roster, recorded);
             });
         _mockTailer.SetupGet(t => t.CurrentFilePath).Returns(context.LogFilePath);
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<string>());
@@ -312,7 +370,7 @@ public class GameServerAgentTests
 
         Assert.Equal(PlaytimeCompleteness.Partial, observation.Completeness);
         _mockSyncService.Verify(s => s.SyncWithRosterCallbackAsync(context.ServerId, _mockParser.Object, context.GameType,
-            false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+            false, It.IsAny<Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()), Times.Once);
         _mockSyncService.Verify(s => s.SyncAsync(context.ServerId, _mockParser.Object, context.GameType,
             false, It.IsAny<CancellationToken>()), Times.Never);
         _mockPublisher.Verify(p => p.PublishAsync(resolved, context.ServerId, context.GameType,

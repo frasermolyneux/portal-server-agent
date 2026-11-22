@@ -58,9 +58,9 @@ updates:
         patterns:
           - "*"
     ignore:
-      - dependency-name: "mcr.microsoft.com/dotnet/aspnet"
+      - dependency-name: "dotnet/aspnet"
         versions: [">=11.0"]
-      - dependency-name: "mcr.microsoft.com/dotnet/sdk"
+      - dependency-name: "dotnet/sdk"
         versions: [">=11.0"]
 
   - package-ecosystem: "devcontainers"
