@@ -431,6 +431,36 @@ public sealed class BlobPlaytimeOutboxTests
     }
 
     [Fact]
+    public async Task DispatchAsync_WhenSendTimesOut_RetainsPreparedObservationForRetry()
+    {
+        var storage = new InMemoryBlob();
+        var observation = CreateJoin() with { EventPublishedUtc = null };
+        var store = storage.CreateStore();
+        await store.EnqueueAsync(observation.ServerId, observation);
+        var sent = new List<PlaytimeObservation>();
+        var dispatcher = new PlaytimeOutboxDispatcher(store, async (item, ct) =>
+        {
+            sent.Add(item);
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+        }, attemptTimeout: TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatcher.DispatchAsync(observation.ServerId));
+        var saved = Assert.Single(await storage.CreateStore().GetPendingAsync(observation.ServerId));
+        Assert.NotNull(saved.EventPublishedUtc);
+        var retry = new PlaytimeOutboxDispatcher(storage.CreateStore(), (item, _) =>
+        {
+            sent.Add(item);
+            return Task.CompletedTask;
+        });
+        await retry.DispatchAsync(observation.ServerId);
+
+        Assert.Equal(2, sent.Count);
+        Assert.Equal(saved, sent[0]);
+        Assert.Equal(saved, sent[1]);
+        Assert.Empty(await store.GetPendingAsync(observation.ServerId));
+    }
+
+    [Fact]
     public async Task DispatchAsync_WhenAcknowledgementFails_ReplaysIdenticalObservationAfterRestart()
     {
         var storage = new InMemoryBlob();
