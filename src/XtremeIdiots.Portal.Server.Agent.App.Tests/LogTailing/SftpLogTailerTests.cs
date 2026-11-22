@@ -36,11 +36,16 @@ public class SftpLogTailerTests
         Assert.Equal(["first", "second"], lines);
         Assert.Equal(chunks.Sum(chunk => chunk.Length), tailer.CurrentOffset);
         Assert.Equal(0, tailer.ContinuityVersion);
+        Assert.True(tailer.LastPollReachedEnd);
+        Assert.Collection(tailer.LastPollRecords,
+            record => { Assert.Equal("first", record.Text); Assert.Equal(0, record.StartOffset); Assert.Equal(6, record.EndOffset); },
+            record => { Assert.Equal("second", record.Text); Assert.Equal(6, record.StartOffset); Assert.Equal(13, record.EndOffset); });
 
         var linesAtEof = await tailer.PollAsync();
 
         Assert.Empty(linesAtEof);
         Assert.Equal(chunks.Sum(chunk => chunk.Length), tailer.CurrentOffset);
+        Assert.Empty(tailer.LastPollRecords);
     }
 
     [Fact]

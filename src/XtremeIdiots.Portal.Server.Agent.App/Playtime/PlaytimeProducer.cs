@@ -36,11 +36,12 @@ internal sealed class PlaytimeProducer
         _outbox = outbox;
         _logger = logger;
         _dispatcher = new PlaytimeOutboxDispatcher(outbox, send, logger);
-        SourceTracker = new PlaytimeSourceTracker(outbox, serverId, logger);
+        SourceTracker = new PlaytimeSourceTracker(outbox, serverId, gameType,
+            ct => _dispatcher.DispatchAsync(serverId, ct), () => checked(++_sequence), logger);
     }
 
     public PlaytimeSourceTracker SourceTracker { get; }
-    public bool HasUnpersistedObservation => _pending is not null || _pendingCoverage;
+    public bool HasUnpersistedObservation => _pending is not null || _pendingCoverage || SourceTracker.HasPending;
 
     public static bool SupportsGame(string gameType)
         => string.Equals(gameType, "CallOfDuty2", StringComparison.OrdinalIgnoreCase)
@@ -137,6 +138,7 @@ internal sealed class PlaytimeProducer
 
         _pending = observation;
         await PersistPendingAsync(ct).ConfigureAwait(false);
+        SourceTracker.ObserveRoster(roster, completeness);
         _logger.LogInformation(
             "Playtime roster captured for server {ServerId} game {GameType}: state {RosterState}, completeness {Completeness}, identities {IdentityCount}, unknown bot status {UnknownBotCount}, unparsed rows {UnparsedRowCount}, missing identities {MissingIdentityCount}, missing names {MissingNameCount}",
             _serverId, _gameType, roster.State, completeness, namedPlayers.Length, namedPlayers.Count(player => player.IsBot is null),
@@ -150,6 +152,7 @@ internal sealed class PlaytimeProducer
 
     public async Task FlushAsync(CancellationToken ct)
     {
+        await SourceTracker.FlushPendingAsync(ct).ConfigureAwait(false);
         await PersistPendingAsync(ct).ConfigureAwait(false);
         await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
     }

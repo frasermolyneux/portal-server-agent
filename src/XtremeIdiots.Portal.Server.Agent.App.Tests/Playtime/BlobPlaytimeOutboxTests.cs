@@ -855,7 +855,7 @@ public sealed class BlobPlaytimeOutboxTests
     }
 
     [Fact]
-    public void Validate_EnforcesSequenceEpochCorrelationAndParseTimeFreshnessRules()
+    public void Validate_EnforcesSequenceEpochAndCorrelationRules()
     {
         var observation = CreateJoin();
         Assert.Throws<ArgumentException>((observation with
@@ -869,11 +869,11 @@ public sealed class BlobPlaytimeOutboxTests
             ProducerSequence = 12
         }).Validate);
 
-        Assert.Throws<ArgumentException>((observation with
+        (observation with
         {
             TimestampQuality = PlaytimeTimestampQuality.ParseTime,
             Freshness = PlaytimeFreshness.Unknown
-        }).Validate);
+        }).Validate();
         (observation with
         {
             TimestampQuality = PlaytimeTimestampQuality.ParseTime,

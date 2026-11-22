@@ -25,8 +25,12 @@ files that grow past the previous offset may not be detectable.
 
 The dedicated playtime producer uses the existing RCON poll for bounded
 CoD2, CoD4 and CoD5 roster observations. CoD4x playtime is reserved for the
-plugin; the agent does not emit CoD4x observations. Log records with
-unverified freshness are not emitted as playtime. Sanitized pending
+plugin; the agent does not emit CoD4x observations. For CoD2, CoD4 and CoD5,
+join, quit and map records read after the initial end of the log also produce
+playtime observations. Their timestamps are agent parse times, not timestamps
+from the game log; buffered or delayed logs can shift session boundaries.
+Catch-up records are excluded, and detected source interruptions create gaps.
+The first record after an uncertain initial end boundary is discarded. Sanitized pending
 observations and source cursors use the existing server lock blob, with the
 blob lease fencing writes. Coverage counters use a durable per-server producer
 epoch (retained across process restarts) and are frozen with each roster; a roster skipped because the in-memory

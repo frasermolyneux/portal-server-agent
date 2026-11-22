@@ -73,6 +73,9 @@ public sealed class SftpLogTailer : ILogTailer
 
     public long ContinuityVersion => _continuityVersion;
 
+    public IReadOnlyList<LogTailRecord> LastPollRecords { get; private set; } = [];
+    public bool LastPollReachedEnd { get; private set; }
+
     public string? CurrentFilePath => _config?.FilePath;
 
     public async Task ConnectAsync(FileTransportTailerConfig config, long? startOffset = null, CancellationToken ct = default)
@@ -126,6 +129,8 @@ public sealed class SftpLogTailer : ILogTailer
 
     public async Task<IReadOnlyList<string>> PollAsync(CancellationToken ct = default)
     {
+        LastPollRecords = [];
+        LastPollReachedEnd = false;
         if (_config is null)
         {
             throw new InvalidOperationException("ConnectAsync must be called before PollAsync.");
@@ -199,19 +204,23 @@ public sealed class SftpLogTailer : ILogTailer
                 await DisposeLogStreamAsync(_logStream).ConfigureAwait(false);
                 _logStream = null;
                 await OpenLogStreamAsync(_config.FilePath, ct).ConfigureAwait(false);
+                return Array.Empty<string>();
             }
 
+            LastPollReachedEnd = totalRead < MaxBytesPerPoll;
             if (totalRead == 0)
             {
                 return Array.Empty<string>();
             }
 
+            var lineStartOffset = _lastFileSize - _partialLine.Length;
             _lastFileSize += totalRead;
 
-            var lines = FtpLogTailer.SplitIntoLines(memoryStream.ToArray(), ref _partialLine);
+            LastPollRecords = FtpLogTailer.SplitIntoRecords(memoryStream.ToArray(), ref _partialLine, lineStartOffset);
+            var lines = LastPollRecords.Select(record => record.Text).ToArray();
 
             _logger.LogDebug("Poll returned {LineCount} lines from {FilePath} ({Bytes} bytes)",
-                lines.Count, _config.FilePath, totalRead);
+                lines.Length, _config.FilePath, totalRead);
 
             return lines;
         }
