@@ -79,6 +79,8 @@ public class GameServerAgentTests
         // Default: RCON sync returns no IP-resolved events
         _mockSyncService.Setup(s => s.SyncAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<PlayerIpResolvedEvent>)Array.Empty<PlayerIpResolvedEvent>());
+        _mockSyncService.Setup(s => s.SyncWithRosterAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ServerSyncResult([], null));
         _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
     }
@@ -218,6 +220,55 @@ public class GameServerAgentTests
         Assert.Empty(connected.IpAddress);
         Assert.Null(parser.ConnectedPlayers[2].IpAddress);
         _mockSyncService.Verify(s => s.SyncIdentityAsync(_testContext.ServerId, parser, _testContext.GameType, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_FailedPublishInvalidatesConnectionWhenRemainingQuitIsSkipped()
+    {
+        const string guid = "2310346616629847491";
+        var parser = new Cod4xLogParser();
+        var polls = 0;
+        var joins = new List<PlayerConnectedEvent>();
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockTailer.SetupGet(t => t.LastPollReachedEnd).Returns(true);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => ++polls switch
+            {
+                1 => Array.Empty<string>(),
+                2 => [$"  1:00 J;{guid};2;Player", $"  1:01 say;{guid};2;Player;hello", $"  1:02 Q;{guid};2;Player"],
+                _ => [$"  1:03 J;{guid};2;Player"]
+            });
+        _mockSyncService.Setup(s => s.SyncIdentityAsync(_testContext.ServerId, parser, _testContext.GameType, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ServerSyncResult([], new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Complete, [], 0, 0, 0)));
+        _mockPublisher.Setup(p => p.PublishAsync(It.IsAny<GameEvent>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Returns<GameEvent, Guid, string, long, CancellationToken>((e, _, _, _, _) =>
+            {
+                if (e is ChatMessageEvent)
+                {
+                    return Task.FromException(new IOException("publish failed"));
+                }
+                if (e is PlayerConnectedEvent connected)
+                {
+                    joins.Add(connected);
+                    if (joins.Count == 2)
+                    {
+                        completed.TrySetResult();
+                    }
+                }
+                return Task.CompletedTask;
+            });
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var agent = new GameServerAgent(_testContext, _mockTailer.Object, parser, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
+
+        var running = agent.RunAsync(cts.Token);
+        await completed.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await running;
+
+        Assert.NotNull(joins[0].ConnectionId);
+        Assert.Null(joins[1].ConnectionId);
     }
 
     [Fact]
@@ -1029,7 +1080,7 @@ public class GameServerAgentTests
 
         // Assert — sync should be called at least once on startup
         _mockSyncService.Verify(
-            s => s.SyncAsync(_testContext.ServerId, _mockParser.Object, _testContext.GameType, _testContext.IsCod4xPluginSourceEnabled, It.IsAny<CancellationToken>()),
+            s => s.SyncWithRosterAsync(_testContext.ServerId, _mockParser.Object, _testContext.GameType, _testContext.IsCod4xPluginSourceEnabled, It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
     }
 
@@ -1374,8 +1425,8 @@ public class GameServerAgentTests
         };
 
         _mockSyncService
-            .Setup(s => s.SyncAsync(context.ServerId, _mockParser.Object, context.GameType, context.IsCod4xPluginSourceEnabled, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(ipEvents);
+            .Setup(s => s.SyncWithRosterAsync(context.ServerId, _mockParser.Object, context.GameType, context.IsCod4xPluginSourceEnabled, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ServerSyncResult(ipEvents, null));
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
         var agent = new GameServerAgent(context, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,

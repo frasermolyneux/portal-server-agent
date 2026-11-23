@@ -28,19 +28,31 @@ internal sealed class ConnectionTracker
         _hasCompleteBaseline = false;
     }
 
-    public void ObserveRoster(ServerRosterSnapshot? roster)
+    public void ObserveRoster(ServerRosterSnapshot? roster, bool establishBaseline = true)
     {
         if (roster is not
             {
-                State: RconRosterState.Complete,
-                UnparsedRowCount: 0,
-                MissingIdentityCount: 0,
-                KnownBotCount: 0,
+                State: RconRosterState.Complete or RconRosterState.Partial,
                 CaptureDuration.TotalSeconds: <= 10
             } ||
             roster.Players.Any(p => p.SlotId < 0 || p.SlotId > 99 || string.IsNullOrWhiteSpace(p.PlayerGuid)) ||
             roster.Players.Select(p => p.SlotId).Distinct().Count() != roster.Players.Count)
         {
+            return;
+        }
+
+        if (!establishBaseline || roster.State != RconRosterState.Complete ||
+            roster.UnparsedRowCount != 0 || roster.MissingIdentityCount != 0 || roster.KnownBotCount != 0)
+        {
+            foreach (var player in roster.Players)
+            {
+                if (_occupants.TryGetValue(player.SlotId, out var previous) &&
+                    !string.Equals(previous.PlayerGuid, player.PlayerGuid, StringComparison.OrdinalIgnoreCase))
+                {
+                    _uncertainPlayers.Add(previous.PlayerGuid);
+                    _occupants[player.SlotId] = new Connection(player.PlayerGuid, null);
+                }
+            }
             return;
         }
 

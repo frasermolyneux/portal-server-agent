@@ -266,7 +266,15 @@ public sealed class GameServerAgent
                             {
                                 player.IpAddress = null;
                             }
-                            await _publisher.PublishAsync(correlated, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                            try
+                            {
+                                await _publisher.PublishAsync(correlated, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                            }
+                            catch
+                            {
+                                ResetConnectionBaseline();
+                                throw;
+                            }
                         }
                     }
 
@@ -457,14 +465,16 @@ public sealed class GameServerAgent
     {
         if (_playtimeProducer is null)
         {
-            var events = await _syncService.SyncAsync(_context.ServerId, _parser, _context.GameType,
+            var sync = await _syncService.SyncWithRosterAsync(_context.ServerId, _parser, _context.GameType,
                 _context.IsCod4xPluginSourceEnabled, ct);
-            await PublishIpResolvedEventsAsync(events, ct);
+            _connectionTracker.ObserveRoster(sync.Roster, establishBaseline: false);
+            await PublishIpResolvedEventsAsync(sync.IpResolvedEvents, ct);
             return false;
         }
 
         var result = await _syncService.SyncWithRosterCallbackAsync(_context.ServerId, _parser, _context.GameType,
             _context.IsCod4xPluginSourceEnabled, _playtimeProducer.CaptureRosterAsync, ct);
+        _connectionTracker.ObserveRoster(result.Roster, establishBaseline: false);
         await PublishIpResolvedEventsAsync(result.IpResolvedEvents, ct);
         return result.RosterRecorded
             && result.Roster is { State: RconRosterState.Complete or RconRosterState.Partial, CaptureDuration.TotalSeconds: <= 10 };

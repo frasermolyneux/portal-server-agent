@@ -77,6 +77,30 @@ public sealed class ConnectionTrackerTests
         Assert.Null(Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("one"))).ConnectionId);
     }
 
+    [Theory]
+    [InlineData(RconRosterState.Partial, true)]
+    [InlineData(RconRosterState.Complete, false)]
+    public void RosterConflict_InvalidatesPriorIdentityWithoutInferringEmptySlots(RconRosterState state, bool establishBaseline)
+    {
+        var tracker = new ConnectionTracker();
+        tracker.ObserveRoster(Roster(RconRosterState.Complete));
+        var first = Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one")));
+        Assert.NotNull(first.ConnectionId);
+
+        tracker.ObserveRoster(Roster(state, new ServerRosterPlayer(1, "other", null, null)), establishBaseline);
+
+        Assert.Null(Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("one"))).ConnectionId);
+        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+    }
+
+    [Fact]
+    public void RegularRosterCannotEstablishInitialEmptyBaseline()
+    {
+        var tracker = new ConnectionTracker();
+        tracker.ObserveRoster(Roster(RconRosterState.Complete), establishBaseline: false);
+        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+    }
+
     [Fact]
     public void MapTransition_DoesNotTreatCarryoverAsNewWhenBaselineWasEmpty()
     {
