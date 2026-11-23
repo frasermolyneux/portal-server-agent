@@ -378,7 +378,7 @@ public class GameServerAgentTests
     }
 
     [Fact]
-    public async Task RunAsync_TracksUnverifiedSourceGapWithoutChangingLegacyPublication()
+    public async Task RunAsync_TracksSourceWithoutChangingLegacyPublication()
     {
         var evt = new PlayerConnectedEvent
         {
@@ -394,6 +394,11 @@ public class GameServerAgentTests
         _mockTailer.SetupGet(t => t.CurrentFilePath).Returns(_testContext.LogFilePath);
         _mockTailer.SetupGet(t => t.InitialEndOffset).Returns(10);
         _mockTailer.SetupGet(t => t.CurrentOffset).Returns(() => offset);
+        _mockTailer.SetupGet(t => t.LastPollRecords).Returns(
+        [
+            new LogTailRecord("old", 0, 10),
+            new LogTailRecord("J;0123456789abcdef0123456789abcdef;0;TestPlayer", 10, 20)
+        ]);
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>())).ReturnsAsync(() =>
         {
             offset = 20;
@@ -406,7 +411,8 @@ public class GameServerAgentTests
                 published.TrySetResult();
                 return Task.CompletedTask;
             });
-        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId);
+        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId, "CallOfDuty4",
+            _ => Task.CompletedTask, () => 1);
         var agent = new GameServerAgent(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
             _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
@@ -420,8 +426,13 @@ public class GameServerAgentTests
         outbox.Verify(o => o.CommitSourceBatchAsync(_testContext.ServerId, null,
             It.Is<PlaytimeSourceCursor>(cursor => cursor.Offset == 10),
             It.Is<IReadOnlyList<PlaytimeObservation>>(items => items.Count == 0), It.IsAny<CancellationToken>()), Times.Once);
-        outbox.Verify(o => o.PauseSourceAsync(_testContext.ServerId, It.IsAny<PlaytimeSourceCursor>(),
-            PlaytimeGapReason.UnverifiedFreshness, It.IsAny<CancellationToken>()), Times.Once);
+        outbox.Verify(o => o.CommitSourceBatchAsync(_testContext.ServerId,
+            It.Is<PlaytimeSourceCursor>(cursor => cursor != null && cursor.Offset == 10),
+            It.Is<PlaytimeSourceCursor>(cursor => cursor.Offset == 20),
+            It.Is<IReadOnlyList<PlaytimeObservation>>(items => items.Count == 1
+                && items[0].Kind == PlaytimeEventKind.Join
+                && items[0].TimestampQuality == PlaytimeTimestampQuality.ParseTime
+                && items[0].Freshness == PlaytimeFreshness.Unknown), It.IsAny<CancellationToken>()), Times.Once);
         _mockPublisher.Verify(p => p.PublishAsync(evt, _testContext.ServerId, _testContext.GameType,
             It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -441,6 +452,7 @@ public class GameServerAgentTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         _mockTailer.SetupGet(t => t.CurrentFilePath).Returns(_testContext.LogFilePath);
         _mockTailer.SetupGet(t => t.InitialEndOffset).Returns(10);
+        _mockTailer.SetupGet(t => t.LastPollReachedEnd).Returns(true);
         _mockTailer.SetupSequence(t => t.PollAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new IOException("poll failed"))
             .ReturnsAsync(new[] { "join" });
@@ -451,7 +463,8 @@ public class GameServerAgentTests
                 published.TrySetResult();
                 return Task.CompletedTask;
             });
-        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId);
+        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId, "CallOfDuty4",
+            _ => Task.CompletedTask, () => 1);
         var agent = new GameServerAgent(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
             _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,
@@ -462,9 +475,9 @@ public class GameServerAgentTests
         await cts.CancelAsync();
         await running;
 
-        outbox.Verify(o => o.PauseSourceAsync(_testContext.ServerId,
-            It.Is<PlaytimeSourceCursor>(cursor => cursor.Offset == 10), PlaytimeGapReason.PollFailure,
-            It.IsAny<CancellationToken>()), Times.Once);
+        outbox.Verify(o => o.RecordGapAndResetCursorAsync(_testContext.ServerId,
+            It.Is<PlaytimeSourceCursor>(cursor => cursor.Offset == 10), It.IsAny<PlaytimeSourceCursor>(),
+            PlaytimeGapReason.PollFailure, It.IsAny<CancellationToken>()), Times.Once);
         _mockPublisher.Verify(p => p.PublishAsync(evt, _testContext.ServerId, _testContext.GameType,
             It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -493,7 +506,8 @@ public class GameServerAgentTests
                 published.TrySetResult();
                 return Task.CompletedTask;
             });
-        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId);
+        var tracker = new PlaytimeSourceTracker(outbox.Object, _testContext.ServerId, "CallOfDuty4",
+            _ => Task.CompletedTask, () => 1);
         var agent = new GameServerAgent(_testContext, _mockTailer.Object, _mockParser.Object, _mockPublisher.Object,
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
             _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object,

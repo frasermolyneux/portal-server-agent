@@ -48,6 +48,9 @@ public sealed class FtpLogTailer : ILogTailer
 
     public long ContinuityVersion => _continuityVersion;
 
+    public IReadOnlyList<LogTailRecord> LastPollRecords { get; private set; } = [];
+    public bool LastPollReachedEnd { get; private set; }
+
     /// <inheritdoc />
     public string? CurrentFilePath => _config?.FilePath;
 
@@ -104,6 +107,8 @@ public sealed class FtpLogTailer : ILogTailer
     /// <inheritdoc />
     public async Task<IReadOnlyList<string>> PollAsync(CancellationToken ct = default)
     {
+        LastPollRecords = [];
+        LastPollReachedEnd = false;
         if (_config is null)
         {
             throw new InvalidOperationException("ConnectAsync must be called before PollAsync.");
@@ -140,6 +145,7 @@ public sealed class FtpLogTailer : ILogTailer
 
             if (currentSize == _lastFileSize)
             {
+                LastPollReachedEnd = true;
                 return Array.Empty<string>();
             }
 
@@ -150,11 +156,14 @@ public sealed class FtpLogTailer : ILogTailer
                 bytesToRead, _config.FilePath, _lastFileSize, bytesAvailable);
 
             var data = await DownloadBytesFromOffsetAsync(_config.FilePath, _lastFileSize, bytesToRead, ct);
+            var lineStartOffset = _lastFileSize - _partialLine.Length;
             _lastFileSize += data.Length;
 
-            var lines = SplitIntoLines(data, ref _partialLine);
+            LastPollRecords = SplitIntoRecords(data, ref _partialLine, lineStartOffset);
+            LastPollReachedEnd = _lastFileSize >= currentSize;
+            var lines = LastPollRecords.Select(record => record.Text).ToArray();
 
-            _logger.LogDebug("Poll returned {LineCount} lines from {FilePath}", lines.Count, _config.FilePath);
+            _logger.LogDebug("Poll returned {LineCount} lines from {FilePath}", lines.Length, _config.FilePath);
 
             return lines;
         }
@@ -208,16 +217,19 @@ public sealed class FtpLogTailer : ILogTailer
     /// </param>
     /// <returns>A list of complete lines (without line endings).</returns>
     internal static IReadOnlyList<string> SplitIntoLines(byte[] data, ref byte[] partialLine)
+        => SplitIntoRecords(data, ref partialLine, 0).Select(record => record.Text).ToArray();
+
+    internal static IReadOnlyList<LogTailRecord> SplitIntoRecords(byte[] data, ref byte[] partialLine, long lineStartOffset)
     {
         if (data.Length == 0)
         {
-            return Array.Empty<string>();
+            return Array.Empty<LogTailRecord>();
         }
 
         var bytes = new byte[partialLine.Length + data.Length];
         partialLine.CopyTo(bytes, 0);
         data.CopyTo(bytes, partialLine.Length);
-        var lines = new List<string>();
+        var records = new List<LogTailRecord>();
 
         var startIndex = 0;
         for (var i = 0; i < bytes.Length; i++)
@@ -227,7 +239,8 @@ public sealed class FtpLogTailer : ILogTailer
                 var end = i > startIndex && bytes[i - 1] == (byte)'\r' ? i - 1 : i;
                 if (end > startIndex)
                 {
-                    lines.Add(Encoding.UTF8.GetString(bytes, startIndex, end - startIndex));
+                    records.Add(new LogTailRecord(Encoding.UTF8.GetString(bytes, startIndex, end - startIndex),
+                        checked(lineStartOffset + startIndex), checked(lineStartOffset + i + 1)));
                 }
 
                 startIndex = i + 1;
@@ -237,7 +250,7 @@ public sealed class FtpLogTailer : ILogTailer
         // Whatever remains after the last newline is a partial line
         partialLine = bytes[startIndex..];
 
-        return lines;
+        return records;
     }
 
     private async Task EstablishConnectionAsync(CancellationToken ct)

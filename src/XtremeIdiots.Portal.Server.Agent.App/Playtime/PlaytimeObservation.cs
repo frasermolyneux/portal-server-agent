@@ -45,8 +45,7 @@ internal sealed record PlaytimeCoverage
 internal sealed record PlaytimeRosterPlayer(string GameIdentifier, string Username, int Slot, bool? IsBot);
 
 /// <summary>
-/// Internal-only, allow-listed playtime data. Callers must set Live only when they
-/// have independently verified freshness evidence; validation cannot establish it.
+/// Internal-only, allow-listed playtime data. Live requires independently verified freshness.
 /// </summary>
 internal sealed record PlaytimeObservation
 {
@@ -112,11 +111,6 @@ internal sealed record PlaytimeObservation
             || !Enum.IsDefined(Completeness))
         {
             throw new ArgumentException("Observation contains an unsupported enum value.");
-        }
-
-        if (TimestampQuality == PlaytimeTimestampQuality.ParseTime && Freshness != PlaytimeFreshness.Live)
-        {
-            throw new ArgumentException("ParseTime observations require independently verified Live freshness.");
         }
 
         if (Kind == PlaytimeEventKind.Roster
@@ -211,7 +205,7 @@ internal sealed record PlaytimeObservation
             && player.Slot >= 0;
 
     private static bool IsBoundedIdentifier(string? value, int maximumLength)
-        => value is { Length: > 0 } && value.Length <= maximumLength && !value.Any(char.IsControl);
+        => !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength && !value.Any(char.IsControl);
 
     private static bool IsSafeMapName(string? value)
         => value is { Length: > 0 and <= PlaytimeOutboxLimits.MaximumMapNameLength }

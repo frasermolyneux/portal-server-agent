@@ -206,6 +206,7 @@ public sealed class GameServerAgent
             {
                 try
                 {
+                    var trackPoll = await FlushPlaytimeSourcePendingAsync(ct);
                     IReadOnlyList<string> lines;
                     try
                     {
@@ -220,7 +221,10 @@ public sealed class GameServerAgent
                         await TrackPlaytimePollFailureAsync(ct);
                         throw;
                     }
-                    await TrackPlaytimeSourceAsync(initialize: false, ct);
+                    if (trackPoll)
+                    {
+                        await TrackPlaytimeSourceAsync(initialize: false, ct);
+                    }
 
                     foreach (var line in lines)
                     {
@@ -370,8 +374,36 @@ public sealed class GameServerAgent
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[{Title}] Playtime source tracking failed; tracking is disabled for this agent run", _context.Title);
-            _playtimeSourceTracker = null;
+            if (initialize)
+            {
+                _logger.LogWarning(ex, "[{Title}] Playtime source initialization failed; tracking is disabled for this agent run", _context.Title);
+                _playtimeSourceTracker = null;
+                return;
+            }
+            _logger.LogWarning(ex, "[{Title}] Playtime source batch could not be persisted; it will be retried", _context.Title);
+        }
+    }
+
+    private async Task<bool> FlushPlaytimeSourcePendingAsync(CancellationToken ct)
+    {
+        if (_playtimeSourceTracker is null)
+        {
+            return false;
+        }
+        try
+        {
+            await _playtimeSourceTracker.FlushPendingAsync(ct);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _playtimeSourceTracker.MarkSkippedPoll();
+            _logger.LogWarning(ex, "[{Title}] Pending playtime source batch could not be persisted; skipping playtime for this poll", _context.Title);
+            return false;
         }
     }
 

@@ -36,11 +36,12 @@ internal sealed class PlaytimeProducer
         _outbox = outbox;
         _logger = logger;
         _dispatcher = new PlaytimeOutboxDispatcher(outbox, send, logger);
-        SourceTracker = new PlaytimeSourceTracker(outbox, serverId, logger);
+        SourceTracker = new PlaytimeSourceTracker(outbox, serverId, gameType,
+            DispatchForSourceCapacityAsync, () => checked(++_sequence), logger);
     }
 
     public PlaytimeSourceTracker SourceTracker { get; }
-    public bool HasUnpersistedObservation => _pending is not null || _pendingCoverage;
+    public bool HasUnpersistedObservation => _pending is not null || _pendingCoverage || SourceTracker.HasPending;
 
     public static bool SupportsGame(string gameType)
         => string.Equals(gameType, "CallOfDuty2", StringComparison.OrdinalIgnoreCase)
@@ -135,7 +136,9 @@ internal sealed class PlaytimeProducer
             return false;
         }
 
+        await SourceTracker.FlushPendingAsync(ct).ConfigureAwait(false);
         _pending = observation;
+        SourceTracker.ObserveRoster(roster, completeness);
         await PersistPendingAsync(ct).ConfigureAwait(false);
         _logger.LogInformation(
             "Playtime roster captured for server {ServerId} game {GameType}: state {RosterState}, completeness {Completeness}, identities {IdentityCount}, unknown bot status {UnknownBotCount}, unparsed rows {UnparsedRowCount}, missing identities {MissingIdentityCount}, missing names {MissingNameCount}",
@@ -150,12 +153,32 @@ internal sealed class PlaytimeProducer
 
     public async Task FlushAsync(CancellationToken ct)
     {
+        await SourceTracker.FlushPendingAsync(ct).ConfigureAwait(false);
         await PersistPendingAsync(ct).ConfigureAwait(false);
+        await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
+    }
+
+    private async Task DispatchForSourceCapacityAsync(CancellationToken ct)
+    {
+        if (_pending is { Coverage: not null } pending)
+        {
+            try
+            {
+                await _outbox.EnqueueAsync(_serverId, pending, ct).ConfigureAwait(false);
+                _pending = null;
+            }
+            catch (PlaytimeOutboxCapacityExceededException)
+            {
+                // The roster is not in the full outbox; retain it until space is available.
+            }
+        }
+
         await _dispatcher.DispatchAsync(_serverId, ct).ConfigureAwait(false);
     }
 
     private async Task PersistPendingAsync(CancellationToken ct)
     {
+        await SourceTracker.FlushPendingAsync(ct).ConfigureAwait(false);
         await FlushPendingDropAsync(ct).ConfigureAwait(false);
         if (_pending is not null)
         {
