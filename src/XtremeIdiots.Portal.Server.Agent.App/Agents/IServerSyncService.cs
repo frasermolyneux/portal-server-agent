@@ -59,6 +59,15 @@ public interface IServerSyncService
         CancellationToken ct = default);
 
     /// <summary>
+    /// Refreshes player identity and IPs from RCON without query or reconciliation.
+    /// </summary>
+    Task<ServerSyncResult> SyncIdentityAsync(
+        Guid serverId, ILogParser parser, string? gameType, CancellationToken ct = default);
+
+    /// <summary>Returns the expiry of a confirmed current Siege or Dry Run session.</summary>
+    Task<DateTimeOffset?> GetActiveSiegeExpiryAsync(Guid serverId, CancellationToken ct = default);
+
+    /// <summary>
     /// Captures only an RCON roster without changing the parser or running query reconciliation.
     /// Returns whether a fresh partial or complete response was captured.
     /// </summary>

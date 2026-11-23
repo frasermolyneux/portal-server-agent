@@ -36,6 +36,8 @@ public sealed record PlayerConnectedEvent : GameEvent
     /// Client slot number assigned by the game server.
     /// </summary>
     public required int SlotId { get; init; }
+
+    public Guid? ConnectionId { get; init; }
 }
 
 /// <summary>
@@ -57,6 +59,8 @@ public sealed record PlayerDisconnectedEvent : GameEvent
     /// Client slot number the player occupied.
     /// </summary>
     public required int SlotId { get; init; }
+
+    public Guid? ConnectionId { get; init; }
 }
 
 /// <summary>
@@ -121,4 +125,8 @@ public sealed record PlayerIpResolvedEvent : GameEvent
     /// The resolved IP address from RCON.
     /// </summary>
     public required string IpAddress { get; init; }
+
+    public int? SlotId { get; init; }
+
+    public Guid? ConnectionId { get; init; }
 }
