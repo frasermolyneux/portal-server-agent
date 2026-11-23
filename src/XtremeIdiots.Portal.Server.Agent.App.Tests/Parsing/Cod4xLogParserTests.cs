@@ -61,6 +61,18 @@ public sealed class Cod4xLogParserTests
     }
 
     [Fact]
+    public void ParseLine_QuitForPreviousOccupant_DoesNotRemoveCurrentOccupant()
+    {
+        _parser.ParseLine($"  3:42 J;{ValidPlayerId};2;Previous");
+        _parser.ParseLine($"  3:43 J;{AnotherValidPlayerId};2;Current");
+
+        var result = _parser.ParseLine($"  3:50 Q;{ValidPlayerId};2;Previous");
+
+        Assert.IsType<PlayerDisconnectedEvent>(result);
+        Assert.Equal(AnotherValidPlayerId, _parser.ConnectedPlayers[2].Guid);
+    }
+
+    [Fact]
     public void ParseLine_SayEvent_ReturnsChatMessage()
     {
         var result = _parser.ParseLine($"  3:42 say;{AnotherValidPlayerId};3;iBoomBoom>XI<A;message text");

@@ -34,6 +34,8 @@ public sealed class GameServerAgent
     private readonly ILogger _logger;
     private readonly Random _startupJitterRandom;
     private readonly Action? _reportHeartbeat;
+    private readonly ConnectionTracker _connectionTracker = new();
+    private readonly SiegeRefreshSchedule _siegeRefresh = new();
     private PlaytimeSourceTracker? _playtimeSourceTracker;
     private readonly PlaytimeProducer? _playtimeProducer;
 
@@ -49,6 +51,9 @@ public sealed class GameServerAgent
     private DateTime _lastPlaytimeFlush = DateTime.MinValue;
     private DateTime _nextPlaytimeRosterSync = DateTime.MaxValue;
     private int _nextBroadcastIndex;
+    private bool _identityBaselinePending = true;
+    private DateTime _lastIdentityBaselineAttempt = DateTime.MinValue;
+    private long _tailContinuityVersion;
 
     internal static readonly TimeSpan OffsetSaveInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan StatusPublishInterval = TimeSpan.FromSeconds(60);
@@ -58,6 +63,7 @@ public sealed class GameServerAgent
     internal static readonly TimeSpan PluginLifecycleCheckInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan BanFileCheckInterval = TimeSpan.FromSeconds(ServerContext.DefaultBanFileCheckIntervalSeconds);
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
+    internal static readonly TimeSpan IdentityBaselineMinimumInterval = TimeSpan.FromSeconds(30);
 
     public GameServerAgent(
         ServerContext context,
@@ -179,6 +185,7 @@ public sealed class GameServerAgent
             };
 
             await _tailer.ConnectAsync(tailerConfig, startOffset, ct);
+            _tailContinuityVersion = _tailer.ContinuityVersion;
             await TrackPlaytimeSourceAsync(initialize: true, ct);
 
             // 2a. Broadcast startup status once after successful connection.
@@ -218,8 +225,14 @@ public sealed class GameServerAgent
                     }
                     catch
                     {
+                        ResetConnectionBaseline();
                         await TrackPlaytimePollFailureAsync(ct);
                         throw;
+                    }
+                    if (_tailContinuityVersion != _tailer.ContinuityVersion)
+                    {
+                        _tailContinuityVersion = _tailer.ContinuityVersion;
+                        ResetConnectionBaseline();
                     }
                     if (trackPoll)
                     {
@@ -228,7 +241,12 @@ public sealed class GameServerAgent
 
                     foreach (var line in lines)
                     {
+                        var playerStateVersion = _parser.PlayerStateVersion;
                         var gameEvent = _parser.ParseLine(line);
+                        if (_parser.PlayerStateVersion != playerStateVersion)
+                        {
+                            ResetConnectionBaseline(preservePossibleCarryovers: true);
+                        }
                         if (gameEvent is not null)
                         {
                             if (!ShouldPublishParsedEvent(gameEvent))
@@ -236,7 +254,27 @@ public sealed class GameServerAgent
                                 continue;
                             }
 
-                            await _publisher.PublishAsync(gameEvent, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                            var correlated = _connectionTracker.Observe(gameEvent);
+                            if (correlated is PlayerConnectedEvent)
+                            {
+                                _siegeRefresh.ObserveJoin(DateTimeOffset.UtcNow);
+                            }
+                            if (gameEvent is PlayerConnectedEvent { IpAddress.Length: > 0 } original &&
+                                correlated is PlayerConnectedEvent { IpAddress.Length: 0 } &&
+                                _parser.ConnectedPlayers.TryGetValue(original.SlotId, out var player) &&
+                                string.Equals(player.Guid, original.PlayerGuid, StringComparison.OrdinalIgnoreCase))
+                            {
+                                player.IpAddress = null;
+                            }
+                            try
+                            {
+                                await _publisher.PublishAsync(correlated, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                            }
+                            catch
+                            {
+                                ResetConnectionBaseline();
+                                throw;
+                            }
                         }
                     }
 
@@ -249,6 +287,18 @@ public sealed class GameServerAgent
                             break;
                         }
                         _lastLeaseRenew = DateTime.UtcNow;
+                    }
+
+                    if (_tailer.LastPollReachedEnd && _identityBaselinePending &&
+                        !IsCod4xPluginSourceEnabledForCurrentServer() &&
+                        DateTime.UtcNow - _lastIdentityBaselineAttempt >= IdentityBaselineMinimumInterval)
+                    {
+                        await RefreshConnectionBaselineAsync(ct);
+                    }
+
+                    if (!IsCod4xPluginSourceEnabledForCurrentServer())
+                    {
+                        await RefreshSiegeIfDueAsync(ct);
                     }
 
                     if (_reportHeartbeat is not null && DateTime.UtcNow - _lastHeartbeat > StatusPublishInterval)
@@ -273,6 +323,10 @@ public sealed class GameServerAgent
                     if (DateTime.UtcNow - _lastRconSync > RconSyncInterval)
                     {
                         rosterCaptured = await SyncPlayersAsync(ct);
+                        if (!_connectionTracker.HasCompleteBaseline)
+                        {
+                            _identityBaselinePending = true;
+                        }
                         _lastRconSync = DateTime.UtcNow;
                         SchedulePlaytimeRosterSync(_lastRconSync, rosterCaptured);
                     }
@@ -411,17 +465,74 @@ public sealed class GameServerAgent
     {
         if (_playtimeProducer is null)
         {
-            var events = await _syncService.SyncAsync(_context.ServerId, _parser, _context.GameType,
+            var sync = await _syncService.SyncWithRosterAsync(_context.ServerId, _parser, _context.GameType,
                 _context.IsCod4xPluginSourceEnabled, ct);
-            await PublishIpResolvedEventsAsync(events, ct);
+            _connectionTracker.ObserveRoster(sync.Roster, establishBaseline: false);
+            await PublishIpResolvedEventsAsync(sync.IpResolvedEvents, ct);
             return false;
         }
 
         var result = await _syncService.SyncWithRosterCallbackAsync(_context.ServerId, _parser, _context.GameType,
             _context.IsCod4xPluginSourceEnabled, _playtimeProducer.CaptureRosterAsync, ct);
+        _connectionTracker.ObserveRoster(result.Roster, establishBaseline: false);
         await PublishIpResolvedEventsAsync(result.IpResolvedEvents, ct);
         return result.RosterRecorded
             && result.Roster is { State: RconRosterState.Complete or RconRosterState.Partial, CaptureDuration.TotalSeconds: <= 10 };
+    }
+
+    private void ResetConnectionBaseline(bool preservePossibleCarryovers = true)
+    {
+        _connectionTracker.Reset(preservePossibleCarryovers);
+        _identityBaselinePending = true;
+    }
+
+    private async Task RefreshConnectionBaselineAsync(CancellationToken ct)
+    {
+        _lastIdentityBaselineAttempt = DateTime.UtcNow;
+        _identityBaselinePending = false;
+        _siegeRefresh.RecordRosterAttempt(DateTimeOffset.UtcNow);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            var result = await _syncService.SyncIdentityAsync(_context.ServerId, _parser, _context.GameType, timeout.Token);
+            _connectionTracker.ObserveRoster(result.Roster);
+            if (!_connectionTracker.HasCompleteBaseline)
+            {
+                _logger.LogWarning("[{Title}] Connection identity baseline unavailable; admission checks must allow unknown connections", _context.Title);
+            }
+            await PublishIpResolvedEventsAsync(result.IpResolvedEvents, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("[{Title}] Connection identity baseline timed out; admission checks must allow unknown connections", _context.Title);
+        }
+    }
+
+    internal async Task RefreshSiegeIfDueAsync(CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_siegeRefresh.StateCheckDue(now))
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            DateTimeOffset? expires = null;
+            try
+            {
+                expires = await _syncService.GetActiveSiegeExpiryAsync(_context.ServerId, timeout.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("[{Title}] Current Siege session lookup timed out", _context.Title);
+            }
+            now = DateTimeOffset.UtcNow;
+            _siegeRefresh.RecordState(now, expires);
+        }
+
+        if (_tailer.LastPollReachedEnd && _siegeRefresh.RosterCheckDue(DateTimeOffset.UtcNow))
+        {
+            await RefreshConnectionBaselineAsync(ct);
+        }
     }
 
     internal async Task RefreshPlaytimeRosterIfDueAsync(DateTime now, CancellationToken ct)
@@ -678,7 +789,7 @@ public sealed class GameServerAgent
         }
     }
 
-    private async Task PublishIpResolvedEventsAsync(IReadOnlyList<PlayerIpResolvedEvent>? events, CancellationToken ct)
+    internal async Task PublishIpResolvedEventsAsync(IReadOnlyList<PlayerIpResolvedEvent>? events, CancellationToken ct)
     {
         if (IsCod4xPluginSourceEnabledForCurrentServer())
         {
@@ -694,12 +805,23 @@ public sealed class GameServerAgent
         {
             try
             {
-                await _publisher.PublishAsync(evt, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                await _publisher.PublishAsync(_connectionTracker.Observe(evt),
+                    _context.ServerId, _context.GameType, NextSequenceId(), ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[{Title}] Failed to publish PlayerIpResolved for {PlayerGuid}",
                     _context.Title, evt.PlayerGuid);
+                if (evt.SlotId is { } slot && _parser.ConnectedPlayers.TryGetValue(slot, out var player) &&
+                    string.Equals(player.Guid, evt.PlayerGuid, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(player.IpAddress, evt.IpAddress, StringComparison.Ordinal))
+                {
+                    player.IpAddress = null;
+                }
             }
         }
     }

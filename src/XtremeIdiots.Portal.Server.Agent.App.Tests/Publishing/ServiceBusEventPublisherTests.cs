@@ -79,6 +79,35 @@ public class ServiceBusEventPublisherTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PublishAsync_ConnectionEvents_SerializeCorrelation()
+    {
+        var messages = new List<ServiceBusMessage>();
+        _senderMock.Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((message, _) => messages.Add(message))
+            .Returns(Task.CompletedTask);
+        var connectionId = Guid.NewGuid();
+        GameEvent[] events =
+        [
+            new PlayerConnectedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", Username = "Alice", SlotId = 2, ConnectionId = connectionId },
+            new PlayerIpResolvedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", IpAddress = "1.2.3.4", SlotId = 2, ConnectionId = connectionId },
+            new PlayerDisconnectedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", Username = "Alice", SlotId = 2, ConnectionId = connectionId }
+        ];
+
+        foreach (var item in events)
+        {
+            await _publisher.PublishAsync(item, ServerId, GameType, SequenceId);
+        }
+
+        Assert.Equal(3, messages.Count);
+        foreach (var message in messages)
+        {
+            using var json = JsonDocument.Parse(message.Body.ToString());
+            Assert.Equal(connectionId, json.RootElement.GetProperty("connectionId").GetGuid());
+            Assert.Equal(2, json.RootElement.GetProperty("slotId").GetInt32());
+        }
+    }
+
+    [Fact]
     public async Task PublishAsync_ChatMessage_SerializesCorrectJson()
     {
         ServiceBusMessage? captured = null;

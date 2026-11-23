@@ -44,6 +44,15 @@ An observation or drop held only in memory while blob storage is unavailable
 can be lost on abrupt termination. A stored gap does not establish that the
 replacement log is fresh or that all source losses were detected.
 
+For Siege and Dry Run sessions, log-source agents check current session state
+at most once per minute, with coalesced earlier checks after joins. A confirmed
+active session enables a targeted RCON identity/IP refresh every 10 seconds;
+lookup failures or expiry stop the faster refresh. Connection IDs are omitted
+when continuity is uncertain, including pre-existing or possible map-transition
+occupants. Log timestamps and slot/GUID checks cannot prove atomic connection
+identity; downstream admission and enforcement must recheck the live occupant.
+CoD4x plugin-source mode retains ownership of its own events.
+
 ## Process health
 
 The monitoring-owned contract mirrored under `src/contract/` publishes bounded

@@ -65,6 +65,8 @@ public abstract class CodLogParserBase : ILogParser
     /// <inheritdoc />
     public IReadOnlyDictionary<int, PlayerInfo> ConnectedPlayers => _slotMap;
 
+    public long PlayerStateVersion { get; private set; }
+
     /// <summary>
     /// Validate that the GUID format is correct for this game variant.
     /// </summary>
@@ -104,6 +106,7 @@ public abstract class CodLogParserBase : ILogParser
     public void Reset()
     {
         _slotMap.Clear();
+        PlayerStateVersion++;
         _currentMap = null;
         _serverTitle = null;
         _serverMod = null;
@@ -195,6 +198,7 @@ public abstract class CodLogParserBase : ILogParser
 
         // Clear the slot map — all players will re-join after a map change
         _slotMap.Clear();
+        PlayerStateVersion++;
 
         if (mapName is not null)
         {
@@ -319,7 +323,11 @@ public abstract class CodLogParserBase : ILogParser
             return null;
         }
 
-        _slotMap.Remove(cid);
+        if (_slotMap.TryGetValue(cid, out var current) &&
+            string.Equals(current.Guid, guid, StringComparison.OrdinalIgnoreCase))
+        {
+            _slotMap.Remove(cid);
+        }
 
         return new PlayerDisconnectedEvent
         {
