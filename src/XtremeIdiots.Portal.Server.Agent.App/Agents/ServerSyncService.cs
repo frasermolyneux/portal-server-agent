@@ -1,9 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
+using System.Net;
 
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
+using XtremeIdiots.Portal.Repository.Api.Client.V1;
+using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.SiegeMode;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 
 namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
@@ -49,7 +52,7 @@ public sealed class ServerSyncService : IServerSyncService
         string? gameType,
         bool isCod4xPluginSourceEnabled,
         CancellationToken ct = default)
-        => SyncCoreAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled, null, ct);
+        => SyncCoreAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled, null, true, ct);
 
     public Task<ServerSyncResult> SyncWithRosterCallbackAsync(
         Guid serverId,
@@ -59,7 +62,47 @@ public sealed class ServerSyncService : IServerSyncService
         Func<ServerRosterSnapshot?, CancellationToken, Task<bool>> onRoster,
         CancellationToken ct = default)
         => SyncCoreAsync(serverId, parser, gameType, isCod4xPluginSourceEnabled,
-            onRoster ?? throw new ArgumentNullException(nameof(onRoster)), ct);
+            onRoster ?? throw new ArgumentNullException(nameof(onRoster)), true, ct);
+
+    public Task<ServerSyncResult> SyncIdentityAsync(
+        Guid serverId, ILogParser parser, string? gameType, CancellationToken ct = default)
+        => SyncCoreAsync(serverId, parser, gameType, false, null, false, ct);
+
+    public async Task<DateTimeOffset?> GetActiveSiegeExpiryAsync(Guid serverId, CancellationToken ct = default)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var client = scope.ServiceProvider.GetRequiredService<IRepositoryApiClient>();
+            var result = await client.SiegeMode.V1.GetCurrentSession(serverId, ct).ConfigureAwait(false);
+            if (result.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+
+            var session = result.Result?.Data;
+            if (!result.IsSuccess || session is null ||
+                session.GameServerId != serverId || session.SessionId == Guid.Empty ||
+                session.EndedAtUtc is not null ||
+                session.Mode is not (SiegeSessionMode.Enforce or SiegeSessionMode.DryRun) ||
+                session.ExpiresAtUtc.Kind != DateTimeKind.Utc)
+            {
+                _logger.LogWarning("Current Siege session unavailable or invalid for server {ServerId}: status {StatusCode}", serverId, result.StatusCode);
+                return null;
+            }
+
+            return new DateTimeOffset(session.ExpiresAtUtc);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Current Siege session lookup failed for server {ServerId}", serverId);
+            return null;
+        }
+    }
 
     public async Task<bool> CaptureRosterAsync(
         Guid serverId,
@@ -99,6 +142,7 @@ public sealed class ServerSyncService : IServerSyncService
         string? gameType,
         bool isCod4xPluginSourceEnabled,
         Func<ServerRosterSnapshot?, CancellationToken, Task<bool>>? onRoster,
+        bool runReconciliation,
         CancellationToken ct)
     {
         var ipResolvedEvents = new List<PlayerIpResolvedEvent>();
@@ -128,19 +172,20 @@ public sealed class ServerSyncService : IServerSyncService
                     serverId,
                     gameType);
 
-                await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
+                if (runReconciliation)
+                {
+                    await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
+                }
                 return new ServerSyncResult(ipResolvedEvents, roster, rosterRecorded);
             }
 
             if (rconPlayers is null)
             {
-                await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
-
-                // The CoD4x reconciles issue their own independent RCON commands (dumpbanlist,
-                // admin/command-power) and do not depend on the player-status result. Run them even
-                // when the status fetch failed or returned no players, so a flaky status call never
-                // starves server -> portal ban import.
-                await RunCoD4xReconciliationAsync(scope, serverId, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false);
+                if (runReconciliation)
+                {
+                    await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
+                    await RunCoD4xReconciliationAsync(scope, serverId, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false);
+                }
 
                 return new ServerSyncResult(ipResolvedEvents, roster, rosterRecorded);
             }
@@ -150,11 +195,19 @@ public sealed class ServerSyncService : IServerSyncService
             var added = 0;
             var updated = 0;
 
-            foreach (var rconPlayer in rconPlayers)
+            var playersToMerge = runReconciliation
+                ? rconPlayers
+                : rconPlayers.Where(player => roster is { State: RconRosterState.Complete or RconRosterState.Partial } &&
+                    roster.Players.Any(observed => observed.SlotId == player.Num &&
+                        string.Equals(observed.PlayerGuid, player.Guid, StringComparison.OrdinalIgnoreCase))).ToList();
+
+            foreach (var rconPlayer in playersToMerge)
             {
                 var slotId = rconPlayer.Num;
 
-                if (existingPlayers.TryGetValue(slotId, out var existing))
+                if (existingPlayers.TryGetValue(slotId, out var existing) &&
+                    (string.IsNullOrWhiteSpace(rconPlayer.Guid) ||
+                     string.Equals(existing.Guid, rconPlayer.Guid, StringComparison.OrdinalIgnoreCase)))
                 {
                     // Update mutable RCON fields on existing player
                     existing.Ping = rconPlayer.Ping;
@@ -162,24 +215,20 @@ public sealed class ServerSyncService : IServerSyncService
 
                     // Emit event when RCON provides an IP that differs from what we had
                     // (includes null→value first discovery and value→value IP changes)
-                    if (!string.IsNullOrWhiteSpace(rconPlayer.IpAddress) &&
+                    if (!string.IsNullOrWhiteSpace(existing.Guid) &&
+                        !string.IsNullOrWhiteSpace(rconPlayer.Guid) &&
+                        !string.IsNullOrWhiteSpace(rconPlayer.IpAddress) &&
                         existing.IpAddress != rconPlayer.IpAddress)
                     {
                         existing.IpAddress = rconPlayer.IpAddress;
 
-                        var resolvedPlayerGuid = string.IsNullOrWhiteSpace(existing.Guid)
-                            ? rconPlayer.Guid
-                            : existing.Guid;
-
-                        if (!string.IsNullOrWhiteSpace(resolvedPlayerGuid))
+                        ipResolvedEvents.Add(new PlayerIpResolvedEvent
                         {
-                            ipResolvedEvents.Add(new PlayerIpResolvedEvent
-                            {
-                                Timestamp = now,
-                                PlayerGuid = resolvedPlayerGuid,
-                                IpAddress = rconPlayer.IpAddress
-                            });
-                        }
+                            Timestamp = now,
+                            PlayerGuid = existing.Guid,
+                            IpAddress = rconPlayer.IpAddress,
+                            SlotId = slotId
+                        });
                     }
 
                     updated++;
@@ -206,27 +255,39 @@ public sealed class ServerSyncService : IServerSyncService
                         {
                             Timestamp = now,
                             PlayerGuid = rconPlayer.Guid,
-                            IpAddress = rconPlayer.IpAddress
+                            IpAddress = rconPlayer.IpAddress,
+                            SlotId = slotId
                         });
                     }
                 }
             }
 
             // Remove players from slot map that RCON says are gone
+            var canRemoveMissing = runReconciliation || roster is
+            {
+                State: RconRosterState.Complete,
+                UnparsedRowCount: 0,
+                MissingIdentityCount: 0,
+                KnownBotCount: 0
+            };
             var rconSlots = rconPlayers.Select(p => p.Num).ToHashSet();
-            var staleSlots = existingPlayers.Keys.Where(k => !rconSlots.Contains(k)).ToList();
+            var staleSlots = canRemoveMissing
+                ? existingPlayers.Keys.Where(k => !rconSlots.Contains(k)).ToList()
+                : [];
             foreach (var staleSlot in staleSlots)
             {
                 parser.RemovePlayer(staleSlot);
             }
 
-            _logger.LogInformation("RCON sync for {ServerId}: added {Added}, updated {Updated}, removed {Removed}, ip-resolved {IpResolved} players",
+            _logger.Log(runReconciliation ? LogLevel.Information : LogLevel.Debug,
+                "RCON sync for {ServerId}: added {Added}, updated {Updated}, removed {Removed}, ip-resolved {IpResolved} players",
                 serverId, added, updated, staleSlots.Count, ipResolvedEvents.Count);
 
-            // Query protocol for server metadata and player scores
-            await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
-
-            await RunCoD4xReconciliationAsync(scope, serverId, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false);
+            if (runReconciliation)
+            {
+                await SyncQueryAsync(scope, serverId, parser, ct).ConfigureAwait(false);
+                await RunCoD4xReconciliationAsync(scope, serverId, gameType, isCod4xPluginSourceEnabled, ct).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

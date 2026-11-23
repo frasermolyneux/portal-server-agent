@@ -263,7 +263,8 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 PlayerGuid = e.PlayerGuid,
                 Username = e.Username,
                 IpAddress = e.IpAddress,
-                SlotId = e.SlotId
+                SlotId = e.SlotId,
+                ConnectionId = e.ConnectionId
             }, JsonOptions)),
 
             Parsing.PlayerDisconnectedEvent e => (Queues.PlayerDisconnected, JsonSerializer.Serialize(new SbEvents.PlayerDisconnectedEvent
@@ -275,7 +276,8 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 SequenceId = sequenceId,
                 PlayerGuid = e.PlayerGuid,
                 Username = e.Username,
-                SlotId = e.SlotId
+                SlotId = e.SlotId,
+                ConnectionId = e.ConnectionId
             }, JsonOptions)),
 
             Parsing.ChatMessageEvent e => (Queues.ChatMessage, JsonSerializer.Serialize(new SbEvents.ChatMessageEvent
@@ -311,7 +313,9 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 GameType = gameType,
                 SequenceId = sequenceId,
                 PlayerGuid = e.PlayerGuid,
-                IpAddress = e.IpAddress
+                IpAddress = e.IpAddress,
+                SlotId = e.SlotId,
+                ConnectionId = e.ConnectionId
             }, JsonOptions)),
 
             _ => (null, null)

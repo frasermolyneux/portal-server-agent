@@ -12,6 +12,9 @@ using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Integrations.Servers.Api.Client.V1;
+using XtremeIdiots.Portal.Repository.Abstractions.Interfaces.V1;
+using XtremeIdiots.Portal.Repository.Abstractions.Models.V1.SiegeMode;
+using XtremeIdiots.Portal.Repository.Api.Client.V1;
 using XtremeIdiots.Portal.Server.Agent.App.Agents;
 using XtremeIdiots.Portal.Server.Agent.App.Parsing;
 
@@ -29,6 +32,9 @@ public class ServerSyncServiceTests
     private readonly Mock<IVersionedCod5RconApi> _mockVersionedCod5RconApi = new();
     private readonly Mock<ICod5RconApi> _mockCod5RconApi = new();
     private readonly Mock<IQueryApi> _mockQueryApi = new();
+    private readonly Mock<IRepositoryApiClient> _mockRepository = new();
+    private readonly Mock<IVersionedSiegeModeApi> _mockVersionedSiegeMode = new();
+    private readonly Mock<ISiegeModeApi> _mockSiegeMode = new();
     private readonly Mock<ICoD4xBanReconciliationService> _mockCoD4xReconciliationService = new();
     private readonly Mock<ICoD4xAdminReconciliationService> _mockCoD4xAdminReconciliationService = new();
     private readonly Mock<ICoD4xCommandPowerReconciliationService> _mockCoD4xCommandPowerReconciliationService = new();
@@ -49,10 +55,13 @@ public class ServerSyncServiceTests
         _mockServersApiClient.Setup(x => x.Cod2Rcon).Returns(_mockVersionedCod2RconApi.Object);
         _mockServersApiClient.Setup(x => x.Cod4Rcon).Returns(_mockVersionedCod4RconApi.Object);
         _mockServersApiClient.Setup(x => x.Cod5Rcon).Returns(_mockVersionedCod5RconApi.Object);
+        _mockRepository.Setup(x => x.SiegeMode).Returns(_mockVersionedSiegeMode.Object);
+        _mockVersionedSiegeMode.Setup(x => x.V1).Returns(_mockSiegeMode.Object);
 
         var services = new ServiceCollection();
         services.AddSingleton(_mockServersApiClient.Object);
         services.AddSingleton(_mockQueryApi.Object);
+        services.AddSingleton(_mockRepository.Object);
 
         if (includeCoD4xReconciliationService)
         {
@@ -73,6 +82,73 @@ public class ServerSyncServiceTests
 
         var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
         return new ServerSyncService(scopeFactory, _logger);
+    }
+
+    [Theory]
+    [InlineData(SiegeSessionMode.Enforce)]
+    [InlineData(SiegeSessionMode.DryRun)]
+    public async Task GetActiveSiegeExpiryAsync_ReturnsExpiryForActiveSession(SiegeSessionMode mode)
+    {
+        var expires = DateTime.UtcNow.AddMinutes(10);
+        var session = new SiegeSessionDto
+        {
+            GameServerId = _serverId,
+            SessionId = Guid.NewGuid(),
+            Mode = mode,
+            ExpiresAtUtc = expires
+        };
+        _mockSiegeMode.Setup(api => api.GetCurrentSession(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<SiegeSessionDto>(HttpStatusCode.OK, new ApiResponse<SiegeSessionDto>(session)));
+
+        var actual = await CreateService().GetActiveSiegeExpiryAsync(_serverId);
+
+        Assert.Equal(new DateTimeOffset(expires), actual);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task GetActiveSiegeExpiryAsync_NotFoundOrFailureDoesNotActivate(HttpStatusCode code)
+    {
+        _mockSiegeMode.Setup(api => api.GetCurrentSession(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<SiegeSessionDto>(code, new ApiResponse<SiegeSessionDto>(new ApiError("error", "Unavailable"))));
+
+        Assert.Null(await CreateService().GetActiveSiegeExpiryAsync(_serverId));
+    }
+
+    [Fact]
+    public async Task GetActiveSiegeExpiryAsync_InvalidSessionDoesNotActivate()
+    {
+        var session = new SiegeSessionDto
+        {
+            GameServerId = Guid.NewGuid(),
+            SessionId = Guid.NewGuid(),
+            Mode = SiegeSessionMode.Enforce,
+            ExpiresAtUtc = DateTime.UtcNow.AddMinutes(10)
+        };
+        _mockSiegeMode.Setup(api => api.GetCurrentSession(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<SiegeSessionDto>(HttpStatusCode.OK, new ApiResponse<SiegeSessionDto>(session)));
+
+        Assert.Null(await CreateService().GetActiveSiegeExpiryAsync(_serverId));
+    }
+
+    [Theory]
+    [InlineData(true, SiegeSessionMode.Enforce)]
+    [InlineData(false, SiegeSessionMode.Unknown)]
+    public async Task GetActiveSiegeExpiryAsync_EndedOrUnknownModeDoesNotActivate(bool ended, SiegeSessionMode mode)
+    {
+        var session = new SiegeSessionDto
+        {
+            GameServerId = _serverId,
+            SessionId = Guid.NewGuid(),
+            Mode = mode,
+            ExpiresAtUtc = DateTime.UtcNow.AddMinutes(10),
+            EndedAtUtc = ended ? DateTime.UtcNow : null
+        };
+        _mockSiegeMode.Setup(api => api.GetCurrentSession(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<SiegeSessionDto>(HttpStatusCode.OK, new ApiResponse<SiegeSessionDto>(session)));
+
+        Assert.Null(await CreateService().GetActiveSiegeExpiryAsync(_serverId));
     }
 
     [Fact]
@@ -102,6 +178,57 @@ public class ServerSyncServiceTests
             pi.Guid == "guid-a" && pi.Name == "Alice" && pi.IpAddress == "1.2.3.4" && pi.Ping == 30 && pi.Rate == 25000)), Times.Once);
         _mockParser.Verify(p => p.SetPlayer(1, It.Is<PlayerInfo>(pi =>
             pi.Guid == "guid-b" && pi.Name == "Bob" && pi.IpAddress == "5.6.7.8" && pi.Ping == 50 && pi.Rate == 20000)), Times.Once);
+    }
+
+    [Fact]
+    public async Task SyncIdentityAsync_OnlyUsesRconStatus()
+    {
+        var dto = new CoD4xStatusResponseDto
+        {
+            Players = [new() { Num = 1, PlayerIdentifier = "one", Name = "Alice", IpAddress = "1.2.3.4" }],
+            Roster = new RconRosterObservationDto
+            {
+                State = RconRosterState.Complete,
+                Players = [new() { Slot = 1, PlayerIdentifier = "one" }]
+            }
+        };
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<CoD4xStatusResponseDto>(dto)));
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo>());
+
+        var result = await CreateService().SyncIdentityAsync(_serverId, _mockParser.Object, "CallOfDuty4x");
+
+        Assert.Equal(RconRosterState.Complete, Assert.IsType<ServerRosterSnapshot>(result.Roster).State);
+        Assert.Equal(1, Assert.Single(result.IpResolvedEvents).SlotId);
+        _mockQueryApi.Verify(q => q.GetServerStatus(It.IsAny<Guid>()), Times.Never);
+        _mockCoD4xReconciliationService.Verify(r => r.ReconcileAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xAdminReconciliationService.VerifyNoOtherCalls();
+        _mockCoD4xCommandPowerReconciliationService.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task SyncIdentityAsync_PartialRosterDoesNotRemoveOrAssociateUnconfirmedPlayers()
+    {
+        var dto = new CoD4xStatusResponseDto
+        {
+            Players = [new() { Num = 1, PlayerIdentifier = "wrong", Name = "Bob", IpAddress = "9.9.9.9" }],
+            Roster = new RconRosterObservationDto
+            {
+                State = RconRosterState.Partial,
+                Players = [new() { Slot = 1, PlayerIdentifier = "one" }]
+            }
+        };
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(HttpStatusCode.OK, new ApiResponse<CoD4xStatusResponseDto>(dto)));
+        var player = new PlayerInfo { Guid = "one", Name = "Alice", SlotId = 1, ConnectedAt = DateTime.UtcNow };
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo> { [1] = player });
+
+        var result = await CreateService().SyncIdentityAsync(_serverId, _mockParser.Object, "CallOfDuty4x");
+
+        Assert.Empty(result.IpResolvedEvents);
+        Assert.Null(player.IpAddress);
+        _mockParser.Verify(p => p.SetPlayer(It.IsAny<int>(), It.IsAny<PlayerInfo>()), Times.Never);
+        _mockParser.Verify(p => p.RemovePlayer(It.IsAny<int>()), Times.Never);
     }
 
     [Theory]
@@ -978,7 +1105,7 @@ public class ServerSyncServiceTests
     }
 
     [Fact]
-    public async Task SyncAsync_WhenExistingGuidMissing_UsesRconGuidForIpResolvedEvent()
+    public async Task SyncAsync_WhenExistingGuidMissing_ReplacesUnidentifiedOccupant()
     {
         var rconPlayers = new List<CoD4xStatusPlayerDto>
         {
@@ -1012,5 +1139,47 @@ public class ServerSyncServiceTests
         Assert.Equal("guid-from-rcon", ipEvent.PlayerGuid);
         Assert.Equal("9.9.9.9", ipEvent.IpAddress);
         Assert.Equal(string.Empty, existingPlayers[0].Guid);
+        Assert.Equal("1.1.1.1", existingPlayers[0].IpAddress);
+        _mockParser.Verify(p => p.SetPlayer(0, It.Is<PlayerInfo>(player =>
+            player.Guid == "guid-from-rcon" && player.IpAddress == "9.9.9.9")), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("guid-b", true)]
+    [InlineData("", false)]
+    public async Task SyncAsync_DoesNotAssociateIpWithDifferentOrUnknownOccupant(string rconGuid, bool replacesPlayer)
+    {
+        var rconPlayers = new List<CoD4xStatusPlayerDto>
+        {
+            new() { Num = 0, PlayerIdentifier = rconGuid, Name = "Bob", IpAddress = "9.9.9.9" }
+        };
+        _mockCoD4xRconApi.Setup(r => r.Status(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<CoD4xStatusResponseDto>(
+                HttpStatusCode.OK,
+                new ApiResponse<CoD4xStatusResponseDto>(new CoD4xStatusResponseDto { Players = rconPlayers })));
+        var previous = new PlayerInfo
+        {
+            Guid = "guid-a",
+            Name = "Alice",
+            SlotId = 0,
+            ConnectedAt = DateTime.UtcNow,
+            IpAddress = "1.1.1.1"
+        };
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo> { [0] = previous });
+
+        var events = await CreateService().SyncAsync(_serverId, _mockParser.Object, "CallOfDuty4x");
+
+        Assert.Equal("1.1.1.1", previous.IpAddress);
+        if (replacesPlayer)
+        {
+            Assert.Equal("guid-b", Assert.Single(events).PlayerGuid);
+            _mockParser.Verify(p => p.SetPlayer(0, It.Is<PlayerInfo>(player =>
+                player.Guid == "guid-b" && player.IpAddress == "9.9.9.9")), Times.Once);
+        }
+        else
+        {
+            Assert.Empty(events);
+            _mockParser.Verify(p => p.SetPlayer(It.IsAny<int>(), It.IsAny<PlayerInfo>()), Times.Never);
+        }
     }
 }

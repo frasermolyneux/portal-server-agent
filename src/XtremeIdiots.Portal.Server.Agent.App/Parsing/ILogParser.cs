@@ -24,6 +24,9 @@ public interface ILogParser
     /// </summary>
     IReadOnlyDictionary<int, PlayerInfo> ConnectedPlayers { get; }
 
+    /// <summary>Changes whenever the parser discards its player state.</summary>
+    long PlayerStateVersion { get; }
+
     /// <summary>
     /// Reset all parser state (slot map, current map). Call on reconnect.
     /// </summary>
