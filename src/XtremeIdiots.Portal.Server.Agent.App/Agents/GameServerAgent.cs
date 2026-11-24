@@ -35,6 +35,8 @@ public sealed class GameServerAgent
     private readonly Random _startupJitterRandom;
     private readonly Action? _reportHeartbeat;
     private readonly ConnectionTracker _connectionTracker = new();
+    private readonly Guid _producerInstanceId = Guid.NewGuid();
+    private readonly DateTimeOffset _producerStartedAtUtc = DateTimeOffset.UtcNow;
     private readonly SiegeRefreshSchedule _siegeRefresh = new();
     private PlaytimeSourceTracker? _playtimeSourceTracker;
     private readonly PlaytimeProducer? _playtimeProducer;
@@ -239,6 +241,7 @@ public sealed class GameServerAgent
                         await TrackPlaytimeSourceAsync(initialize: false, ct);
                     }
 
+                    var connectionStatusChanged = false;
                     foreach (var line in lines)
                     {
                         var playerStateVersion = _parser.PlayerStateVersion;
@@ -254,7 +257,11 @@ public sealed class GameServerAgent
                                 continue;
                             }
 
-                            var correlated = _connectionTracker.Observe(gameEvent);
+                            var correlated = _connectionTracker.Observe(gameEvent) with
+                            {
+                                ProducerInstanceId = _producerInstanceId,
+                                ProducerStartedAtUtc = _producerStartedAtUtc
+                            };
                             if (correlated is PlayerConnectedEvent)
                             {
                                 _siegeRefresh.ObserveJoin(DateTimeOffset.UtcNow);
@@ -269,6 +276,7 @@ public sealed class GameServerAgent
                             try
                             {
                                 await _publisher.PublishAsync(correlated, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                                connectionStatusChanged |= correlated is PlayerConnectedEvent { ConnectionId: not null };
                             }
                             catch
                             {
@@ -314,7 +322,7 @@ public sealed class GameServerAgent
                     }
 
                     // Periodic status publish (every 60s)
-                    if (DateTime.UtcNow - _lastStatusPublish > StatusPublishInterval)
+                    if (connectionStatusChanged || DateTime.UtcNow - _lastStatusPublish > StatusPublishInterval)
                     {
                         await PublishStatusAsync(ct);
                     }
@@ -736,6 +744,11 @@ public sealed class GameServerAgent
                 _parser.CurrentMap, _parser.CurrentMap, // gameName TBD
                 _parser.ConnectedPlayers,
                 _parser.ServerTitle, _parser.ServerMod, _parser.MaxPlayers,
+                new AgentConnectionSnapshot(_producerInstanceId, _producerStartedAtUtc,
+                    _parser.ConnectedPlayers.Values
+                        .Select(p => (p.SlotId, Id: _connectionTracker.GetConnectionId(p.SlotId, p.Guid)))
+                        .Where(p => p.Id.HasValue)
+                        .ToDictionary(p => p.SlotId, p => p.Id!.Value)),
                 ct);
             _lastStatusPublish = DateTime.UtcNow;
         }
@@ -805,7 +818,11 @@ public sealed class GameServerAgent
         {
             try
             {
-                await _publisher.PublishAsync(_connectionTracker.Observe(evt),
+                await _publisher.PublishAsync(_connectionTracker.Observe(evt) with
+                {
+                    ProducerInstanceId = _producerInstanceId,
+                    ProducerStartedAtUtc = _producerStartedAtUtc
+                },
                     _context.ServerId, _context.GameType, NextSequenceId(), ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

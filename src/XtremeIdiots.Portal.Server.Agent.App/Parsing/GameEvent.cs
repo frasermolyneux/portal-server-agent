@@ -10,6 +10,10 @@ public abstract record GameEvent
     /// UTC timestamp indicating when the event was parsed (log lines lack date information).
     /// </summary>
     public required DateTime Timestamp { get; init; }
+
+    public Guid? ProducerInstanceId { get; init; }
+
+    public DateTimeOffset? ProducerStartedAtUtc { get; init; }
 }
 
 /// <summary>

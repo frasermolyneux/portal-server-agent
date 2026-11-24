@@ -38,6 +38,8 @@ public sealed class ConnectionTrackerTests
         Assert.Empty(join.IpAddress);
         Assert.Equal(join.ConnectionId, ip.ConnectionId);
         Assert.Equal(join.ConnectionId, quit.ConnectionId);
+        Assert.Null(tracker.GetConnectionId(1, "other"));
+        Assert.Equal(reconnect.ConnectionId, tracker.GetConnectionId(1, "ONE"));
         Assert.NotNull(reconnect.ConnectionId);
         Assert.NotEqual(join.ConnectionId, reconnect.ConnectionId);
     }

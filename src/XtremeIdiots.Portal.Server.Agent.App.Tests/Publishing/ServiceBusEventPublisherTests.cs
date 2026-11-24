@@ -86,11 +86,13 @@ public class ServiceBusEventPublisherTests : IAsyncLifetime
             .Callback<ServiceBusMessage, CancellationToken>((message, _) => messages.Add(message))
             .Returns(Task.CompletedTask);
         var connectionId = Guid.NewGuid();
+        var instanceId = Guid.NewGuid();
+        var started = DateTimeOffset.UtcNow.AddMinutes(-1);
         GameEvent[] events =
         [
             new PlayerConnectedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", Username = "Alice", SlotId = 2, ConnectionId = connectionId },
             new PlayerIpResolvedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", IpAddress = "1.2.3.4", SlotId = 2, ConnectionId = connectionId },
-            new PlayerDisconnectedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", Username = "Alice", SlotId = 2, ConnectionId = connectionId }
+            new PlayerDisconnectedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", Username = "Alice", SlotId = 2, ConnectionId = connectionId, ProducerInstanceId = instanceId, ProducerStartedAtUtc = started }
         ];
 
         foreach (var item in events)
@@ -105,6 +107,13 @@ public class ServiceBusEventPublisherTests : IAsyncLifetime
             Assert.Equal(connectionId, json.RootElement.GetProperty("connectionId").GetGuid());
             Assert.Equal(2, json.RootElement.GetProperty("slotId").GetInt32());
         }
+        using var disconnected = JsonDocument.Parse(messages[2].Body.ToString());
+        var root = disconnected.RootElement;
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("connectionGeneration").ValueKind);
+        Assert.NotEqual(Guid.Empty, root.GetProperty("snapshotId").GetGuid());
+        Assert.Equal((ulong)SequenceId, root.GetProperty("sequence").GetUInt64());
+        Assert.Equal(instanceId, root.GetProperty("runtime").GetProperty("instanceId").GetGuid());
+        Assert.Equal(started, root.GetProperty("runtime").GetProperty("startedAtUtc").GetDateTimeOffset());
     }
 
     [Fact]
@@ -354,6 +363,41 @@ public class ServiceBusEventPublisherTests : IAsyncLifetime
         Assert.Equal("p1guid", first.GetProperty("playerGuid").GetString());
         Assert.Equal("Player1", first.GetProperty("username").GetString());
         Assert.Equal(0, first.GetProperty("slotId").GetInt32());
+    }
+
+    [Fact]
+    public async Task PublishServerStatusAsync_ReportsOnlyProvenConnectionIds()
+    {
+        ServiceBusMessage? captured = null;
+        _senderMock.Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((message, _) => captured = message)
+            .Returns(Task.CompletedTask);
+        var players = new Dictionary<int, PlayerInfo>
+        {
+            [1] = new() { Guid = "one", Name = "One", SlotId = 1, ConnectedAt = DateTime.UtcNow },
+            [2] = new() { Guid = "two", Name = "Two", SlotId = 2, ConnectedAt = DateTime.UtcNow }
+        };
+        var instanceId = Guid.NewGuid();
+        var started = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var connectionId = Guid.NewGuid();
+        var snapshot = new AgentConnectionSnapshot(instanceId, started, new Dictionary<int, Guid> { [1] = connectionId });
+
+        await _publisher.PublishServerStatusAsync(ServerId, GameType, SequenceId, "map", "game", players, null, null, null, snapshot);
+
+        Assert.NotNull(captured);
+        using var doc = JsonDocument.Parse(captured.Body.ToString());
+        var root = doc.RootElement;
+        Assert.NotEqual(Guid.Empty, root.GetProperty("snapshotId").GetGuid());
+        Assert.Equal((ulong)SequenceId, root.GetProperty("sequence").GetUInt64());
+        Assert.Equal(instanceId, root.GetProperty("runtime").GetProperty("instanceId").GetGuid());
+        Assert.Equal(started, root.GetProperty("runtime").GetProperty("startedAtUtc").GetDateTimeOffset());
+        var entries = root.GetProperty("players");
+        Assert.Equal("Connected", entries[0].GetProperty("state").GetString());
+        Assert.Equal(connectionId, entries[0].GetProperty("connectionId").GetGuid());
+        Assert.Equal(JsonValueKind.Null, entries[0].GetProperty("connectionGeneration").ValueKind);
+        Assert.Equal("Unknown", entries[1].GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, entries[1].GetProperty("connectionId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, entries[1].GetProperty("connectionGeneration").ValueKind);
     }
 
     [Fact]
