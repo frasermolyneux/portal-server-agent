@@ -17,6 +17,8 @@ public abstract record GameEvent
 /// </summary>
 public sealed record PlayerConnectedEvent : GameEvent
 {
+    public Guid ObservationId { get; init; } = Guid.NewGuid();
+
     /// <summary>
     /// Game-specific unique identifier for the player.
     /// </summary>
@@ -116,6 +118,8 @@ public sealed record MapChangeEvent : GameEvent
 /// </summary>
 public sealed record PlayerIpResolvedEvent : GameEvent
 {
+    public Guid ObservationId { get; init; } = Guid.NewGuid();
+
     /// <summary>
     /// Game-specific unique identifier for the player.
     /// </summary>
