@@ -2296,6 +2296,23 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     }
 
     [Fact]
+    public void RulesHealth_ActualLegacyOutputDoesNotProveRulesSupport()
+    {
+        var output = $"""
+            [portal-cod4x-plugin] portalpluginhealth report
+             pluginVersion=0.2.35 loadedConfig=true gameServerId={_serverId} logLevel=info(2) gameType=CallOfDuty4x
+             banSyncStage=Idle nextBanSyncUtc=2026-11-24T15:11:17Z activeBanCacheCount=35 pendingBanCacheCount=0 banSyncInFlight=false
+             banEnforcementStatusChecks=141 statusHits=0 statusMisses=141 statusZeroPlayerIds=0 authenticatedChecks=141 authenticatedHits=0 authenticatedMisses=141 authenticatedZeroPlayerIds=0 proactiveDropAttempts=0
+             ingestStage=Idle bufferedEventCount=0 ingestFailureCount=0 nextIngestAttemptUtc=2026-11-24T15:08:54Z ingestInFlight=false
+             connectedPlayerCount=14 serverContextLastRefreshUtc=2026-11-24T05:58:25Z
+             lastTickUtc=2026-11-24T15:09:50Z secondsSinceLastTick=0
+             portalpluginhealthEnabled=true portalpluginhealthMinPower=98
+            """;
+
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(output, "0.2.35", _serverId));
+    }
+
+    [Fact]
     public void RulesHealth_RequiresExactRuntimeAndCapabilities()
     {
         var good = RulesHealth("0.3.0");
