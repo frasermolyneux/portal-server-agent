@@ -10,6 +10,10 @@ public abstract record GameEvent
     /// UTC timestamp indicating when the event was parsed (log lines lack date information).
     /// </summary>
     public required DateTime Timestamp { get; init; }
+
+    public Guid? ProducerInstanceId { get; init; }
+
+    public DateTimeOffset? ProducerStartedAtUtc { get; init; }
 }
 
 /// <summary>
@@ -17,6 +21,8 @@ public abstract record GameEvent
 /// </summary>
 public sealed record PlayerConnectedEvent : GameEvent
 {
+    public Guid ObservationId { get; init; } = Guid.NewGuid();
+
     /// <summary>
     /// Game-specific unique identifier for the player.
     /// </summary>
@@ -116,6 +122,8 @@ public sealed record MapChangeEvent : GameEvent
 /// </summary>
 public sealed record PlayerIpResolvedEvent : GameEvent
 {
+    public Guid ObservationId { get; init; } = Guid.NewGuid();
+
     /// <summary>
     /// Game-specific unique identifier for the player.
     /// </summary>

@@ -20,6 +20,7 @@ public interface IEventPublisher : IAsyncDisposable
     Task PublishServerStatusAsync(Guid serverId, string gameType, long sequenceId,
         string mapName, string gameName, IReadOnlyDictionary<int, PlayerInfo> players,
         string? serverTitle, string? serverMod, int? maxPlayers,
+        AgentConnectionSnapshot? connections = null,
         CancellationToken ct = default);
 
     /// <summary>
@@ -58,3 +59,8 @@ public interface IEventPublisher : IAsyncDisposable
         string? playerGuid = null, string? playerName = null, string? correlationId = null,
         CancellationToken ct = default);
 }
+
+public sealed record AgentConnectionSnapshot(
+    Guid InstanceId,
+    DateTimeOffset StartedAtUtc,
+    IReadOnlyDictionary<int, Guid> ConnectionIds);

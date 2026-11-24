@@ -11,6 +11,12 @@ internal sealed class ConnectionTracker
 
     public bool HasCompleteBaseline => _hasCompleteBaseline;
 
+    public Guid? GetConnectionId(int slotId, string playerGuid)
+        => _occupants.TryGetValue(slotId, out var player) &&
+            string.Equals(player.PlayerGuid, playerGuid, StringComparison.OrdinalIgnoreCase)
+                ? player.ConnectionId
+                : null;
+
     public void Reset(bool preservePossibleCarryovers = false)
     {
         if (preservePossibleCarryovers)
