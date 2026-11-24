@@ -231,11 +231,12 @@ public class GameServerAgentTests
         var parser = new Cod4xLogParser();
         parser.ParseLine("  0:00 InitGame: \\mapname\\mp_crash\\g_gametype\\war");
         var poll = 0;
+        var statusAttempts = 0;
         var joined = new TaskCompletionSource<(Guid Id, long Sequence)>(TaskCreationOptions.RunContinuationsAsynchronously);
         var status = new TaskCompletionSource<(AgentConnectionSnapshot Snapshot, long Sequence)>(TaskCreationOptions.RunContinuationsAsynchronously);
         _mockTailer.SetupGet(t => t.LastPollReachedEnd).Returns(true);
         _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => ++poll == 1 ? Array.Empty<string>() : [$"  1:00 J;{guid};2;Player"]);
+            .ReturnsAsync(() => ++poll == 2 ? [$"  1:00 J;{guid};2;Player"] : Array.Empty<string>());
         _mockSyncService.Setup(s => s.SyncIdentityAsync(_testContext.ServerId, parser, _testContext.GameType, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ServerSyncResult([], new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Complete, [], 0, 0, 0)));
         _mockPublisher.Setup(p => p.PublishAsync(It.IsAny<GameEvent>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
@@ -254,9 +255,14 @@ public class GameServerAgentTests
                 {
                     if (snapshot?.ConnectionIds.ContainsKey(2) == true)
                     {
-                        status.TrySetResult((snapshot, sequence));
+                        if (++statusAttempts == 2)
+                        {
+                            status.TrySetResult((snapshot, sequence));
+                        }
                     }
-                }).Returns(Task.CompletedTask);
+                }).Returns(() => statusAttempts == 1
+                    ? Task.FromException(new IOException("status publish failed"))
+                    : Task.CompletedTask);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var agent = new GameServerAgent(_testContext, _mockTailer.Object, parser, _mockPublisher.Object,
             _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
@@ -270,6 +276,7 @@ public class GameServerAgentTests
 
         Assert.Equal(connection.Id, publishedStatus.Snapshot.ConnectionIds[2]);
         Assert.True(publishedStatus.Sequence > connection.Sequence);
+        Assert.Equal(2, statusAttempts);
     }
 
     [Fact]
@@ -345,6 +352,34 @@ public class GameServerAgentTests
             [new PlayerIpResolvedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", IpAddress = "1.2.3.4", SlotId = 1 }],
             CancellationToken.None);
         Assert.Null(current.IpAddress);
+    }
+
+    [Fact]
+    public async Task PublishIpResolvedEventsAsync_RetryPreservesObservationOnlyForSamePlayer()
+    {
+        var player = new PlayerInfo { Guid = "one", Name = "Alice", SlotId = 1, ConnectedAt = DateTime.UtcNow, IpAddress = "1.2.3.4" };
+        var players = new Dictionary<int, PlayerInfo> { [1] = player };
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(players);
+        var published = new List<PlayerIpResolvedEvent>();
+        _mockPublisher.Setup(p => p.PublishAsync(It.IsAny<GameEvent>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Returns<GameEvent, Guid, string, long, CancellationToken>((e, _, _, _, _) =>
+            {
+                published.Add((PlayerIpResolvedEvent)e);
+                return published.Count is 1 or 3 ? Task.FromException(new IOException("acknowledgement lost")) : Task.CompletedTask;
+            });
+        var agent = CreateAgent();
+        static PlayerIpResolvedEvent NewObservation() => new() { Timestamp = DateTime.UtcNow, PlayerGuid = "one", IpAddress = "1.2.3.4", SlotId = 1 };
+
+        await agent.PublishIpResolvedEventsAsync([NewObservation()], CancellationToken.None);
+        player.IpAddress = "1.2.3.4";
+        await agent.PublishIpResolvedEventsAsync([NewObservation()], CancellationToken.None);
+        await agent.PublishIpResolvedEventsAsync([NewObservation()], CancellationToken.None);
+        players[1] = new PlayerInfo { Guid = "one", Name = "Alice", SlotId = 1, ConnectedAt = DateTime.UtcNow, IpAddress = "1.2.3.4" };
+        await agent.PublishIpResolvedEventsAsync([NewObservation()], CancellationToken.None);
+
+        Assert.Equal(published[0].ObservationId, published[1].ObservationId);
+        Assert.Equal(published[0].Timestamp, published[1].Timestamp);
+        Assert.NotEqual(published[2].ObservationId, published[3].ObservationId);
     }
 
     [Theory]

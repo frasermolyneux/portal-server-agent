@@ -35,6 +35,7 @@ public sealed class GameServerAgent
     private readonly Random _startupJitterRandom;
     private readonly Action? _reportHeartbeat;
     private readonly ConnectionTracker _connectionTracker = new();
+    private readonly Dictionary<int, (PlayerInfo Player, PlayerIpResolvedEvent Event)> _pendingIpObservations = new();
     private readonly Guid _producerInstanceId = Guid.NewGuid();
     private readonly DateTimeOffset _producerStartedAtUtc = DateTimeOffset.UtcNow;
     private readonly SiegeRefreshSchedule _siegeRefresh = new();
@@ -54,6 +55,7 @@ public sealed class GameServerAgent
     private DateTime _nextPlaytimeRosterSync = DateTime.MaxValue;
     private int _nextBroadcastIndex;
     private bool _identityBaselinePending = true;
+    private bool _connectionStatusPending;
     private DateTime _lastIdentityBaselineAttempt = DateTime.MinValue;
     private long _tailContinuityVersion;
 
@@ -241,7 +243,6 @@ public sealed class GameServerAgent
                         await TrackPlaytimeSourceAsync(initialize: false, ct);
                     }
 
-                    var connectionStatusChanged = false;
                     foreach (var line in lines)
                     {
                         var playerStateVersion = _parser.PlayerStateVersion;
@@ -262,6 +263,14 @@ public sealed class GameServerAgent
                                 ProducerInstanceId = _producerInstanceId,
                                 ProducerStartedAtUtc = _producerStartedAtUtc
                             };
+                            if (correlated is PlayerDisconnectedEvent disconnected)
+                            {
+                                _pendingIpObservations.Remove(disconnected.SlotId);
+                            }
+                            else if (correlated is MapChangeEvent)
+                            {
+                                _pendingIpObservations.Clear();
+                            }
                             if (correlated is PlayerConnectedEvent)
                             {
                                 _siegeRefresh.ObserveJoin(DateTimeOffset.UtcNow);
@@ -276,7 +285,7 @@ public sealed class GameServerAgent
                             try
                             {
                                 await _publisher.PublishAsync(correlated, _context.ServerId, _context.GameType, NextSequenceId(), ct);
-                                connectionStatusChanged |= correlated is PlayerConnectedEvent { ConnectionId: not null };
+                                _connectionStatusPending |= correlated is PlayerConnectedEvent { ConnectionId: not null };
                             }
                             catch
                             {
@@ -322,7 +331,7 @@ public sealed class GameServerAgent
                     }
 
                     // Periodic status publish (every 60s)
-                    if (connectionStatusChanged || DateTime.UtcNow - _lastStatusPublish > StatusPublishInterval)
+                    if (_connectionStatusPending || DateTime.UtcNow - _lastStatusPublish > StatusPublishInterval)
                     {
                         await PublishStatusAsync(ct);
                     }
@@ -491,6 +500,7 @@ public sealed class GameServerAgent
     private void ResetConnectionBaseline(bool preservePossibleCarryovers = true)
     {
         _connectionTracker.Reset(preservePossibleCarryovers);
+        _pendingIpObservations.Clear();
         _identityBaselinePending = true;
     }
 
@@ -751,6 +761,7 @@ public sealed class GameServerAgent
                         .ToDictionary(p => p.SlotId, p => p.Id!.Value)),
                 ct);
             _lastStatusPublish = DateTime.UtcNow;
+            _connectionStatusPending = false;
         }
     }
 
@@ -816,14 +827,37 @@ public sealed class GameServerAgent
 
         foreach (var evt in events)
         {
+            var correlated = (PlayerIpResolvedEvent)_connectionTracker.Observe(evt) with
+            {
+                ProducerInstanceId = _producerInstanceId,
+                ProducerStartedAtUtc = _producerStartedAtUtc
+            };
+            PlayerInfo? currentPlayer = null;
+            if (evt.SlotId is { } currentSlot &&
+                _parser.ConnectedPlayers.TryGetValue(currentSlot, out var player) &&
+                string.Equals(player.Guid, evt.PlayerGuid, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(player.IpAddress, evt.IpAddress, StringComparison.Ordinal))
+            {
+                currentPlayer = player;
+                if (_pendingIpObservations.TryGetValue(currentSlot, out var pending) &&
+                    ReferenceEquals(pending.Player, player) &&
+                    pending.Event.ConnectionId == correlated.ConnectionId &&
+                    string.Equals(pending.Event.IpAddress, correlated.IpAddress, StringComparison.Ordinal))
+                {
+                    correlated = correlated with
+                    {
+                        ObservationId = pending.Event.ObservationId,
+                        Timestamp = pending.Event.Timestamp
+                    };
+                }
+            }
             try
             {
-                await _publisher.PublishAsync(_connectionTracker.Observe(evt) with
+                await _publisher.PublishAsync(correlated, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                if (evt.SlotId is { } publishedSlot)
                 {
-                    ProducerInstanceId = _producerInstanceId,
-                    ProducerStartedAtUtc = _producerStartedAtUtc
-                },
-                    _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                    _pendingIpObservations.Remove(publishedSlot);
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -833,11 +867,10 @@ public sealed class GameServerAgent
             {
                 _logger.LogWarning(ex, "[{Title}] Failed to publish PlayerIpResolved for {PlayerGuid}",
                     _context.Title, evt.PlayerGuid);
-                if (evt.SlotId is { } slot && _parser.ConnectedPlayers.TryGetValue(slot, out var player) &&
-                    string.Equals(player.Guid, evt.PlayerGuid, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(player.IpAddress, evt.IpAddress, StringComparison.Ordinal))
+                if (evt.SlotId is { } slot && currentPlayer is not null)
                 {
-                    player.IpAddress = null;
+                    _pendingIpObservations[slot] = (currentPlayer, correlated);
+                    currentPlayer.IpAddress = null;
                 }
             }
         }
