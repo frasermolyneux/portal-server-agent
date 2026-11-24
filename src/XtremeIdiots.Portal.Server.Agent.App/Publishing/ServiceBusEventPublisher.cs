@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text.Json;
 
 using Azure.Messaging.ServiceBus;
@@ -24,6 +25,16 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false,
         Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+
+    private static readonly SbEvents.RuleRuntimeDescriptor Runtime = new()
+    {
+        Id = "server-agent",
+        Version = typeof(ServiceBusEventPublisher).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? typeof(ServiceBusEventPublisher).Assembly.GetName().Version?.ToString()
+            ?? "unknown",
+        ProtocolVersion = 1,
+        Capabilities = []
     };
 
     private readonly ServiceBusClient _client;
@@ -264,7 +275,10 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 Username = e.Username,
                 IpAddress = e.IpAddress,
                 SlotId = e.SlotId,
-                ConnectionId = e.ConnectionId
+                ConnectionId = e.ConnectionId,
+                ObservationId = e.ObservationId,
+                Runtime = Runtime,
+                RulesEvaluatedByPlugin = false
             }, JsonOptions)),
 
             Parsing.PlayerDisconnectedEvent e => (Queues.PlayerDisconnected, JsonSerializer.Serialize(new SbEvents.PlayerDisconnectedEvent
@@ -315,7 +329,10 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 PlayerGuid = e.PlayerGuid,
                 IpAddress = e.IpAddress,
                 SlotId = e.SlotId,
-                ConnectionId = e.ConnectionId
+                ConnectionId = e.ConnectionId,
+                ObservationId = e.ObservationId,
+                Runtime = Runtime,
+                RulesEvaluatedByPlugin = false
             }, JsonOptions)),
 
             _ => (null, null)
