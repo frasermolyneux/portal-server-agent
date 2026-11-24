@@ -383,6 +383,48 @@ public class GameServerAgentTests
     }
 
     [Theory]
+    [InlineData("old", true)]
+    [InlineData("current", false)]
+    public async Task RunAsync_OnlyMatchingQuitDiscardsPendingIpObservation(string disconnectGuid, bool sameObservation)
+    {
+        var player = new PlayerInfo { Guid = "current", Name = "Current", SlotId = 1, ConnectedAt = DateTime.UtcNow, IpAddress = "1.2.3.4" };
+        _mockParser.SetupGet(p => p.ConnectedPlayers).Returns(new Dictionary<int, PlayerInfo> { [1] = player });
+        var quit = new PlayerDisconnectedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = disconnectGuid, Username = "Player", SlotId = 1 };
+        _mockParser.Setup(p => p.ParseLine("quit")).Returns(quit);
+        var poll = 0;
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => ++poll == 1 ? ["quit"] : Array.Empty<string>());
+        var quitPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ipEvents = new List<PlayerIpResolvedEvent>();
+        _mockPublisher.Setup(p => p.PublishAsync(It.IsAny<GameEvent>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Returns<GameEvent, Guid, string, long, CancellationToken>((e, _, _, _, _) =>
+            {
+                if (e is PlayerIpResolvedEvent ip)
+                {
+                    ipEvents.Add(ip);
+                    return ipEvents.Count == 1 ? Task.FromException(new IOException("acknowledgement lost")) : Task.CompletedTask;
+                }
+                if (e is PlayerDisconnectedEvent)
+                {
+                    quitPublished.TrySetResult();
+                }
+                return Task.CompletedTask;
+            });
+        var agent = CreateAgent();
+        static PlayerIpResolvedEvent NewObservation() => new() { Timestamp = DateTime.UtcNow, PlayerGuid = "current", IpAddress = "1.2.3.4", SlotId = 1 };
+        await agent.PublishIpResolvedEventsAsync([NewObservation()], CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var running = agent.RunAsync(cts.Token);
+        await quitPublished.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await running;
+
+        player.IpAddress = "1.2.3.4";
+        await agent.PublishIpResolvedEventsAsync([NewObservation()], CancellationToken.None);
+        Assert.Equal(sameObservation, ipEvents[0].ObservationId == ipEvents[1].ObservationId);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task RefreshSiegeIfDueAsync_OnlyRefreshesRconWhenSessionIsActive(bool active)

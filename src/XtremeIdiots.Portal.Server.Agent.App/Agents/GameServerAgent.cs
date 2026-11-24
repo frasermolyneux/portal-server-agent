@@ -263,7 +263,10 @@ public sealed class GameServerAgent
                                 ProducerInstanceId = _producerInstanceId,
                                 ProducerStartedAtUtc = _producerStartedAtUtc
                             };
-                            if (correlated is PlayerDisconnectedEvent disconnected)
+                            if (correlated is PlayerDisconnectedEvent disconnected &&
+                                _pendingIpObservations.TryGetValue(disconnected.SlotId, out var pending) &&
+                                string.Equals(pending.Event.PlayerGuid, disconnected.PlayerGuid, StringComparison.OrdinalIgnoreCase) &&
+                                pending.Event.ConnectionId == disconnected.ConnectionId)
                             {
                                 _pendingIpObservations.Remove(disconnected.SlotId);
                             }
