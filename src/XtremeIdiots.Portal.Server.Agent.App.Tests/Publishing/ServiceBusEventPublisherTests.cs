@@ -241,7 +241,7 @@ public class ServiceBusEventPublisherTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PublishAsync_SetsMessageIdForDedup()
+    public async Task PublishAsync_UsesStableObservationIdForRetries()
     {
         ServiceBusMessage? captured = null;
         _senderMock
@@ -260,7 +260,93 @@ public class ServiceBusEventPublisherTests : IAsyncLifetime
         await _publisher.PublishAsync(gameEvent, ServerId, GameType, SequenceId);
 
         Assert.NotNull(captured);
-        Assert.Equal($"{ServerId}-{SequenceId}", captured!.MessageId);
+        Assert.Equal($"{ServerId}-{gameEvent.ObservationId}", captured!.MessageId);
+    }
+
+    [Fact]
+    public async Task PublishAsync_ObservationIdsSeparateRestartsAndPreserveRetries()
+    {
+        var messages = new List<ServiceBusMessage>();
+        _senderMock.Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((message, _) => messages.Add(message))
+            .Returns(Task.CompletedTask);
+        var instance1 = Guid.NewGuid();
+        var instance2 = Guid.NewGuid();
+        var time = DateTime.UtcNow;
+        var first = new PlayerIpResolvedEvent
+        {
+            Timestamp = time,
+            PlayerGuid = "one",
+            IpAddress = "1.2.3.4",
+            SlotId = 1,
+            ProducerInstanceId = instance1
+        };
+        var second = new PlayerIpResolvedEvent
+        {
+            Timestamp = time.AddSeconds(1),
+            PlayerGuid = "two",
+            IpAddress = "5.6.7.8",
+            SlotId = 1,
+            ProducerInstanceId = instance2
+        };
+
+        await _publisher.PublishAsync(first, ServerId, GameType, 2);
+        await _publisher.PublishAsync(first, ServerId, GameType, 3);
+        await _publisher.PublishAsync(second, ServerId, GameType, 2);
+
+        Assert.Equal(messages[0].MessageId, messages[1].MessageId);
+        Assert.NotEqual(messages[0].MessageId, messages[2].MessageId);
+        using var firstBody = JsonDocument.Parse(messages[0].Body.ToString());
+        using var retryBody = JsonDocument.Parse(messages[1].Body.ToString());
+        Assert.Equal(firstBody.RootElement.GetProperty("observationId").GetGuid(), retryBody.RootElement.GetProperty("observationId").GetGuid());
+        Assert.Equal(firstBody.RootElement.GetProperty("eventGeneratedUtc").GetDateTime(), retryBody.RootElement.GetProperty("eventGeneratedUtc").GetDateTime());
+        Assert.Equal(firstBody.RootElement.GetProperty("playerGuid").GetString(), retryBody.RootElement.GetProperty("playerGuid").GetString());
+        Assert.Equal(firstBody.RootElement.GetProperty("ipAddress").GetString(), retryBody.RootElement.GetProperty("ipAddress").GetString());
+    }
+
+    [Fact]
+    public async Task PublishAsync_ConnectAndIpObservationsUseDistinctMessageIds()
+    {
+        var messages = new List<ServiceBusMessage>();
+        _senderMock.Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((message, _) => messages.Add(message))
+            .Returns(Task.CompletedTask);
+        var connected = new PlayerConnectedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = "one", Username = "one", SlotId = 1 };
+        var resolved = new PlayerIpResolvedEvent { Timestamp = connected.Timestamp, PlayerGuid = "one", IpAddress = "1.2.3.4" };
+
+        await _publisher.PublishAsync(connected, ServerId, GameType, 1);
+        await _publisher.PublishAsync(resolved, ServerId, GameType, 1);
+
+        Assert.NotEqual(messages[0].MessageId, messages[1].MessageId);
+    }
+
+    [Fact]
+    public async Task PublishServerConnectedAsync_DistinctSendsDoNotReuseSequenceBasedIds()
+    {
+        var messages = new List<ServiceBusMessage>();
+        _senderMock.Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((message, _) => messages.Add(message))
+            .Returns(Task.CompletedTask);
+
+        await _publisher.PublishServerConnectedAsync(ServerId, GameType, 1);
+        await _publisher.PublishServerConnectedAsync(ServerId, GameType, 1);
+
+        Assert.NotEqual(messages[0].MessageId, messages[1].MessageId);
+    }
+
+    [Fact]
+    public async Task PublishAsync_RejectsEmptyObservationId()
+    {
+        var gameEvent = new PlayerIpResolvedEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "one",
+            IpAddress = "1.2.3.4",
+            ObservationId = Guid.Empty
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _publisher.PublishAsync(gameEvent, ServerId, GameType, SequenceId));
+        _senderMock.Verify(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
