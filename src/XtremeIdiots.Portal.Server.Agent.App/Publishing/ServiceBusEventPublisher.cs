@@ -58,7 +58,18 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
             return;
         }
 
-        await SendAsync(queueName, body, serverId, sequenceId, gameEvent.GetType().Name, ct);
+        var observationId = gameEvent switch
+        {
+            Parsing.PlayerConnectedEvent connected => connected.ObservationId,
+            Parsing.PlayerIpResolvedEvent resolved => resolved.ObservationId,
+            _ => (Guid?)null
+        };
+        if (observationId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Connection and IP observations require a non-empty observation ID.");
+        }
+
+        await SendAsync(queueName, body, serverId, sequenceId, gameEvent.GetType().Name, ct, observationId);
     }
 
     /// <inheritdoc />
@@ -354,14 +365,14 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
         };
     }
 
-    private async Task SendAsync(string queueName, string body, Guid serverId, long sequenceId, string eventTypeName, CancellationToken ct)
+    private async Task SendAsync(string queueName, string body, Guid serverId, long sequenceId, string eventTypeName, CancellationToken ct, Guid? observationId = null)
     {
         var sender = _senders.GetOrAdd(queueName, name => _client.CreateSender(name));
 
         var message = new ServiceBusMessage(BinaryData.FromString(body))
         {
             ContentType = "application/json",
-            MessageId = $"{serverId}-{sequenceId}"
+            MessageId = $"{serverId}-{observationId ?? Guid.NewGuid()}"
         };
 
         await sender.SendMessageAsync(message, ct);
