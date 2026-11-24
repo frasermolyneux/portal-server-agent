@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text.Json;
 
 using Azure.Messaging.ServiceBus;
@@ -24,6 +25,16 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false,
         Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+
+    private static readonly SbEvents.RuleRuntimeDescriptor Runtime = new()
+    {
+        Id = "server-agent",
+        Version = typeof(ServiceBusEventPublisher).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? typeof(ServiceBusEventPublisher).Assembly.GetName().Version?.ToString()
+            ?? "unknown",
+        ProtocolVersion = 1,
+        Capabilities = []
     };
 
     private readonly ServiceBusClient _client;
@@ -55,6 +66,7 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
         Guid serverId, string gameType, long sequenceId,
         string mapName, string gameName, IReadOnlyDictionary<int, Parsing.PlayerInfo> players,
         string? serverTitle, string? serverMod, int? maxPlayers,
+        AgentConnectionSnapshot? connections = null,
         CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
@@ -72,6 +84,14 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
             ServerTitle = serverTitle,
             ServerMod = serverMod,
             MaxPlayers = maxPlayers,
+            SnapshotId = connections is null ? null : Guid.NewGuid(),
+            Sequence = connections is null ? null : checked((ulong)sequenceId),
+            ObservedAtUtc = connections is null ? null : new DateTimeOffset(now, TimeSpan.Zero),
+            Runtime = connections is null ? null : Runtime with
+            {
+                InstanceId = connections.InstanceId,
+                StartedAtUtc = connections.StartedAtUtc
+            },
             Players = players.Values.Select(p => new SbEvents.ConnectedPlayer
             {
                 PlayerGuid = p.Guid,
@@ -81,7 +101,9 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 ConnectedAtUtc = p.ConnectedAt,
                 Score = p.Score,
                 Ping = p.Ping,
-                Rate = p.Rate
+                Rate = p.Rate,
+                State = connections is null ? null : connections.ConnectionIds.ContainsKey(p.SlotId) ? "Connected" : "Unknown",
+                ConnectionId = connections?.ConnectionIds.TryGetValue(p.SlotId, out var connectionId) == true ? connectionId : null
             }).ToArray()
         };
 
@@ -264,7 +286,10 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 Username = e.Username,
                 IpAddress = e.IpAddress,
                 SlotId = e.SlotId,
-                ConnectionId = e.ConnectionId
+                ConnectionId = e.ConnectionId,
+                ObservationId = e.ObservationId,
+                Runtime = Runtime with { InstanceId = e.ProducerInstanceId, StartedAtUtc = e.ProducerStartedAtUtc },
+                RulesEvaluatedByPlugin = false
             }, JsonOptions)),
 
             Parsing.PlayerDisconnectedEvent e => (Queues.PlayerDisconnected, JsonSerializer.Serialize(new SbEvents.PlayerDisconnectedEvent
@@ -277,7 +302,11 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 PlayerGuid = e.PlayerGuid,
                 Username = e.Username,
                 SlotId = e.SlotId,
-                ConnectionId = e.ConnectionId
+                ConnectionId = e.ConnectionId,
+                SnapshotId = Guid.NewGuid(),
+                Sequence = checked((ulong)sequenceId),
+                ObservedAtUtc = new DateTimeOffset(now, TimeSpan.Zero),
+                Runtime = Runtime with { InstanceId = e.ProducerInstanceId, StartedAtUtc = e.ProducerStartedAtUtc }
             }, JsonOptions)),
 
             Parsing.ChatMessageEvent e => (Queues.ChatMessage, JsonSerializer.Serialize(new SbEvents.ChatMessageEvent
@@ -315,7 +344,10 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 PlayerGuid = e.PlayerGuid,
                 IpAddress = e.IpAddress,
                 SlotId = e.SlotId,
-                ConnectionId = e.ConnectionId
+                ConnectionId = e.ConnectionId,
+                ObservationId = e.ObservationId,
+                Runtime = Runtime with { InstanceId = e.ProducerInstanceId, StartedAtUtc = e.ProducerStartedAtUtc },
+                RulesEvaluatedByPlugin = false
             }, JsonOptions)),
 
             _ => (null, null)

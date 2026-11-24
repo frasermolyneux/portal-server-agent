@@ -722,7 +722,86 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         CancellationToken ct)
     {
         var (_, health) = await ProbePluginStateAsync(context, coD4xRconApi, expectedVersion, ct).ConfigureAwait(false);
-        return health;
+        if (!health.IsSuccess || !RequiresRulesHealth(expectedVersion))
+        {
+            return health;
+        }
+
+        var result = await coD4xRconApi.PortalPluginHealth(context.ServerId, ct).ConfigureAwait(false);
+        if (!result.IsSuccess)
+        {
+            return PluginHealthResult.Failure(BuildApiFailureMessage("portalpluginhealth", result));
+        }
+
+        var output = result.Result?.Data;
+        var error = ValidateRulesHealth(output, expectedVersion, context.ServerId);
+        return error is null
+            ? PluginHealthResult.Success(details: Truncate(output, Cod4xPluginSettingsConstants.MaxLastErrorLength))
+            : PluginHealthResult.Failure(error, details: Truncate(output, Cod4xPluginSettingsConstants.MaxLastErrorLength));
+    }
+
+    private static bool RequiresRulesHealth(string version)
+    {
+        var match = Regex.Match(version, @"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:[-+].*)?$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        return match.Success &&
+            int.TryParse(match.Groups[1].Value, out var major) &&
+            int.TryParse(match.Groups[2].Value, out var minor) &&
+            (major > 0 || minor >= 3);
+    }
+
+    internal static string? ValidateRulesHealth(string? output, string expectedVersion, Guid serverId)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return "portalpluginhealth returned no output.";
+        }
+
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var token in output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = token.IndexOf('=');
+            if (separator <= 0)
+            {
+                continue;
+            }
+
+            var name = token[..separator];
+            if (!name.Equals("pluginVersion", StringComparison.OrdinalIgnoreCase) &&
+                !name.Equals("loadedConfig", StringComparison.OrdinalIgnoreCase) &&
+                !name.Equals("gameServerId", StringComparison.OrdinalIgnoreCase) &&
+                !name.Equals("rulesProtocolVersion", StringComparison.OrdinalIgnoreCase) &&
+                !name.Equals("nativeCapabilities", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!fields.TryAdd(name, token[(separator + 1)..]))
+            {
+                return "portalpluginhealth returned duplicate fields.";
+            }
+        }
+
+        var bareExpectedVersion = expectedVersion.StartsWith('v') || expectedVersion.StartsWith('V')
+            ? expectedVersion[1..]
+            : expectedVersion;
+        if (!fields.TryGetValue("pluginVersion", out var version) ||
+            !string.Equals(version, bareExpectedVersion, StringComparison.OrdinalIgnoreCase) ||
+            !fields.TryGetValue("loadedConfig", out var loadedConfig) ||
+            !string.Equals(loadedConfig, "true", StringComparison.OrdinalIgnoreCase) ||
+            !fields.TryGetValue("gameServerId", out var reportedServerId) ||
+            !Guid.TryParse(reportedServerId, out var parsedServerId) || parsedServerId != serverId ||
+            !fields.TryGetValue("rulesProtocolVersion", out var protocol) || protocol != "1" ||
+            !fields.TryGetValue("nativeCapabilities", out var capabilities))
+        {
+            return "portalpluginhealth did not confirm the expected version, server, configuration and rules protocol.";
+        }
+
+        var reportedCapabilities = capabilities.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.Ordinal);
+        return reportedCapabilities.IsSupersetOf(["cod4x.player.drop", "cod4x.chat.public", "cod4x.chat.private"])
+            ? null
+            : "portalpluginhealth did not report the required native capabilities.";
     }
 
     /// <summary>

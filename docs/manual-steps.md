@@ -42,6 +42,11 @@ The agent's CoD4x log parser is built against the **modern** CoD4x log format. T
 - The generated config always uses the current server context `gameServerId`.
 - Runtime config values are resolved from `XtremeIdiots.Portal.Server.Agent.App:CoD4xPlugin:*` App Configuration keys (or equivalent environment variable overrides).
 - If required runtime config values are missing, lifecycle execution fails closed and records the failure in the `cod4xPlugin` runtime state.
+- Publishing a plugin artifact does not install it. Queue an install operation for the target version on each server; the agent attempts to unload the old plugin, uploads the binary and configuration, loads it, and checks its version with `pluginInfo`. For version 0.3 and later it also checks `portalpluginhealth` for the loaded version, server, configuration, `rulesProtocolVersion=1`, and capabilities `cod4x.player.drop`, `cod4x.chat.public`, and `cod4x.chat.private`. Confirm that the health command returns these fields over RCON on each server before enabling rules. Do not restart a game server merely to validate the rollout.
+
+### Rules trigger identity
+
+The agent emits a distinct observation ID for each parsed connect or IP-resolution event. An IP-resolution retry retains its ID while the same player and connection remain tracked; a continuity reset invalidates that pending identity. Its connection ID is available only when continuity is established; it does not invent a generation or a plugin connection ID. These IDs do not add an outbox or guarantee replay after a publish failure or process restart. Plugin-enabled CoD4x servers remain the source of their own events.
 
 ### Cross-references
 

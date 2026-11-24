@@ -105,6 +105,9 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessResult("portal-cod4x-plugin version 1.2.3"));
 
+        _mockCoD4xRconApi.Setup(x => x.PortalPluginHealth(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessResult(RulesHealth("1.2.3")));
+
         _mockRemoteFileClient.Setup(x => x.UploadAsync(
             It.IsAny<Stream>(),
             It.IsAny<string>(),
@@ -593,6 +596,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
             _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
             _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+            _mockCoD4xRconApi.Verify(x => x.PortalPluginHealth(_serverId, It.IsAny<CancellationToken>()), Times.Once);
             _mockRemoteFileClient.Verify(x => x.UploadAsync(
                 It.IsAny<Stream>(),
                 "/fs_homepath/plugins/portal-cod4x-plugin.so",
@@ -2167,6 +2171,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                     It.IsAny<CoD4xPluginRequestDto>(),
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(SuccessResult("portal-cod4x-plugin version 1.0.0"));
+            _mockCoD4xRconApi.Setup(x => x.PortalPluginHealth(_serverId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessResult(RulesHealth("1.0.0")));
 
             var persistedPayloads = new List<UpsertConfigurationDto>();
             _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
@@ -2286,7 +2292,88 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
         _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.PortalPluginHealth(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [Fact]
+    public void RulesHealth_ActualLegacyOutputDoesNotProveRulesSupport()
+    {
+        var output = $"""
+            [portal-cod4x-plugin] portalpluginhealth report
+             pluginVersion=0.2.35 loadedConfig=true gameServerId={_serverId} logLevel=info(2) gameType=CallOfDuty4x
+             banSyncStage=Idle nextBanSyncUtc=2026-11-24T15:11:17Z activeBanCacheCount=35 pendingBanCacheCount=0 banSyncInFlight=false
+             banEnforcementStatusChecks=141 statusHits=0 statusMisses=141 statusZeroPlayerIds=0 authenticatedChecks=141 authenticatedHits=0 authenticatedMisses=141 authenticatedZeroPlayerIds=0 proactiveDropAttempts=0
+             ingestStage=Idle bufferedEventCount=0 ingestFailureCount=0 nextIngestAttemptUtc=2026-11-24T15:08:54Z ingestInFlight=false
+             connectedPlayerCount=14 serverContextLastRefreshUtc=2026-11-24T05:58:25Z
+             lastTickUtc=2026-11-24T15:09:50Z secondsSinceLastTick=0
+             portalpluginhealthEnabled=true portalpluginhealthMinPower=98
+            """;
+
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(output, "0.2.35", _serverId));
+    }
+
+    [Fact]
+    public void RulesHealth_RequiresExactRuntimeAndCapabilities()
+    {
+        var good = RulesHealth("0.3.0");
+        Assert.Null(CoD4xPluginLifecycleService.ValidateRulesHealth(good, "0.3.0", _serverId));
+        Assert.Null(CoD4xPluginLifecycleService.ValidateRulesHealth(good, "v0.3.0", _serverId));
+        Assert.Null(CoD4xPluginLifecycleService.ValidateRulesHealth(good + " other=1 other=2", "0.3.0", _serverId));
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(null, "0.3.0", _serverId));
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth("pluginVersion=0.3.0", "0.3.0", _serverId));
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(good, "0.3.1", _serverId));
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(good, "0.3.0", Guid.NewGuid()));
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(good.Replace("loadedConfig=true", "loadedConfig=false"), "0.3.0", _serverId));
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(good.Replace("rulesProtocolVersion=1", "rulesProtocolVersion=2"), "0.3.0", _serverId));
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(good.Replace(",cod4x.chat.private", ""), "0.3.0", _serverId));
+        Assert.NotNull(CoD4xPluginLifecycleService.ValidateRulesHealth(good + " rulesProtocolVersion=1", "0.3.0", _serverId));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InstallWithUnverifiedRulesHealth_DoesNotReportSuccess()
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            SchemaVersion = Cod4xPluginSettingsConstants.SchemaVersion,
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "0.2.35" },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "op-rules-health",
+                Action = Cod4xPluginOperationAction.Install,
+                TargetVersion = "0.3.0",
+                RequestedBy = "tester",
+                ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+            }
+        };
+        try
+        {
+            SetupConfiguration(settings);
+            _mockCoD4xRconApi.Setup(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessResult("portal-cod4x-plugin version 0.3.0"));
+            _mockCoD4xRconApi.Setup(x => x.PortalPluginHealth(_serverId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessResult("pluginVersion=0.3.0"));
+            var persistedPayloads = new List<UpsertConfigurationDto>();
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId, Cod4xPluginSettingsConstants.Namespace, It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, dto, _) => persistedPayloads.Add(dto))
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            await CreateService().ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            var final = DeserializeSettings(persistedPayloads[^1].Configuration);
+            Assert.Equal(Cod4xPluginOperationStatus.Failed, final.RuntimeState!.LastOperationStatus);
+            Assert.Contains("portalpluginhealth", final.RuntimeState.LastError);
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    private string RulesHealth(string version) =>
+        $"pluginVersion={version} loadedConfig=true gameServerId={_serverId:D} rulesProtocolVersion=1 nativeCapabilities=cod4x.player.drop,cod4x.chat.public,cod4x.chat.private";
 
     [Fact]
     public async Task ExecuteAsync_InstallWithEmptyPluginInfo_SetsFailedState()

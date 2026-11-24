@@ -7,6 +7,23 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Tests.Agents;
 public sealed class ConnectionTrackerTests
 {
     [Fact]
+    public void Correlation_PreservesDistinctObservationIds()
+    {
+        var tracker = new ConnectionTracker();
+        tracker.ObserveRoster(Roster(RconRosterState.Complete));
+        var join = Join("one");
+        var ip = Ip("one");
+
+        var correlatedJoin = Assert.IsType<PlayerConnectedEvent>(tracker.Observe(join));
+        var correlatedIp = Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(ip));
+
+        Assert.NotEqual(Guid.Empty, join.ObservationId);
+        Assert.NotEqual(join.ObservationId, ip.ObservationId);
+        Assert.Equal(join.ObservationId, correlatedJoin.ObservationId);
+        Assert.Equal(ip.ObservationId, correlatedIp.ObservationId);
+    }
+
+    [Fact]
     public void CompleteBaseline_CorrelatesJoinLateIpAndQuit_AndReconnectGetsNewId()
     {
         var tracker = new ConnectionTracker();
@@ -21,6 +38,8 @@ public sealed class ConnectionTrackerTests
         Assert.Empty(join.IpAddress);
         Assert.Equal(join.ConnectionId, ip.ConnectionId);
         Assert.Equal(join.ConnectionId, quit.ConnectionId);
+        Assert.Null(tracker.GetConnectionId(1, "other"));
+        Assert.Equal(reconnect.ConnectionId, tracker.GetConnectionId(1, "ONE"));
         Assert.NotNull(reconnect.ConnectionId);
         Assert.NotEqual(join.ConnectionId, reconnect.ConnectionId);
     }
