@@ -46,7 +46,7 @@ The agent's CoD4x log parser is built against the **modern** CoD4x log format. T
 
 ### Rules trigger identity
 
-The agent emits a distinct observation ID for each parsed connect or IP-resolution event. An IP-resolution retry retains its ID while the same player and connection remain tracked; a continuity reset invalidates that pending identity. Its connection ID is available only when continuity is established; it does not invent a generation or a plugin connection ID. These IDs do not add an outbox or guarantee replay after a publish failure or process restart. Plugin-enabled CoD4x servers remain the source of their own events.
+The agent emits a distinct observation ID for each parsed connect or IP-resolution event and uses it in the Service Bus message ID. An IP-resolution retry retains its ID and original observation time while the same player and connection remain tracked; a continuity reset invalidates that pending identity. Other messages use a fresh message ID per send. Its connection ID is available only when continuity is established; it does not invent a generation or a plugin connection ID. These IDs do not add an outbox or guarantee replay after a publish failure or process restart. Plugin-enabled CoD4x servers remain the source of their own events.
 
 ### Cross-references
 
