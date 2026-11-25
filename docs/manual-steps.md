@@ -46,7 +46,9 @@ The agent's CoD4x log parser is built against the **modern** CoD4x log format. T
 
 ### Rules trigger identity
 
-The agent emits a distinct observation ID for each parsed connect or IP-resolution event and uses it in the Service Bus message ID. An IP-resolution retry retains its ID and original observation time while the same player and connection remain tracked; a continuity reset invalidates that pending identity. Other messages use a fresh message ID per send. Its connection ID is available only when continuity is established; it does not invent a generation or a plugin connection ID. These IDs do not add an outbox or guarantee replay after a publish failure or process restart. Plugin-enabled CoD4x servers remain the source of their own events.
+The agent emits a distinct observation ID for each parsed connect or IP-resolution event and uses it in the Service Bus message ID. An IP-resolution retry retains its ID and original observation time while the same player and connection remain tracked; a continuity reset invalidates that pending identity. Other messages use a fresh message ID per send. Log joins and individually identified RCON players receive a best-effort connection ID, reused for matching IP and status observations and replaced on an observed disconnect or slot occupant change. A partial roster does not establish that missing players have disconnected. Map transitions preserve matching tracked IDs; a transport or publishing continuity failure resets them.
+
+The agent does not invent a native generation or plugin connection ID. RCON and logs cannot prove continuity across every missed or replayed event: a same-GUID reconnect may be mistaken for the previous connection, while a restart or replay can cause a rule to run again. Slot/GUID checks cannot eliminate a race before an RCON action. These IDs do not add an outbox or guarantee replay after a publish failure or process restart. Plugin-enabled CoD4x servers remain the source of their own events.
 
 ### Cross-references
 
