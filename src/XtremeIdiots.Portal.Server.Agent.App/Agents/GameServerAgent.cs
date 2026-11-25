@@ -285,6 +285,10 @@ public sealed class GameServerAgent
                             {
                                 player.IpAddress = null;
                             }
+                            if (correlated is PlayerConnectedEvent { IpAddress.Length: 0 })
+                            {
+                                _identityBaselinePending = true;
+                            }
                             try
                             {
                                 await _publisher.PublishAsync(correlated, _context.ServerId, _context.GameType, NextSequenceId(), ct);
@@ -343,7 +347,7 @@ public sealed class GameServerAgent
                     if (DateTime.UtcNow - _lastRconSync > RconSyncInterval)
                     {
                         rosterCaptured = await SyncPlayersAsync(ct);
-                        if (!_connectionTracker.HasCompleteBaseline)
+                        if (!_connectionTracker.HasObservedRoster)
                         {
                             _identityBaselinePending = true;
                         }
@@ -500,7 +504,7 @@ public sealed class GameServerAgent
             && result.Roster is { State: RconRosterState.Complete or RconRosterState.Partial, CaptureDuration.TotalSeconds: <= 10 };
     }
 
-    private void ResetConnectionBaseline(bool preservePossibleCarryovers = true)
+    private void ResetConnectionBaseline(bool preservePossibleCarryovers = false)
     {
         _connectionTracker.Reset(preservePossibleCarryovers);
         _pendingIpObservations.Clear();
@@ -518,7 +522,7 @@ public sealed class GameServerAgent
         {
             var result = await _syncService.SyncIdentityAsync(_context.ServerId, _parser, _context.GameType, timeout.Token);
             _connectionTracker.ObserveRoster(result.Roster);
-            if (!_connectionTracker.HasCompleteBaseline)
+            if (!_connectionTracker.HasObservedRoster)
             {
                 _logger.LogWarning("[{Title}] Connection identity baseline unavailable; admission checks must allow unknown connections", _context.Title);
             }
@@ -750,11 +754,13 @@ public sealed class GameServerAgent
             return;
         }
 
-        if (_parser.CurrentMap is not null)
+        if (_parser.CurrentMap is not null || _connectionStatusPending ||
+            _parser.ConnectedPlayers is { } players &&
+            players.Values.Any(p => _connectionTracker.GetConnectionId(p.SlotId, p.Guid).HasValue))
         {
             await _publisher.PublishServerStatusAsync(
                 _context.ServerId, _context.GameType, NextSequenceId(),
-                _parser.CurrentMap, _parser.CurrentMap, // gameName TBD
+                _parser.CurrentMap ?? string.Empty, _parser.CurrentMap ?? string.Empty, // gameName TBD
                 _parser.ConnectedPlayers,
                 _parser.ServerTitle, _parser.ServerMod, _parser.MaxPlayers,
                 new AgentConnectionSnapshot(_producerInstanceId, _producerStartedAtUtc,
@@ -857,6 +863,7 @@ public sealed class GameServerAgent
             try
             {
                 await _publisher.PublishAsync(correlated, _context.ServerId, _context.GameType, NextSequenceId(), ct);
+                _connectionStatusPending |= correlated.ConnectionId is not null;
                 if (evt.SlotId is { } publishedSlot)
                 {
                     _pendingIpObservations.Remove(publishedSlot);

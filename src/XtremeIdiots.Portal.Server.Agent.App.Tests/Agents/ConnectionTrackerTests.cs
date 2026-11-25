@@ -45,25 +45,26 @@ public sealed class ConnectionTrackerTests
     }
 
     [Fact]
-    public void UnknownOccupantAndTransition_DoNotInventContinuity()
+    public void MapTransition_PreservesMatchingCarryoverUntilObservedDisconnect()
     {
         var tracker = new ConnectionTracker();
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
-        tracker.ObserveRoster(Roster(RconRosterState.Complete, new ServerRosterPlayer(1, "one", null, null)));
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        var first = Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one")));
 
         tracker.Observe(new MapChangeEvent { Timestamp = DateTime.UtcNow, MapName = "map", GameType = "dm" });
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        Assert.Equal(first.ConnectionId, Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        tracker.Observe(Quit("one"));
+        Assert.NotEqual(first.ConnectionId, Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        var beforeReset = tracker.GetConnectionId(1, "one");
         tracker.Reset();
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        Assert.NotEqual(beforeReset, Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
     }
 
     [Fact]
-    public void IncompleteRosterAndMismatchedIdentity_DoNotClaimConnection()
+    public void PartialRosterAndMismatchedIdentity_UseOnlyMatchingConnections()
     {
         var tracker = new ConnectionTracker();
         tracker.ObserveRoster(Roster(RconRosterState.Partial));
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        Assert.NotNull(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
         tracker.Reset();
         tracker.ObserveRoster(Roster(RconRosterState.Complete));
         var first = Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one")));
@@ -71,15 +72,15 @@ public sealed class ConnectionTrackerTests
         Assert.Null(Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("other"))).ConnectionId);
         Assert.Null(Assert.IsType<PlayerDisconnectedEvent>(tracker.Observe(Quit("other"))).ConnectionId);
         Assert.Equal(first.ConnectionId, Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("one"))).ConnectionId);
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("other"))).ConnectionId);
+        Assert.NotEqual(first.ConnectionId, Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("other"))).ConnectionId);
     }
 
     [Fact]
-    public void RosterWithMissingIdentitiesCannotEstablishEmptySlots()
+    public void RosterWithMissingIdentitiesStillTracksValidRows()
     {
         var tracker = new ConnectionTracker();
-        tracker.ObserveRoster(Roster(RconRosterState.Complete) with { MissingIdentityCount = 1 });
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        tracker.ObserveRoster(Roster(RconRosterState.Partial, new ServerRosterPlayer(1, "one", null, null)) with { MissingIdentityCount = 1 });
+        Assert.NotNull(Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("one"))).ConnectionId);
     }
 
     [Fact]
@@ -92,14 +93,14 @@ public sealed class ConnectionTrackerTests
         Assert.Equal(join.ConnectionId, Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("one"))).ConnectionId);
 
         tracker.ObserveRoster(Roster(RconRosterState.Complete, new ServerRosterPlayer(1, "other", null, null)));
-        Assert.Null(Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("other"))).ConnectionId);
+        Assert.NotNull(Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("other"))).ConnectionId);
         Assert.Null(Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("one"))).ConnectionId);
     }
 
     [Theory]
     [InlineData(RconRosterState.Partial, true)]
     [InlineData(RconRosterState.Complete, false)]
-    public void RosterConflict_InvalidatesPriorIdentityWithoutInferringEmptySlots(RconRosterState state, bool establishBaseline)
+    public void RosterConflict_ReplacesPriorIdentity(RconRosterState state, bool establishBaseline)
     {
         var tracker = new ConnectionTracker();
         tracker.ObserveRoster(Roster(RconRosterState.Complete));
@@ -109,29 +110,28 @@ public sealed class ConnectionTrackerTests
         tracker.ObserveRoster(Roster(state, new ServerRosterPlayer(1, "other", null, null)), establishBaseline);
 
         Assert.Null(Assert.IsType<PlayerIpResolvedEvent>(tracker.Observe(Ip("one"))).ConnectionId);
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        Assert.NotEqual(first.ConnectionId, Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
     }
 
     [Fact]
-    public void RegularRosterCannotEstablishInitialEmptyBaseline()
+    public void PartialRosterDoesNotRemoveMissingPlayers()
     {
         var tracker = new ConnectionTracker();
-        tracker.ObserveRoster(Roster(RconRosterState.Complete), establishBaseline: false);
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        var joined = Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one")));
+        tracker.ObserveRoster(Roster(RconRosterState.Partial), establishBaseline: false);
+        Assert.Equal(joined.ConnectionId, tracker.GetConnectionId(1, "one"));
     }
 
     [Fact]
-    public void MapTransition_DoesNotTreatCarryoverAsNewWhenBaselineWasEmpty()
+    public void DuplicateOrInvalidRosterRowsCannotCreateIdentity()
     {
         var tracker = new ConnectionTracker();
-        tracker.ObserveRoster(Roster(RconRosterState.Complete));
-        Assert.NotNull(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
-
-        tracker.Reset(preservePossibleCarryovers: true);
-        tracker.ObserveRoster(Roster(RconRosterState.Complete));
-        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
-        tracker.Observe(Quit("one"));
-        Assert.NotNull(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("one"))).ConnectionId);
+        tracker.ObserveRoster(Roster(RconRosterState.Partial,
+            new ServerRosterPlayer(1, "one", null, null),
+            new ServerRosterPlayer(1, "other", null, null),
+            new ServerRosterPlayer(2, "", null, null)));
+        Assert.Null(tracker.GetConnectionId(1, "one"));
+        Assert.Null(Assert.IsType<PlayerConnectedEvent>(tracker.Observe(Join("") with { SlotId = -1 })).ConnectionId);
     }
 
     private static ServerRosterSnapshot Roster(RconRosterState state, params ServerRosterPlayer[] players)
