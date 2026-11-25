@@ -280,6 +280,114 @@ public class GameServerAgentTests
     }
 
     [Fact]
+    public async Task RunAsync_StartupPartialRosterPublishesMatchingIpAndStatusWithoutMap()
+    {
+        const string guid = "2310346616629847491";
+        var parser = new Cod4xLogParser();
+        parser.SetPlayer(2, new PlayerInfo
+        {
+            Guid = guid,
+            Name = "Player",
+            SlotId = 2,
+            ConnectedAt = DateTime.UtcNow,
+            IpAddress = "1.2.3.4"
+        });
+        var ip = new PlayerIpResolvedEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = guid,
+            IpAddress = "1.2.3.4",
+            SlotId = 2
+        };
+        _mockSyncService.Setup(s => s.SyncWithRosterAsync(_testContext.ServerId, parser, _testContext.GameType, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ServerSyncResult([ip], new ServerRosterSnapshot(
+                DateTime.UtcNow, RconRosterState.Partial, [new ServerRosterPlayer(2, guid, null, null)], 0, 0, 0)));
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<string>());
+        var resolved = new TaskCompletionSource<PlayerIpResolvedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var status = new TaskCompletionSource<(string Map, AgentConnectionSnapshot Snapshot)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockPublisher.Setup(p => p.PublishAsync(It.IsAny<GameEvent>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Callback<GameEvent, Guid, string, long, CancellationToken>((e, _, _, _, _) =>
+            {
+                if (e is PlayerIpResolvedEvent observed)
+                {
+                    resolved.TrySetResult(observed);
+                }
+            }).Returns(Task.CompletedTask);
+        _mockPublisher.Setup(p => p.PublishServerStatusAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(),
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<int, PlayerInfo>>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<AgentConnectionSnapshot?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, long, string, string, IReadOnlyDictionary<int, PlayerInfo>, string?, string?, int?, AgentConnectionSnapshot?, CancellationToken>(
+                (_, _, _, map, _, _, _, _, _, snapshot, _) =>
+                {
+                    if (snapshot is not null)
+                    {
+                        status.TrySetResult((map, snapshot));
+                    }
+                }).Returns(Task.CompletedTask);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var agent = new GameServerAgent(_testContext, _mockTailer.Object, parser, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
+
+        var running = agent.RunAsync(cts.Token);
+        var observation = await resolved.Task.WaitAsync(cts.Token);
+        var publishedStatus = await status.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await running;
+
+        Assert.NotNull(observation.ConnectionId);
+        Assert.Equal(observation.ConnectionId, publishedStatus.Snapshot.ConnectionIds[2]);
+        Assert.Equal(string.Empty, publishedStatus.Map);
+        Assert.Equal(observation.ProducerInstanceId, publishedStatus.Snapshot.InstanceId);
+    }
+
+    [Fact]
+    public async Task RunAsync_JoinWithoutIpRefreshesPartialRosterAndPublishesMatchingIp()
+    {
+        const string guid = "2310346616629847491";
+        var parser = new Cod4xLogParser();
+        _mockTailer.SetupGet(t => t.LastPollReachedEnd).Returns(true);
+        var polls = 0;
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => ++polls == 1 ? [$"  1:00 J;{guid};2;Player"] : Array.Empty<string>());
+        _mockSyncService.Setup(s => s.SyncIdentityAsync(_testContext.ServerId, parser, _testContext.GameType, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                parser.ConnectedPlayers[2].IpAddress = "1.2.3.4";
+                return new ServerSyncResult(
+                    [new PlayerIpResolvedEvent { Timestamp = DateTime.UtcNow, PlayerGuid = guid, IpAddress = "1.2.3.4", SlotId = 2 }],
+                    new ServerRosterSnapshot(DateTime.UtcNow, RconRosterState.Partial, [new ServerRosterPlayer(2, guid, null, null)], 0, 0, 0));
+            });
+        PlayerConnectedEvent? joined = null;
+        var resolved = new TaskCompletionSource<PlayerIpResolvedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockPublisher.Setup(p => p.PublishAsync(It.IsAny<GameEvent>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Callback<GameEvent, Guid, string, long, CancellationToken>((e, _, _, _, _) =>
+            {
+                if (e is PlayerConnectedEvent connect)
+                {
+                    joined = connect;
+                }
+                else if (e is PlayerIpResolvedEvent ip)
+                {
+                    resolved.TrySetResult(ip);
+                }
+            }).Returns(Task.CompletedTask);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var agent = new GameServerAgent(_testContext, _mockTailer.Object, parser, _mockPublisher.Object,
+            _mockOffsetStore.Object, _mockServerLock.Object, _mockSyncService.Object, _mockBroadcastService.Object,
+            _mockCvarProbe.Object, _mockCoD4xPluginLifecycleService.Object, _mockBanFileWatcher.Object, _logger, new ZeroRandom());
+
+        var running = agent.RunAsync(cts.Token);
+        var ip = await resolved.Task.WaitAsync(cts.Token);
+        await cts.CancelAsync();
+        await running;
+
+        Assert.NotNull(joined);
+        Assert.NotNull(joined.ConnectionId);
+        Assert.Equal(joined.ConnectionId, ip.ConnectionId);
+    }
+
+    [Fact]
     public async Task RunAsync_FailedPublishInvalidatesConnectionWhenRemainingQuitIsSkipped()
     {
         const string guid = "2310346616629847491";
@@ -325,7 +433,8 @@ public class GameServerAgentTests
         await running;
 
         Assert.NotNull(joins[0].ConnectionId);
-        Assert.Null(joins[1].ConnectionId);
+        Assert.NotNull(joins[1].ConnectionId);
+        Assert.NotEqual(joins[0].ConnectionId, joins[1].ConnectionId);
     }
 
     [Fact]

@@ -6,10 +6,9 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 internal sealed class ConnectionTracker
 {
     private readonly Dictionary<int, Connection> _occupants = new();
-    private readonly HashSet<string> _uncertainPlayers = new(StringComparer.OrdinalIgnoreCase);
-    private bool _hasCompleteBaseline;
+    private bool _hasObservedRoster;
 
-    public bool HasCompleteBaseline => _hasCompleteBaseline;
+    public bool HasObservedRoster => _hasObservedRoster;
 
     public Guid? GetConnectionId(int slotId, string playerGuid)
         => _occupants.TryGetValue(slotId, out var player) &&
@@ -19,19 +18,11 @@ internal sealed class ConnectionTracker
 
     public void Reset(bool preservePossibleCarryovers = false)
     {
-        if (preservePossibleCarryovers)
+        if (!preservePossibleCarryovers)
         {
-            foreach (var player in _occupants.Values)
-            {
-                _uncertainPlayers.Add(player.PlayerGuid);
-            }
+            _occupants.Clear();
         }
-        else
-        {
-            _uncertainPlayers.Clear();
-        }
-        _occupants.Clear();
-        _hasCompleteBaseline = false;
+        _hasObservedRoster = false;
     }
 
     public void ObserveRoster(ServerRosterSnapshot? roster, bool establishBaseline = true)
@@ -40,44 +31,34 @@ internal sealed class ConnectionTracker
             {
                 State: RconRosterState.Complete or RconRosterState.Partial,
                 CaptureDuration.TotalSeconds: <= 10
-            } ||
-            roster.Players.Any(p => p.SlotId < 0 || p.SlotId > 99 || string.IsNullOrWhiteSpace(p.PlayerGuid)) ||
-            roster.Players.Select(p => p.SlotId).Distinct().Count() != roster.Players.Count)
+            })
         {
             return;
         }
 
-        if (!establishBaseline || roster.State != RconRosterState.Complete ||
-            roster.UnparsedRowCount != 0 || roster.MissingIdentityCount != 0 || roster.KnownBotCount != 0)
+        var uniquePlayers = roster.Players
+            .Where(p => IsValidIdentity(p.SlotId, p.PlayerGuid))
+            .GroupBy(p => p.SlotId)
+            .Where(group => group.Count() == 1)
+            .Select(group => group.Single())
+            .ToArray();
+
+        foreach (var player in uniquePlayers)
         {
-            foreach (var player in roster.Players)
+            GetOrCreate(player.SlotId, player.PlayerGuid);
+        }
+
+        if (establishBaseline && roster.State == RconRosterState.Complete &&
+            roster.UnparsedRowCount == 0 && roster.MissingIdentityCount == 0 && roster.KnownBotCount == 0 &&
+            uniquePlayers.Length == roster.Players.Count)
+        {
+            var slots = uniquePlayers.Select(p => p.SlotId).ToHashSet();
+            foreach (var slot in _occupants.Keys.Where(slot => !slots.Contains(slot)).ToArray())
             {
-                if (_occupants.TryGetValue(player.SlotId, out var previous) &&
-                    !string.Equals(previous.PlayerGuid, player.PlayerGuid, StringComparison.OrdinalIgnoreCase))
-                {
-                    _uncertainPlayers.Add(previous.PlayerGuid);
-                    _occupants[player.SlotId] = new Connection(player.PlayerGuid, null);
-                }
+                _occupants.Remove(slot);
             }
-            return;
         }
-
-        var current = new Dictionary<int, Connection>();
-        foreach (var player in roster.Players)
-        {
-            var id = _occupants.TryGetValue(player.SlotId, out var previous) &&
-                string.Equals(previous.PlayerGuid, player.PlayerGuid, StringComparison.OrdinalIgnoreCase)
-                    ? previous.ConnectionId
-                    : null;
-            current[player.SlotId] = new Connection(player.PlayerGuid, id);
-        }
-
-        _occupants.Clear();
-        foreach (var (slot, player) in current)
-        {
-            _occupants.Add(slot, player);
-        }
-        _hasCompleteBaseline = true;
+        _hasObservedRoster = true;
     }
 
     public GameEvent Observe(GameEvent gameEvent)
@@ -87,23 +68,17 @@ internal sealed class ConnectionTracker
             case MapChangeEvent:
                 Reset(preservePossibleCarryovers: true);
                 return gameEvent;
-            case PlayerConnectedEvent connected:
+            case PlayerConnectedEvent connected when IsValidIdentity(connected.SlotId, connected.PlayerGuid):
                 var existing = _occupants.GetValueOrDefault(connected.SlotId);
-                var newConnection = existing is null && _hasCompleteBaseline &&
-                    !_uncertainPlayers.Contains(connected.PlayerGuid);
-                var id = existing is null
-                    ? newConnection ? Guid.NewGuid() : (Guid?)null
-                    : string.Equals(existing.PlayerGuid, connected.PlayerGuid, StringComparison.OrdinalIgnoreCase)
-                        ? existing.ConnectionId
-                        : null;
-                _occupants[connected.SlotId] = new Connection(connected.PlayerGuid, id);
+                var newConnection = existing is null ||
+                    !string.Equals(existing.PlayerGuid, connected.PlayerGuid, StringComparison.OrdinalIgnoreCase);
+                var id = GetOrCreate(connected.SlotId, connected.PlayerGuid);
                 return connected with
                 {
                     ConnectionId = id,
                     IpAddress = newConnection ? string.Empty : connected.IpAddress
                 };
             case PlayerDisconnectedEvent disconnected:
-                _uncertainPlayers.Remove(disconnected.PlayerGuid);
                 if (_occupants.TryGetValue(disconnected.SlotId, out var occupant) &&
                     string.Equals(occupant.PlayerGuid, disconnected.PlayerGuid, StringComparison.OrdinalIgnoreCase))
                 {
@@ -123,5 +98,21 @@ internal sealed class ConnectionTracker
         }
     }
 
-    private sealed record Connection(string PlayerGuid, Guid? ConnectionId);
+    private Guid GetOrCreate(int slotId, string playerGuid)
+    {
+        if (_occupants.TryGetValue(slotId, out var existing) &&
+            string.Equals(existing.PlayerGuid, playerGuid, StringComparison.OrdinalIgnoreCase))
+        {
+            return existing.ConnectionId;
+        }
+
+        var id = Guid.NewGuid();
+        _occupants[slotId] = new Connection(playerGuid, id);
+        return id;
+    }
+
+    private static bool IsValidIdentity(int slotId, string playerGuid)
+        => slotId is >= 0 and <= 99 && !string.IsNullOrWhiteSpace(playerGuid);
+
+    private sealed record Connection(string PlayerGuid, Guid ConnectionId);
 }
