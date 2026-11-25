@@ -214,7 +214,11 @@ public sealed class CoD4xAdminReconciliationService(
                 continue;
             }
 
-            if ((hasFraming && !Regex.IsMatch(line, @"^\d+:\s*Name:\s*.+?,\s*Power:\s*\d+,\s*SteamId:\s*\S+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            if ((hasFraming && !Regex.IsMatch(
+                    line,
+                    @"^\d+:\s*Name:\s*.+?,\s*Power:\s*\d+,\s*SteamId:\s*\S+$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
+                    TimeSpan.FromSeconds(1)))
                 || !TryParseAdminListLine(line, out var steamId, out var power))
             {
                 unmatchedLineCount++;
