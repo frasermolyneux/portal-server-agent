@@ -214,12 +214,9 @@ public sealed class CoD4xAdminReconciliationService(
                 continue;
             }
 
-            if ((hasFraming && !Regex.IsMatch(
-                    line,
-                    @"^\d+:\s*Name:\s*.+?,\s*Power:\s*\d+,\s*SteamId:\s*\S+$",
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
-                    TimeSpan.FromSeconds(1)))
-                || !TryParseAdminListLine(line, out var steamId, out var power))
+            if (!(hasFraming
+                ? TryParseFramedAdminListLine(line, out var steamId, out var power)
+                : TryParseAdminListLine(line, out steamId, out power)))
             {
                 unmatchedLineCount++;
                 continue;
@@ -229,6 +226,17 @@ public sealed class CoD4xAdminReconciliationService(
         }
 
         return new CurrentAdminParseResult(currentAdminsBySteamId, unmatchedLineCount);
+    }
+
+    private static bool TryParseFramedAdminListLine(string line, out string steamId, out int power)
+    {
+        var match = Regex.Match(
+            line,
+            @"^\d+:\s*Name:\s*.+,\s*Power:\s*(?<power>\d+),\s*SteamId:\s*(?<steamId>\S+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
+            TimeSpan.FromSeconds(1));
+        steamId = match.Groups["steamId"].Value;
+        return int.TryParse(match.Groups["power"].Value, out power);
     }
 
     private static bool TryParseAdminListLine(string line, out string steamId, out int power)

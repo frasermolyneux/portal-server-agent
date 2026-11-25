@@ -277,6 +277,7 @@ public class CoD4xAdminReconciliationServiceTests
 
     [Theory]
     [InlineData("------- Admins: -------\n1:   Name: Alice, Power: 20, SteamId: steam-1\n2:   Name: Bob, Power: 10, SteamId: steam-2\n---------------------------------")]
+    [InlineData("------- Admins: -------\n1: Name: Alice, Power: 20, SteamId: steam-1\n2: Name: Power: 1, SteamId: x , Power: 10, SteamId: steam-2\n---------------------------------")]
     [InlineData("1: Name: Alice, Power: 20, SteamId: steam-1\n2: Name: Bob, Power: 10, SteamId: steam-2")]
     public async Task ReconcileAsync_RemovesStaleAdmins_FromCompleteLists(string adminList)
     {
@@ -299,6 +300,8 @@ public class CoD4xAdminReconciliationServiceTests
 
         _mockCoD4xRconApi.Verify(x => x.AdminRemoveAdmin(
             _serverId, It.Is<CoD4xAdminUserRequestDto>(r => r.User == "steam-2"), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCoD4xRconApi.Verify(x => x.AdminRemoveAdmin(
+            It.IsAny<Guid>(), It.IsAny<CoD4xAdminUserRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
         _mockCoD4xRconApi.Verify(x => x.AdminAddAdmin(
             It.IsAny<Guid>(), It.IsAny<CoD4xAdminAddAdminRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
     }
