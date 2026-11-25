@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Interfaces.V1;
 using XtremeIdiots.Portal.Integrations.Servers.Abstractions.Models.V1.Rcon;
 using XtremeIdiots.Portal.Repository.Abstractions.Constants.V1;
@@ -189,6 +191,8 @@ public sealed class CoD4xAdminReconciliationService(
 
     private static CurrentAdminParseResult ParseCurrentAdminsBySteamId(string rawAdminListResponse)
     {
+        const string header = "------- Admins: -------";
+        const string footer = "---------------------------------";
         var currentAdminsBySteamId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var unmatchedLineCount = 0;
 
@@ -196,9 +200,23 @@ public sealed class CoD4xAdminReconciliationService(
             ['\r', '\n'],
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        foreach (var line in lines)
+        var hasFraming = lines.Any(line => line == header || line == footer);
+        if (hasFraming && (lines.Length < 2 || lines[0] != header || lines[^1] != footer))
         {
-            if (!TryParseAdminListLine(line, out var steamId, out var power))
+            unmatchedLineCount++;
+        }
+
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (hasFraming && ((index == 0 && line == header) || (index == lines.Length - 1 && line == footer)))
+            {
+                continue;
+            }
+
+            if (!(hasFraming
+                ? TryParseFramedAdminListLine(line, out var steamId, out var power)
+                : TryParseAdminListLine(line, out steamId, out power)))
             {
                 unmatchedLineCount++;
                 continue;
@@ -208,6 +226,17 @@ public sealed class CoD4xAdminReconciliationService(
         }
 
         return new CurrentAdminParseResult(currentAdminsBySteamId, unmatchedLineCount);
+    }
+
+    private static bool TryParseFramedAdminListLine(string line, out string steamId, out int power)
+    {
+        var match = Regex.Match(
+            line,
+            @"^\d+:\s*Name:\s*.+,\s*Power:\s*(?<power>\d+),\s*SteamId:\s*(?<steamId>\S+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
+            TimeSpan.FromSeconds(1));
+        steamId = match.Groups["steamId"].Value;
+        return int.TryParse(match.Groups["power"].Value, out power);
     }
 
     private static bool TryParseAdminListLine(string line, out string steamId, out int power)

@@ -1,5 +1,6 @@
 using System.Net;
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -29,7 +30,7 @@ public class CoD4xAdminReconciliationServiceTests
 
     private readonly Guid _serverId = Guid.NewGuid();
 
-    private CoD4xAdminReconciliationService CreateService()
+    private CoD4xAdminReconciliationService CreateService(ILogger<CoD4xAdminReconciliationService>? logger = null)
     {
         _mockRepositoryApiClient.Setup(x => x.ConnectedPlayers).Returns(_mockVersionedConnectedPlayersApi.Object);
         _mockVersionedConnectedPlayersApi.Setup(x => x.V1).Returns(_mockConnectedPlayersApi.Object);
@@ -40,7 +41,7 @@ public class CoD4xAdminReconciliationServiceTests
         return new CoD4xAdminReconciliationService(
             _mockRepositoryApiClient.Object,
             _mockCoD4xRconApi.Object,
-            NullLogger<CoD4xAdminReconciliationService>.Instance);
+            logger ?? NullLogger<CoD4xAdminReconciliationService>.Instance);
     }
 
     [Fact]
@@ -220,7 +221,7 @@ public class CoD4xAdminReconciliationServiceTests
             .Setup(x => x.AdminListAdmins(_serverId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult<string>(
                 HttpStatusCode.OK,
-                new ApiResponse<string>("0: Name: Alice, Power: 20, SteamId: steam-1")));
+                new ApiResponse<string>("------- Admins: -------\n0: Name: Alice, Power: 20, SteamId: steam-1\n---------------------------------")));
 
         var service = CreateService();
 
@@ -272,6 +273,94 @@ public class CoD4xAdminReconciliationServiceTests
             It.IsAny<Guid>(),
             It.IsAny<CoD4xAdminUserRequestDto>(),
             It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("------- Admins: -------\n1:   Name: Alice, Power: 20, SteamId: steam-1\n2:   Name: Bob, Power: 10, SteamId: steam-2\n---------------------------------")]
+    [InlineData("------- Admins: -------\n1: Name: Alice, Power: 20, SteamId: steam-1\n2: Name: Power: 1, SteamId: x , Power: 10, SteamId: steam-2\n---------------------------------")]
+    [InlineData("1: Name: Alice, Power: 20, SteamId: steam-1\n2: Name: Bob, Power: 10, SteamId: steam-2")]
+    public async Task ReconcileAsync_RemovesStaleAdmins_FromCompleteLists(string adminList)
+    {
+        _mockConnectedPlayersApi
+            .Setup(x => x.GetCod4xAdminRoster(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<Cod4xAdminRosterDto>(
+                HttpStatusCode.OK, new ApiResponse<Cod4xAdminRosterDto>(CreateRosterDto(true, ("player-guid-1", 20)))));
+        _mockPlayersApi
+            .Setup(x => x.GetPlayerByGameType(GameType.CallOfDuty4x, "player-guid-1", PlayerEntityOptions.None))
+            .ReturnsAsync(new ApiResult<PlayerDto>(
+                HttpStatusCode.OK, new ApiResponse<PlayerDto>(CreatePlayerDto("player-guid-1", "steam-1"))));
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminListAdmins(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(HttpStatusCode.OK, new ApiResponse<string>(adminList)));
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminRemoveAdmin(_serverId, It.IsAny<CoD4xAdminUserRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(HttpStatusCode.OK, new ApiResponse<string>("ok")));
+
+        await CreateService().ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        _mockCoD4xRconApi.Verify(x => x.AdminRemoveAdmin(
+            _serverId, It.Is<CoD4xAdminUserRequestDto>(r => r.User == "steam-2"), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCoD4xRconApi.Verify(x => x.AdminRemoveAdmin(
+            It.IsAny<Guid>(), It.IsAny<CoD4xAdminUserRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCoD4xRconApi.Verify(x => x.AdminAddAdmin(
+            It.IsAny<Guid>(), It.IsAny<CoD4xAdminAddAdminRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("------- Admins: -------\n1: Name: Bob, Power: 10, SteamId: steam-2")]
+    [InlineData("1: Name: Bob, Power: 10, SteamId: steam-2\n---------------------------------")]
+    [InlineData("---------------------------------\n1: Name: Bob, Power: 10, SteamId: steam-2\n------- Admins: -------")]
+    [InlineData("------- Admins: -------\n------- Admins: -------\n1: Name: Bob, Power: 10, SteamId: steam-2\n---------------------------------")]
+    [InlineData("------- Admins: -------\n1: Name: Bob, Power: 10, SteamId: steam-2\n---------------------------------\nextra")]
+    [InlineData("------ Admins: -------\n1: Name: Bob, Power: 10, SteamId: steam-2\n---------------------------------")]
+    [InlineData("------- Admins: -------\n1: Name: Bob, Power: 10, SteamId: steam-2\n--------------------------------")]
+    [InlineData("------- Admins: -------\n1: Name: Bob, Power: 10, SteamId: steam-2\nunknown line\n---------------------------------")]
+    [InlineData("------- Admins: -------\n1: Name: Bob, Power: 10, SteamId: steam-2\n2: Name: Bad, Power: nope, SteamId: steam-3\n---------------------------------")]
+    [InlineData("------- Admins: -------\n1: Name: Bob, Power: 10, SteamId: steam-2\njunk Power: 20, SteamId: steam-3\n---------------------------------")]
+    public async Task ReconcileAsync_DoesNotRemoveAdmins_FromIncompleteOrMalformedFramedLists(string adminList)
+    {
+        _mockConnectedPlayersApi
+            .Setup(x => x.GetCod4xAdminRoster(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<Cod4xAdminRosterDto>(
+                HttpStatusCode.OK, new ApiResponse<Cod4xAdminRosterDto>(CreateRosterDto(true))));
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminListAdmins(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(HttpStatusCode.OK, new ApiResponse<string>(adminList)));
+
+        await CreateService().ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        _mockCoD4xRconApi.Verify(x => x.AdminRemoveAdmin(
+            It.IsAny<Guid>(), It.IsAny<CoD4xAdminUserRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_AddsDesiredAdmin_WhenFramedListIsEmpty()
+    {
+        var logger = new Mock<ILogger<CoD4xAdminReconciliationService>>();
+        _mockConnectedPlayersApi
+            .Setup(x => x.GetCod4xAdminRoster(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<Cod4xAdminRosterDto>(
+                HttpStatusCode.OK, new ApiResponse<Cod4xAdminRosterDto>(CreateRosterDto(true, ("player-guid-1", 50)))));
+        _mockPlayersApi
+            .Setup(x => x.GetPlayerByGameType(GameType.CallOfDuty4x, "player-guid-1", PlayerEntityOptions.None))
+            .ReturnsAsync(new ApiResult<PlayerDto>(
+                HttpStatusCode.OK, new ApiResponse<PlayerDto>(CreatePlayerDto("player-guid-1", "steam-1"))));
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminListAdmins(_serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(HttpStatusCode.OK, new ApiResponse<string>("------- Admins: -------\n---------------------------------")));
+        _mockCoD4xRconApi
+            .Setup(x => x.AdminAddAdmin(_serverId, It.IsAny<CoD4xAdminAddAdminRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ApiResult<string>(HttpStatusCode.OK, new ApiResponse<string>("ok")));
+
+        await CreateService(logger.Object).ReconcileAsync(_serverId, nameof(GameType.CallOfDuty4x));
+
+        _mockCoD4xRconApi.Verify(x => x.AdminAddAdmin(
+            _serverId, It.Is<CoD4xAdminAddAdminRequestDto>(r => r.User == "steam-1" && r.Power == 50), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCoD4xRconApi.Verify(x => x.AdminRemoveAdmin(
+            It.IsAny<Guid>(), It.IsAny<CoD4xAdminUserRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        logger.Verify(x => x.Log(
+            LogLevel.Warning, It.IsAny<EventId>(), It.IsAny<It.IsAnyType>(), It.IsAny<Exception?>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Never);
     }
 
     [Fact]
