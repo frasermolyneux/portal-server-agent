@@ -63,11 +63,11 @@ public class RconBroadcastServiceTests
     {
         var service = CreateService();
 
-        var result = await service.SayAsync(_serverId, "CallOfDuty4x", "hello", CancellationToken.None);
+        var result = await service.SayAsync(_serverId, "CallOfDuty4x", "hello", "^1[Bot]^7 ", CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         _mockCoD4xRconApi.Verify(
-            x => x.Say(_serverId, It.Is<CoD4xMessageRequestDto>(r => r.Message == "hello"), It.IsAny<CancellationToken>()),
+            x => x.Say(_serverId, It.Is<CoD4xMessageRequestDto>(r => r.Message == "hello" && r.FirstFragmentHeader == "^1[Bot]^7 "), It.IsAny<CancellationToken>()),
             Times.Once);
         _mockCod2RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod4RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -75,15 +75,41 @@ public class RconBroadcastServiceTests
     }
 
     [Fact]
+    public async Task SayAsync_LongMessage_PassesBodyAndHeaderWithoutSplitting()
+    {
+        var service = CreateService();
+        var message = string.Join(' ', Enumerable.Repeat("long broadcast message", 30));
+
+        await service.SayAsync(_serverId, "CallOfDuty4x", message, "^1[Bot]^7 ", CancellationToken.None);
+
+        _mockCoD4xRconApi.Verify(
+            x => x.Say(_serverId, It.Is<CoD4xMessageRequestDto>(
+                r => r.Message == message && r.FirstFragmentHeader == "^1[Bot]^7 "), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task SayAsync_NoHeader_SendsBodyUnchanged()
+    {
+        var service = CreateService();
+
+        await service.SayAsync(_serverId, "CallOfDuty4x", "hello", null, CancellationToken.None);
+
+        _mockCoD4xRconApi.Verify(
+            x => x.Say(_serverId, It.Is<CoD4xMessageRequestDto>(r => r.Message == "hello" && r.FirstFragmentHeader == null), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task SayAsync_CoD2_RoutesToCod2Say()
     {
         var service = CreateService();
 
-        var result = await service.SayAsync(_serverId, "CallOfDuty2", "hello", CancellationToken.None);
+        var result = await service.SayAsync(_serverId, "CallOfDuty2", "hello", "^1[Bot]^7 ", CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         _mockCod2RconApi.Verify(
-            x => x.Say(_serverId, It.Is<SayRequest>(r => r.Message == "hello"), It.IsAny<CancellationToken>()),
+            x => x.Say(_serverId, It.Is<SayRequest>(r => r.Message == "hello" && r.FirstFragmentHeader == "^1[Bot]^7 "), It.IsAny<CancellationToken>()),
             Times.Once);
         _mockCoD4xRconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<CoD4xMessageRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod4RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -95,11 +121,11 @@ public class RconBroadcastServiceTests
     {
         var service = CreateService();
 
-        var result = await service.SayAsync(_serverId, "CallOfDuty4", "hello", CancellationToken.None);
+        var result = await service.SayAsync(_serverId, "CallOfDuty4", "hello", "^1[Bot]^7 ", CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         _mockCod4RconApi.Verify(
-            x => x.Say(_serverId, It.Is<SayRequest>(r => r.Message == "hello"), It.IsAny<CancellationToken>()),
+            x => x.Say(_serverId, It.Is<SayRequest>(r => r.Message == "hello" && r.FirstFragmentHeader == "^1[Bot]^7 "), It.IsAny<CancellationToken>()),
             Times.Once);
         _mockCod2RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod5RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -110,11 +136,11 @@ public class RconBroadcastServiceTests
     {
         var service = CreateService();
 
-        var result = await service.SayAsync(_serverId, "CallOfDuty5", "hello", CancellationToken.None);
+        var result = await service.SayAsync(_serverId, "CallOfDuty5", "hello", "^1[Bot]^7 ", CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         _mockCod5RconApi.Verify(
-            x => x.Say(_serverId, It.Is<SayRequest>(r => r.Message == "hello"), It.IsAny<CancellationToken>()),
+            x => x.Say(_serverId, It.Is<SayRequest>(r => r.Message == "hello" && r.FirstFragmentHeader == "^1[Bot]^7 "), It.IsAny<CancellationToken>()),
             Times.Once);
         _mockCod2RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCod4RconApi.Verify(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -125,7 +151,7 @@ public class RconBroadcastServiceTests
     {
         var service = CreateService();
 
-        var result = await service.SayAsync(_serverId, "Insurgency", "hello", CancellationToken.None);
+        var result = await service.SayAsync(_serverId, "Insurgency", "hello", null, CancellationToken.None);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(HttpStatusCode.BadRequest, result.StatusCode);
@@ -143,7 +169,7 @@ public class RconBroadcastServiceTests
             .Setup(x => x.Say(It.IsAny<Guid>(), It.IsAny<SayRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult(HttpStatusCode.InternalServerError, new ApiResponse()));
 
-        var result = await service.SayAsync(_serverId, "CallOfDuty2", "hello", CancellationToken.None);
+        var result = await service.SayAsync(_serverId, "CallOfDuty2", "hello", null, CancellationToken.None);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(HttpStatusCode.InternalServerError, result.StatusCode);
