@@ -129,6 +129,216 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
     }
 
     [Fact]
+    public void IsValidAgentName_EnforcesNativeSafetyAndUtf8ByteLimit()
+    {
+        Assert.True(CoD4xPluginLifecycleService.IsValidAgentName(new string('x', 139)));
+        Assert.False(CoD4xPluginLifecycleService.IsValidAgentName(new string('x', 140)));
+        Assert.False(CoD4xPluginLifecycleService.IsValidAgentName(new string('\u00e9', 70)));
+        Assert.False(CoD4xPluginLifecycleService.IsValidAgentName("bad\"name"));
+        Assert.False(CoD4xPluginLifecycleService.IsValidAgentName("bad\nname"));
+        Assert.False(CoD4xPluginLifecycleService.IsValidAgentName("bad\ud800name"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_HealthyPlugin_PublishesNameChangesWithoutTouchingMainConfig()
+    {
+        var settings = new Cod4xPluginSettingsDocument
+        {
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.2.3" }
+        };
+        SetupConfiguration(settings);
+        var uploads = new List<(string Path, string Payload)>();
+        _mockRemoteFileClient.Setup(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<Stream, string, CancellationToken>((content, path, _) =>
+            {
+                using var reader = new StreamReader(content, Encoding.UTF8, leaveOpen: true);
+                uploads.Add((path, reader.ReadToEnd()));
+            })
+            .Returns(Task.CompletedTask);
+        var service = CreateService();
+        var context = CreateContext();
+
+        await service.ExecuteAsync(context, CancellationToken.None);
+        await service.ExecuteAsync(context, CancellationToken.None);
+        Assert.Single(uploads);
+
+        context = context with { AgentNamePrefix = "  ^2[Changed BOT]^7  " };
+        await service.ExecuteAsync(context, CancellationToken.None);
+        settings.PluginRootDirectory = "/fs_homepath/plugins";
+        SetupConfiguration(settings);
+        await service.ExecuteAsync(context, CancellationToken.None);
+        await CreateService().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Equal(4, uploads.Count);
+        Assert.Equal("/fs_homepath/portal-cod4x-plugin.agent-name.json", uploads[^1].Path);
+        Assert.All(uploads, upload => Assert.EndsWith("portal-cod4x-plugin.agent-name.json", upload.Path));
+        using var sidecar = JsonDocument.Parse(uploads[^1].Payload);
+        Assert.Equal(2, sidecar.RootElement.EnumerateObject().Count());
+        Assert.Equal(_serverId.ToString("D"), sidecar.RootElement.GetProperty("gameServerId").GetString());
+        Assert.Equal("^2[Changed BOT]^7", sidecar.RootElement.GetProperty("agentName").GetString());
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NameUploadFailure_RetriesEvenWhenNameReverts()
+    {
+        SetupConfiguration(new Cod4xPluginSettingsDocument
+        {
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.2.3" }
+        });
+        var attempts = 0;
+        _mockRemoteFileClient.Setup(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(() => ++attempts == 2
+                ? Task.FromException(new IOException("Interrupted sidecar upload"))
+                : Task.CompletedTask);
+        var service = CreateService();
+        var context = CreateContext();
+
+        await service.ExecuteAsync(context, CancellationToken.None);
+        await service.ExecuteAsync(context with { AgentNamePrefix = "^2[Changed]^7" }, CancellationToken.None);
+        await service.ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Equal(3, attempts);
+        Assert.Contains(_logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("will be retried", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NameUploadCancellation_DoesNotRecordSuccess()
+    {
+        SetupConfiguration(new Cod4xPluginSettingsDocument
+        {
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.2.3" }
+        });
+        using var cancellation = new CancellationTokenSource();
+        var attempts = 0;
+        _mockRemoteFileClient.Setup(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                if (++attempts == 1)
+                {
+                    cancellation.Cancel();
+                }
+            })
+            .Returns(Task.CompletedTask);
+        var service = CreateService();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.ExecuteAsync(CreateContext(), cancellation.Token));
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DriftReload_RequiresFreshNameUploadAndRetriesFailure()
+    {
+        SetupConfiguration(new Cod4xPluginSettingsDocument
+        {
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.2.3" }
+        });
+        var service = CreateService();
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+        _mockCoD4xRconApi.SetupSequence(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessResult("Total of 0 loaded plugins."))
+            .ReturnsAsync(SuccessResult("Total of 0 loaded plugins."))
+            .ReturnsAsync(SuccessResult("portal-cod4x-plugin version 1.2.3"));
+        _mockRemoteFileClient.SetupSequence(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("Interrupted sidecar upload"))
+            .Returns(Task.CompletedTask);
+
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), "/portal-cod4x-plugin.agent-name.json", It.IsAny<CancellationToken>()), Times.Exactly(3));
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(Cod4xPluginOperationAction.Install, false)]
+    [InlineData(Cod4xPluginOperationAction.Install, true)]
+    [InlineData(Cod4xPluginOperationAction.Rollback, false)]
+    [InlineData(Cod4xPluginOperationAction.Rollback, true)]
+    public async Task ExecuteAsync_ManagedLoad_RefreshesSidecarOrFailsExplicitly(
+        Cod4xPluginOperationAction action, bool uploadFails)
+    {
+        var artifactPath = CreateTemporaryArtifact(".so");
+        try
+        {
+            SetupConfiguration(new Cod4xPluginSettingsDocument
+            {
+                Enabled = true,
+                RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.2.3" }
+            });
+            var service = CreateService();
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+            var targetVersion = action == Cod4xPluginOperationAction.Install ? "1.2.3" : "1.0.0";
+            SetupConfiguration(new Cod4xPluginSettingsDocument
+            {
+                Enabled = true,
+                RuntimeState = new Cod4xPluginRuntimeState
+                {
+                    CurrentVersion = action == Cod4xPluginOperationAction.Install ? "1.0.0" : "1.2.3",
+                    PreviousKnownGoodVersion = "1.0.0"
+                },
+                OperationRequest = new Cod4xPluginOperationRequest
+                {
+                    OperationId = "refresh-name",
+                    Action = action,
+                    TargetVersion = targetVersion,
+                    RequestedBy = "tester",
+                    ExtensionData = CreateExtensionData("artifactPath", artifactPath)
+                }
+            });
+            var steps = new List<string>();
+            _mockRemoteFileClient.Setup(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Returns<Stream, string, CancellationToken>((content, path, _) =>
+                {
+                    steps.Add(path);
+                    return uploadFails && path.EndsWith("agent-name.json", StringComparison.Ordinal)
+                        ? Task.FromException(new IOException("Interrupted sidecar upload"))
+                        : Task.CompletedTask;
+                });
+            _mockCoD4xRconApi.Setup(x => x.LoadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()))
+                .Callback(() => steps.Add("load"))
+                .ReturnsAsync(SuccessResult("loaded"));
+            _mockCoD4xRconApi.Setup(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessResult($"portal-cod4x-plugin version {targetVersion}"));
+            _mockCoD4xRconApi.Setup(x => x.PortalPluginHealth(_serverId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessResult(RulesHealth(targetVersion)));
+            UpsertConfigurationDto? finalPayload = null;
+            _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                    _serverId, Cod4xPluginSettingsConstants.Namespace, It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()))
+                .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, payload, _) => finalPayload = payload)
+                .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+            Assert.Equal("/portal-cod4x-plugin.config.json", steps[0]);
+            Assert.Equal("/portal-cod4x-plugin.agent-name.json", steps[2]);
+            _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), "/portal-cod4x-plugin.agent-name.json", It.IsAny<CancellationToken>()), Times.Exactly(2));
+            Assert.NotNull(finalPayload);
+            if (uploadFails)
+            {
+                Assert.DoesNotContain("load", steps);
+                Assert.Contains("agent name publication failed", DeserializeSettings(finalPayload.Configuration).RuntimeState!.LastError, StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                Assert.Equal("load", steps[3]);
+            }
+        }
+        finally
+        {
+            TryDeleteFile(artifactPath);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_NonCod4xGameType_DoesNothing()
     {
         var service = CreateService();
@@ -138,6 +348,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
         _mockGameServerConfigurationsApi.Verify(x => x.GetConfigurations(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -159,6 +370,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.PluginInfo(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -206,6 +418,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
         _mockCoD4xRconApi.Verify(x => x.PluginInfo(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -565,7 +778,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
                 .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
 
             var service = CreateService();
-            await service.ExecuteAsync(CreateContext(), CancellationToken.None);
+            await service.ExecuteAsync(CreateContext() with { AgentNamePrefix = "  ^2[Custom BOT]^7  " }, CancellationToken.None);
 
             Assert.True(persistedPayloads.Count >= 2);
 
@@ -612,6 +825,7 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
             Assert.Equal("unit-test-cod4x-plugin-subscription-key", runtimeConfigDocument.RootElement.GetProperty("ingestSubscriptionKey").GetString());
             Assert.Equal("CallOfDuty4x", runtimeConfigDocument.RootElement.GetProperty("gameType").GetString());
             Assert.Equal(_serverId.ToString("D"), runtimeConfigDocument.RootElement.GetProperty("gameServerId").GetString());
+            Assert.Equal("^2[Custom BOT]^7", runtimeConfigDocument.RootElement.GetProperty("agentName").GetString());
             Assert.Equal(120, runtimeConfigDocument.RootElement.GetProperty("refreshIntervalSeconds").GetInt32());
             Assert.True(runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthEnabled").GetBoolean());
             Assert.Equal(98, runtimeConfigDocument.RootElement.GetProperty("portalPluginHealthMinPower").GetInt32());
@@ -667,7 +881,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
         _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
-        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), "/portal-cod4x-plugin.agent-name.json", It.IsAny<CancellationToken>()), Times.Once);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         _mockCoD4xRconApi.Verify(x => x.PluginInfo(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -2290,7 +2505,8 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
 
         await CreateService().ExecuteAsync(CreateContext(), CancellationToken.None);
 
-        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), "/portal-cod4x-plugin.agent-name.json", It.IsAny<CancellationToken>()), Times.Once);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockCoD4xRconApi.Verify(x => x.PortalPluginHealth(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
