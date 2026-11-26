@@ -653,14 +653,13 @@ public sealed class GameServerAgent
         }
 
         var index = _nextBroadcastIndex % enabledMessages.Length;
-        var messageBody = enabledMessages[index].Message;
-        var message = BuildPrefixedMessage(messageBody);
+        var message = enabledMessages[index].Message;
 
         ApiResult result;
 
         try
         {
-            result = await _broadcastService.SayAsync(_context.ServerId, _context.GameType, message, ct);
+            result = await _broadcastService.SayAsync(_context.ServerId, _context.GameType, message, BuildFirstFragmentHeader(), ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -696,11 +695,11 @@ public sealed class GameServerAgent
             ?? typeof(GameServerAgent).Assembly.GetName().Version?.ToString()
             ?? "unknown";
 
-        var message = BuildPrefixedMessage($"Agent is now online (version {version})");
+        var message = $"Agent is now online (version {version})";
 
         try
         {
-            var result = await _broadcastService.SayAsync(_context.ServerId, _context.GameType, message, ct);
+            var result = await _broadcastService.SayAsync(_context.ServerId, _context.GameType, message, BuildFirstFragmentHeader(), ct);
             if (!result.IsSuccess)
             {
                 _logger.LogWarning(
@@ -715,12 +714,12 @@ public sealed class GameServerAgent
         }
     }
 
-    private string BuildPrefixedMessage(string messageBody)
+    private string? BuildFirstFragmentHeader()
     {
         var prefix = _context.AgentNamePrefix?.Trim() ?? string.Empty;
         return string.IsNullOrWhiteSpace(prefix)
-            ? messageBody
-            : $"{prefix} {messageBody}";
+            ? null
+            : $"{prefix} ";
     }
 
     private long NextSequenceId() => Interlocked.Increment(ref _sequenceId);

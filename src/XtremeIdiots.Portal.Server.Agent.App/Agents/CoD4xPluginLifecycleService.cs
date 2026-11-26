@@ -32,6 +32,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private const string CoD4xGameType = "CallOfDuty4x";
     private const string PluginName = "portal-cod4x-plugin";
     private const string PluginConfigFileName = "portal-cod4x-plugin.config.json";
+    private const string AgentNameFileName = "portal-cod4x-plugin.agent-name.json";
     private const string PluginArtifactRootEnvironmentVariable = "PORTAL_COD4X_PLUGIN_ARTIFACT_ROOT";
     private static readonly string DefaultPluginArtifactRoot = Path.Combine(Path.GetTempPath(), "portal-cod4x-plugin-artifacts");
 
@@ -47,6 +48,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private readonly IConfiguration _configuration;
     private readonly ILogger<CoD4xPluginLifecycleService> _logger;
     private readonly ConcurrentDictionary<Guid, string> _inFlightOperations = new();
+    private readonly ConcurrentDictionary<Guid, (string Path, string AgentName, string Transport, string Host, int Port, string Username)> _publishedAgentNames = new();
 
     private const string ExtensionKeyHealthReport = "healthReport";
     private const string ExtensionKeyRollout = "rollout";
@@ -74,6 +76,9 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private const string RuntimeConfigPortalPluginHealthEnabledEnvironmentVariable = "COD4X_PLUGIN_HEALTH_ENABLED";
     private const string RuntimeConfigPortalPluginHealthMinPowerEnvironmentVariable = "COD4X_PLUGIN_HEALTH_MIN_POWER";
     private const int PortalPluginHealthDefaultMinPower = 98;
+    // Reserve the PM marker and body separator inside CoD4x's 149-byte chat payload.
+    private const int MaxAgentNameBytes = 139;
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public CoD4xPluginLifecycleService(
         IServiceScopeFactory scopeFactory,
@@ -325,6 +330,11 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
                 return;
             }
 
+            if (!await TryPublishAgentNameAsync(context, settings, force: probeState != PluginProbeState.Healthy, ct).ConfigureAwait(false))
+            {
+                return;
+            }
+
             if (probeState == PluginProbeState.Healthy)
             {
                 // Plugin is loaded and reports the expected version - clear any prior backoff/error state.
@@ -525,6 +535,12 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         Cod4xPluginOperationRequest request,
         CancellationToken ct)
     {
+        if (request.Action is Cod4xPluginOperationAction.Install or Cod4xPluginOperationAction.Rollback
+            && GetValidAgentName(context) is null)
+        {
+            return ActionResult.Failure("Plugin agent name is invalid.");
+        }
+
         return request.Action switch
         {
             Cod4xPluginOperationAction.Install => await ExecuteInstallAsync(repositoryApiClient, context, coD4xRconApi, settings, runtimeState, request, ct).ConfigureAwait(false),
@@ -570,6 +586,11 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             var alreadyLoadedResult = await VerifyPluginHealthAsync(context, coD4xRconApi, targetVersion, ct).ConfigureAwait(false);
             if (alreadyLoadedResult.IsSuccess)
             {
+                if (!await TryPublishAgentNameAsync(context, settings, force: true, ct).ConfigureAwait(false))
+                {
+                    return ActionResult.Failure("Plugin agent name publication failed.");
+                }
+
                 return ActionResult.Success(
                     targetVersion,
                     healthStatus: "healthy",
@@ -593,6 +614,11 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             uploadResult.RolloutStage = rolloutDecision.Stage;
             uploadResult.RolloutGatePassed = rolloutDecision.GatePassed;
             return uploadResult;
+        }
+
+        if (!await TryPublishAgentNameAsync(context, settings, force: true, ct).ConfigureAwait(false))
+        {
+            return ActionResult.Failure("Plugin agent name publication failed.");
         }
 
         var loadResult = await coD4xRconApi.LoadPlugin(
@@ -667,6 +693,11 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             uploadResult.RolloutStage = rolloutDecision.Stage;
             uploadResult.RolloutGatePassed = rolloutDecision.GatePassed;
             return uploadResult;
+        }
+
+        if (!await TryPublishAgentNameAsync(context, settings, force: true, ct).ConfigureAwait(false))
+        {
+            return ActionResult.Failure("Plugin agent name publication failed.");
         }
 
         var loadResult = await coD4xRconApi.LoadPlugin(
@@ -964,6 +995,69 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         }
     }
 
+    private async Task<bool> TryPublishAgentNameAsync(
+        ServerContext context,
+        Cod4xPluginSettingsDocument settings,
+        bool force,
+        CancellationToken ct)
+    {
+        var agentName = GetValidAgentName(context);
+        if (agentName is null)
+        {
+            return false;
+        }
+
+        if (!TryNormalizePluginRootDirectory(settings.PluginRootDirectory, out var rootDirectory, out var error))
+        {
+            _logger.LogWarning("[{Title}] Cannot publish plugin agent name: {Error}", context.Title, error);
+            return false;
+        }
+
+        var configPath = BuildRemotePluginConfigPath(rootDirectory);
+        var path = configPath[..^PluginConfigFileName.Length] + AgentNameFileName;
+        var publication = (
+            Path: path,
+            AgentName: agentName,
+            Transport: context.EffectiveFileTransportType,
+            Host: context.EffectiveFileTransportHostname,
+            Port: context.EffectiveFileTransportPort,
+            Username: context.EffectiveFileTransportUsername);
+        if (!force && _publishedAgentNames.TryGetValue(context.ServerId, out var published) && published == publication)
+        {
+            return true;
+        }
+
+        // Invalidate before overwriting so an interrupted write is retried even if the
+        // requested name later returns to the previously published value.
+        _publishedAgentNames.TryRemove(context.ServerId, out _);
+        var payload = JsonSerializer.Serialize(new AgentNameDocument
+        {
+            GameServerId = context.ServerId.ToString("D", CultureInfo.InvariantCulture),
+            AgentName = agentName
+        }, JsonOptions);
+
+        try
+        {
+            await _remoteOpsSessionCoordinator.ExecuteAsync(
+                context,
+                async (remoteFileClient, token) =>
+                {
+                    await using var content = new MemoryStream(StrictUtf8.GetBytes(payload));
+                    await remoteFileClient.UploadAsync(content, path, token).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                },
+                ct).ConfigureAwait(false);
+            _publishedAgentNames[context.ServerId] = publication;
+            _logger.LogInformation("[{Title}] Published plugin agent name configuration", context.Title);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[{Title}] Plugin agent name publication failed; it will be retried on the next publication attempt", context.Title);
+            return false;
+        }
+    }
+
     private bool TryBuildPluginRuntimeConfig(
         ServerContext context,
         Cod4xPluginSettingsDocument settings,
@@ -974,7 +1068,8 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     {
         runtimeConfig = new PluginRuntimeConfigDocument
         {
-            GameServerId = context.ServerId.ToString("D", CultureInfo.InvariantCulture)
+            GameServerId = context.ServerId.ToString("D", CultureInfo.InvariantCulture),
+            AgentName = GetValidAgentName(context)
         };
 
         error = string.Empty;
@@ -1066,6 +1161,40 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
             Cod4xCommandSettingsConstants.MaxPower);
 
         return true;
+    }
+
+    private string? GetValidAgentName(ServerContext context)
+    {
+        var agentName = context.AgentNamePrefix?.Trim();
+        if (string.IsNullOrEmpty(agentName))
+        {
+            _logger.LogWarning("[{Title}] Cannot publish plugin agent name: the prefix is empty", context.Title);
+            return null;
+        }
+
+        if (IsValidAgentName(agentName))
+        {
+            return agentName;
+        }
+
+        _logger.LogWarning(
+            "[{Title}] Cannot publish plugin agent name: the prefix is not safe for native chat or exceeds {MaxBytes} UTF-8 bytes",
+            context.Title,
+            MaxAgentNameBytes);
+        return null;
+    }
+
+    internal static bool IsValidAgentName(string agentName)
+    {
+        try
+        {
+            return StrictUtf8.GetByteCount(agentName) <= MaxAgentNameBytes
+                && !agentName.Any(static ch => ch == '"' || ch < ' ' || ch == '\u007f');
+        }
+        catch (EncoderFallbackException)
+        {
+            return false;
+        }
     }
 
     private static string ResolveRuntimeConfigStringValue(
@@ -2848,8 +2977,21 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         public string? Details { get; set; }
     }
 
+    private sealed class AgentNameDocument
+    {
+        [JsonPropertyName("gameServerId")]
+        public string GameServerId { get; set; } = string.Empty;
+
+        [JsonPropertyName("agentName")]
+        public string AgentName { get; set; } = string.Empty;
+    }
+
     private sealed class PluginRuntimeConfigDocument
     {
+        [JsonPropertyName("agentName")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? AgentName { get; set; }
+
         [JsonPropertyName("ingestBaseUrl")]
         public string IngestBaseUrl { get; set; } = string.Empty;
 
