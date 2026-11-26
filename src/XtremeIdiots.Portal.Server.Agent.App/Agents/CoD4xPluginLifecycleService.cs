@@ -48,7 +48,7 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
     private readonly IConfiguration _configuration;
     private readonly ILogger<CoD4xPluginLifecycleService> _logger;
     private readonly ConcurrentDictionary<Guid, string> _inFlightOperations = new();
-    private readonly ConcurrentDictionary<Guid, (string Path, string AgentName)> _publishedAgentNames = new();
+    private readonly ConcurrentDictionary<Guid, (string Path, string AgentName, string Transport, string Host, int Port, string Username)> _publishedAgentNames = new();
 
     private const string ExtensionKeyHealthReport = "healthReport";
     private const string ExtensionKeyRollout = "rollout";
@@ -535,6 +535,12 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
         Cod4xPluginOperationRequest request,
         CancellationToken ct)
     {
+        if (request.Action is Cod4xPluginOperationAction.Install or Cod4xPluginOperationAction.Rollback
+            && GetValidAgentName(context) is null)
+        {
+            return ActionResult.Failure("Plugin agent name is invalid.");
+        }
+
         return request.Action switch
         {
             Cod4xPluginOperationAction.Install => await ExecuteInstallAsync(repositoryApiClient, context, coD4xRconApi, settings, runtimeState, request, ct).ConfigureAwait(false),
@@ -1009,7 +1015,13 @@ public sealed class CoD4xPluginLifecycleService : ICoD4xPluginLifecycleService
 
         var configPath = BuildRemotePluginConfigPath(rootDirectory);
         var path = configPath[..^PluginConfigFileName.Length] + AgentNameFileName;
-        var publication = (Path: path, AgentName: agentName);
+        var publication = (
+            Path: path,
+            AgentName: agentName,
+            Transport: context.EffectiveFileTransportType,
+            Host: context.EffectiveFileTransportHostname,
+            Port: context.EffectiveFileTransportPort,
+            Username: context.EffectiveFileTransportUsername);
         if (!force && _publishedAgentNames.TryGetValue(context.ServerId, out var published) && published == publication)
         {
             return true;
