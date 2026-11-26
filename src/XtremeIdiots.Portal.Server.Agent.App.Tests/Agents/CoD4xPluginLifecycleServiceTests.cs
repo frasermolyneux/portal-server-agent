@@ -205,6 +205,86 @@ public class CoD4xPluginLifecycleServiceTests : IDisposable
         Assert.Contains(_logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("will be retried", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("transport")]
+    [InlineData("host")]
+    [InlineData("port")]
+    [InlineData("username")]
+    public async Task ExecuteAsync_TransportDestinationChanges_RepublishesName(string changedField)
+    {
+        SetupConfiguration(new Cod4xPluginSettingsDocument
+        {
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.2.3" }
+        });
+        var service = CreateService();
+        var context = CreateContext();
+        var changed = changedField switch
+        {
+            "transport" => context with { FileTransportType = "sftp", FileTransportPort = 21 },
+            "host" => context with { FileTransportHostname = "new.example.com" },
+            "port" => context with { FileTransportPort = 2121 },
+            "username" => context with { FileTransportUsername = "other-user" },
+            _ => throw new ArgumentOutOfRangeException(nameof(changedField))
+        };
+
+        await service.ExecuteAsync(context, CancellationToken.None);
+        await service.ExecuteAsync(changed, CancellationToken.None);
+        await service.ExecuteAsync(changed, CancellationToken.None);
+
+        _mockRemoteFileClient.Verify(
+            x => x.UploadAsync(It.IsAny<Stream>(), "/portal-cod4x-plugin.agent-name.json", It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Theory]
+    [InlineData(Cod4xPluginOperationAction.Install)]
+    [InlineData(Cod4xPluginOperationAction.Rollback)]
+    [InlineData(Cod4xPluginOperationAction.Unload)]
+    public async Task ExecuteAsync_InvalidAgentName_RejectsManagedLoadButAllowsUnload(Cod4xPluginOperationAction action)
+    {
+        SetupConfiguration(new Cod4xPluginSettingsDocument
+        {
+            Enabled = true,
+            RuntimeState = new Cod4xPluginRuntimeState { CurrentVersion = "1.2.3", PreviousKnownGoodVersion = "1.0.0" },
+            OperationRequest = new Cod4xPluginOperationRequest
+            {
+                OperationId = "invalid-name",
+                Action = action,
+                TargetVersion = "1.4.0",
+                RequestedBy = "tester"
+            }
+        });
+        UpsertConfigurationDto? finalPayload = null;
+        _mockGameServerConfigurationsApi.Setup(x => x.UpsertConfiguration(
+                _serverId, Cod4xPluginSettingsConstants.Namespace, It.IsAny<UpsertConfigurationDto>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, UpsertConfigurationDto, CancellationToken>((_, _, payload, _) => finalPayload = payload)
+            .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
+
+        await CreateService().ExecuteAsync(CreateContext() with { AgentNamePrefix = new string('x', 140) }, CancellationToken.None);
+
+        Assert.NotNull(finalPayload);
+        var runtime = DeserializeSettings(finalPayload.Configuration).RuntimeState!;
+        if (action == Cod4xPluginOperationAction.Unload)
+        {
+            Assert.Equal(Cod4xPluginOperationStatus.Succeeded, runtime.LastOperationStatus);
+            Assert.Null(runtime.CurrentVersion);
+        }
+        else
+        {
+            Assert.Equal(action == Cod4xPluginOperationAction.Rollback
+                ? Cod4xPluginOperationStatus.RollbackFailed
+                : Cod4xPluginOperationStatus.Failed, runtime.LastOperationStatus);
+            Assert.Equal("1.2.3", runtime.CurrentVersion);
+            Assert.Contains("agent name is invalid", runtime.LastError, StringComparison.OrdinalIgnoreCase);
+        }
+
+        _mockCoD4xRconApi.Verify(x => x.UnloadPlugin(_serverId, It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()),
+            action == Cod4xPluginOperationAction.Unload ? Times.Once : Times.Never);
+        _mockCoD4xRconApi.Verify(x => x.LoadPlugin(It.IsAny<Guid>(), It.IsAny<CoD4xPluginRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockRemoteFileClient.Verify(x => x.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task ExecuteAsync_NameUploadCancellation_DoesNotRecordSuccess()
     {
