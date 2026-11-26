@@ -24,7 +24,7 @@ public sealed class RconBroadcastService : IRconBroadcastService
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
     }
 
-    public async Task<ApiResult> SayAsync(Guid serverId, string gameType, string message, CancellationToken ct = default)
+    public async Task<ApiResult> SayAsync(Guid serverId, string gameType, string message, string? firstFragmentHeader, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -36,7 +36,7 @@ public sealed class RconBroadcastService : IRconBroadcastService
             // CoD4x broadcasts use the standard say command so they share the same
             // operator-event telemetry as the other game types' broadcasts.
             var result = await serversApiClient.CoD4xRcon.V1
-                .Say(serverId, new CoD4xMessageRequestDto { Message = message }, ct)
+                .Say(serverId, new CoD4xMessageRequestDto { Message = message, FirstFragmentHeader = firstFragmentHeader }, ct)
                 .ConfigureAwait(false);
             return Normalize(result);
         }
@@ -44,7 +44,7 @@ public sealed class RconBroadcastService : IRconBroadcastService
         if (string.Equals(gameType, CallOfDuty2GameType, StringComparison.OrdinalIgnoreCase))
         {
             var result = await serversApiClient.Cod2Rcon.V1
-                .Say(serverId, new SayRequest { Message = message }, ct)
+                .Say(serverId, new SayRequest { Message = message, FirstFragmentHeader = firstFragmentHeader }, ct)
                 .ConfigureAwait(false);
             return Normalize(result);
         }
@@ -52,7 +52,7 @@ public sealed class RconBroadcastService : IRconBroadcastService
         if (string.Equals(gameType, CallOfDuty4GameType, StringComparison.OrdinalIgnoreCase))
         {
             var result = await serversApiClient.Cod4Rcon.V1
-                .Say(serverId, new SayRequest { Message = message }, ct)
+                .Say(serverId, new SayRequest { Message = message, FirstFragmentHeader = firstFragmentHeader }, ct)
                 .ConfigureAwait(false);
             return Normalize(result);
         }
@@ -60,7 +60,7 @@ public sealed class RconBroadcastService : IRconBroadcastService
         if (string.Equals(gameType, CallOfDuty5GameType, StringComparison.OrdinalIgnoreCase))
         {
             var result = await serversApiClient.Cod5Rcon.V1
-                .Say(serverId, new SayRequest { Message = message }, ct)
+                .Say(serverId, new SayRequest { Message = message, FirstFragmentHeader = firstFragmentHeader }, ct)
                 .ConfigureAwait(false);
             return Normalize(result);
         }

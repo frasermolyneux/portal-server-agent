@@ -81,7 +81,7 @@ public class GameServerAgentTests
             .ReturnsAsync((IReadOnlyList<PlayerIpResolvedEvent>)Array.Empty<PlayerIpResolvedEvent>());
         _mockSyncService.Setup(s => s.SyncWithRosterAsync(It.IsAny<Guid>(), It.IsAny<ILogParser>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ServerSyncResult([], null));
-        _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult(HttpStatusCode.OK));
     }
 
@@ -637,8 +637,32 @@ public class GameServerAgentTests
             r => r.SayAsync(
                 _testContext.ServerId,
                 _testContext.GameType,
-                It.Is<string>(msg => msg.StartsWith("^4[^1>XI< BOT^4]^7 Agent is now online (version ")),
+                It.Is<string>(msg => msg.StartsWith("Agent is now online (version ")),
+                "^4[^1>XI< BOT^4]^7 ",
                 It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Theory]
+    [InlineData("  ^1[Agent]^7  ", "^1[Agent]^7 ")]
+    [InlineData("   ", null)]
+    public async Task RunAsync_StartupBroadcast_SeparatesAndNormalizesPrefix(string prefix, string? header)
+    {
+        var context = _testContext with { AgentNamePrefix = prefix };
+        _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SavedOffset?)null);
+        _mockTailer.Setup(t => t.ConnectAsync(It.IsAny<FileTransportTailerConfig>(), null, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockTailer.Setup(t => t.PollAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<string>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await CreateAgent(context).RunAsync(cts.Token);
+
+        _mockBroadcastService.Verify(
+            r => r.SayAsync(context.ServerId, context.GameType,
+                It.Is<string>(message => message.StartsWith("Agent is now online (version ")),
+                header, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -1426,9 +1450,9 @@ public class GameServerAgentTests
 
         await agent.RunAsync(cts.Token);
 
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "^1[Agent]^7 message-1", It.IsAny<CancellationToken>()), Times.AtLeastOnce);
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "^1[Agent]^7 message-2", It.IsAny<CancellationToken>()), Times.Once);
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "^1[Agent]^7 message-disabled", It.IsAny<CancellationToken>()), Times.Never);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "message-1", "^1[Agent]^7 ", It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "message-2", "^1[Agent]^7 ", It.IsAny<CancellationToken>()), Times.Once);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "message-disabled", It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -1461,11 +1485,12 @@ public class GameServerAgentTests
             r => r.SayAsync(
                 context.ServerId,
                 context.GameType,
-                It.Is<string>(msg => msg.StartsWith("^4[^1>XI< BOT^4]^7 Agent is now online (version ")),
+                It.Is<string>(msg => msg.StartsWith("Agent is now online (version ")),
+                "^4[^1>XI< BOT^4]^7 ",
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _mockBroadcastService.Verify(
-            r => r.SayAsync(context.ServerId, context.GameType, "message-1", It.IsAny<CancellationToken>()),
+            r => r.SayAsync(context.ServerId, context.GameType, "message-1", It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -1496,7 +1521,7 @@ public class GameServerAgentTests
 
         await agent.RunAsync(cts.Token);
 
-        _mockBroadcastService.Verify(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockBroadcastService.Verify(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -1531,8 +1556,8 @@ public class GameServerAgentTests
 
         await agent.RunAsync(cts.Token);
 
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "^1[Agent]^7 message-1", It.IsAny<CancellationToken>()), Times.AtLeastOnce);
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "^1[Agent]^7 message-2", It.IsAny<CancellationToken>()), Times.Once);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "message-1", "^1[Agent]^7 ", It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "message-2", "^1[Agent]^7 ", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -1566,7 +1591,7 @@ public class GameServerAgentTests
         // Assert the scheduled message body specifically (only the scheduled path emits "message-1")
         // so this proves scheduled broadcasts are no longer suppressed, not just the startup one.
         _mockBroadcastService.Verify(
-            r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.Is<string>(m => m.Contains("message-1")), It.IsAny<CancellationToken>()),
+            r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.Is<string>(m => m.Contains("message-1")), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
     }
 
@@ -1723,7 +1748,7 @@ public class GameServerAgentTests
             }
         };
 
-        _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        _mockBroadcastService.Setup(r => r.SayAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ApiResult(HttpStatusCode.InternalServerError));
         _mockOffsetStore.Setup(o => o.GetOffsetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((SavedOffset?)null);
@@ -1738,8 +1763,8 @@ public class GameServerAgentTests
 
         await agent.RunAsync(cts.Token);
 
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "^3[RetryAgent]^7 message-1", It.IsAny<CancellationToken>()), Times.AtLeast(2));
-        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "^3[RetryAgent]^7 message-2", It.IsAny<CancellationToken>()), Times.Never);
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "message-1", "^3[RetryAgent]^7 ", It.IsAny<CancellationToken>()), Times.AtLeast(2));
+        _mockBroadcastService.Verify(r => r.SayAsync(context.ServerId, context.GameType, "message-2", "^3[RetryAgent]^7 ", It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
