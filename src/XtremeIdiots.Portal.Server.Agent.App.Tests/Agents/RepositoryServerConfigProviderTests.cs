@@ -504,6 +504,327 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
+    public async Task GetAgentEnabledServersAsync_InheritsGlobalBroadcastFieldsAndPreservesLegacyEmptyPlaylist()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Broadcast Server", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true,
+            intervalSeconds = 120,
+            messages = new[] { new { message = "Global", enabled = true } }
+        })]);
+        var required = new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        };
+        SetupConfigApi(serverId, required);
+        var provider = CreateProvider();
+
+        var inherited = Assert.Single(await provider.GetAgentEnabledServersAsync(default));
+        Assert.True(inherited.Broadcasts.Enabled);
+        Assert.Equal(120, inherited.Broadcasts.IntervalSeconds);
+        Assert.Equal("Global", Assert.Single(inherited.Broadcasts.Messages).Message);
+
+        SetupConfigApi(serverId, [.. required, CreateConfigDto("broadcasts", new
+        {
+            enabled = false,
+            messages = Array.Empty<object>()
+        })]);
+        var overridden = Assert.Single(await provider.GetAgentEnabledServersAsync(default));
+        Assert.False(overridden.Broadcasts.Enabled);
+        Assert.Equal(120, overridden.Broadcasts.IntervalSeconds);
+        Assert.Empty(overridden.Broadcasts.Messages);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_GlobalBroadcastChangeRestartsOnlyInheritingAgents()
+    {
+        var inheritingId = Guid.NewGuid();
+        var overriddenId = Guid.NewGuid();
+        SetupApiSuccess([
+            CreateGameServerDto(inheritingId, "Inheriting", RepositoryGameType.CallOfDuty4),
+            CreateGameServerDto(overriddenId, "Overridden", RepositoryGameType.CallOfDuty4)
+        ]);
+        var required = new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        };
+        SetupConfigApi(inheritingId, required);
+        SetupConfigApi(overriddenId, [.. required, CreateConfigDto("broadcasts", new
+        {
+            enabled = false,
+            intervalSeconds = 60,
+            messages = Array.Empty<object>()
+        })]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, intervalSeconds = 120, messages = new[] { new { message = "First" } }
+        })]);
+        var provider = CreateProvider();
+        var before = (await provider.GetAgentEnabledServersAsync(default)).ToDictionary(x => x.ServerId);
+
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, intervalSeconds = 180, messages = new[] { new { message = "Second" } }
+        })]);
+        var after = (await provider.GetAgentEnabledServersAsync(default)).ToDictionary(x => x.ServerId);
+
+        Assert.NotEqual(before[inheritingId].ConfigHash, after[inheritingId].ConfigHash);
+        Assert.Equal(before[overriddenId].ConfigHash, after[overriddenId].ConfigHash);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_LegacyBroadcastDocumentInheritsNullScalarsButNotPlaylist()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Legacy", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, intervalSeconds = 120, messages = new[] { new { message = "Global" } }
+        })]);
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("broadcasts", new { enabled = (bool?)null, intervalSeconds = (int?)null })
+        ]);
+
+        var server = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default));
+
+        Assert.True(server.Broadcasts.Enabled);
+        Assert.Equal(120, server.Broadcasts.IntervalSeconds);
+        Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_LegacyBroadcastNormalizesInvalidValuesBeforeInheritance()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Legacy", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, intervalSeconds = 120, messages = new[] { new { message = "Global" } }
+        })]);
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("broadcasts", new
+            {
+                enabled = "invalid",
+                intervalSeconds = -1,
+                messages = new object[]
+                {
+                    new { message = "First", enabled = "false" },
+                    new { message = "", enabled = true },
+                    new { message = "Ignored", enabled = "invalid" },
+                    new { message = "Last" }
+                }
+            })
+        ]);
+
+        var broadcasts = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default)).Broadcasts;
+
+        Assert.False(broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, broadcasts.IntervalSeconds);
+        Assert.Equal(["First", "Last"], broadcasts.Messages.Select(message => message.Message));
+        Assert.False(broadcasts.Messages[0].Enabled);
+        Assert.True(broadcasts.Messages[1].Enabled);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_ExplicitMessageModesSelectGlobalOrServerPlaylist()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Explicit mode", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true,
+            intervalSeconds = 120,
+            messages = new[] { new { message = "Global" } }
+        })]);
+        var required = new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        };
+        var broadcast = CreateConfigDto("broadcasts", new
+        {
+            enabled = true,
+            messagesMode = "Inherit",
+            messages = new[] { new { message = "Server" } }
+        });
+        SetupConfigApi(serverId, [.. required, broadcast]);
+
+        var inheritedMessages = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default));
+        Assert.Equal("Global", Assert.Single(inheritedMessages.Broadcasts.Messages).Message);
+
+        SetConfigProperty(broadcast, nameof(ConfigurationDto.Configuration),
+            JsonSerializer.Serialize(new { enabled = true, messagesMode = "Replace", messages = Array.Empty<object>() }));
+        SetupConfigApi(serverId, [.. required, broadcast]);
+        var replacedMessages = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default));
+        Assert.Empty(replacedMessages.Broadcasts.Messages);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("1")]
+    [InlineData("\"unknown\"")]
+    public async Task GetAgentEnabledServersAsync_InvalidExplicitMessageModeDoesNotInherit(string mode)
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Invalid mode", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true,
+            intervalSeconds = 120,
+            messages = new[] { new { message = "Global" } }
+        })]);
+        var malformed = CreateConfigDto("broadcasts", new { });
+        using var modeDocument = JsonDocument.Parse(mode);
+        SetConfigProperty(malformed, nameof(ConfigurationDto.Configuration),
+            JsonSerializer.Serialize(new { enabled = true, messagesMode = modeDocument.RootElement }));
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            malformed
+        ]);
+
+        var server = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default));
+
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("1")]
+    public async Task GetAgentEnabledServersAsync_InvalidExplicitMessageArrayDoesNotInherit(string messages)
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Invalid messages", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true,
+            intervalSeconds = 120,
+            messages = new[] { new { message = "Global" } }
+        })]);
+        using var messagesDocument = JsonDocument.Parse(messages);
+        var malformed = CreateConfigDto("broadcasts", new { });
+        SetConfigProperty(malformed, nameof(ConfigurationDto.Configuration),
+            JsonSerializer.Serialize(new { enabled = true, messagesMode = "Replace", messages = messagesDocument.RootElement }));
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            malformed
+        ]);
+
+        var server = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default));
+
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, server.Broadcasts.IntervalSeconds);
+        Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Theory]
+    [InlineData(/*lang=json,strict*/ "[{\"id\":\"same\",\"message\":\"A\"},{\"id\":\"same\",\"message\":\"B\"}]")]
+    [InlineData(/*lang=json,strict*/ "[{\"id\":null,\"message\":\"A\"}]")]
+    [InlineData(/*lang=json,strict*/ "[{\"id\":\" \",\"message\":\"A\"}]")]
+    public async Task GetAgentEnabledServersAsync_InvalidExplicitMessageIdsDisableBroadcasts(string messages)
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Invalid message IDs", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, intervalSeconds = 120, messages = new[] { new { message = "Global" } }
+        })]);
+        using var messagesDocument = JsonDocument.Parse(messages);
+        var config = CreateConfigDto("broadcasts", new { });
+        SetConfigProperty(config, nameof(ConfigurationDto.Configuration),
+            JsonSerializer.Serialize(new { enabled = true, messagesMode = "Replace", messages = messagesDocument.RootElement }));
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            config
+        ]);
+
+        var broadcasts = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default)).Broadcasts;
+
+        Assert.False(broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, broadcasts.IntervalSeconds);
+        Assert.Empty(broadcasts.Messages);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_GlobalFetchFailureDoesNotReplaceInheritedSettingsWithDefaults()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Inheriting", RepositoryGameType.CallOfDuty4)]);
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        ]);
+        _mockGlobalConfigApi.Setup(api => api.GetConfigurations(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("unavailable"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateProvider().GetAgentEnabledServersAsync(default));
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_GlobalFetchFailureAllowsCompleteServerBroadcastOverride()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Custom", RepositoryGameType.CallOfDuty4)]);
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            CreateConfigDto("broadcasts", new { enabled = true, intervalSeconds = 120, messages = new[] { new { message = "Custom" } } })
+        ]);
+        _mockGlobalConfigApi.Setup(api => api.GetConfigurations(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("unavailable"));
+
+        var server = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default));
+
+        Assert.True(server.Broadcasts.Enabled);
+        Assert.Equal("Custom", Assert.Single(server.Broadcasts.Messages).Message);
+    }
+
+    [Fact]
+    public async Task GetAgentEnabledServersAsync_MalformedServerBroadcastDocumentDoesNotInheritGlobal()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Invalid", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, intervalSeconds = 120, messages = new[] { new { message = "Global" } }
+        })]);
+        var malformed = CreateConfigDto("broadcasts", new { });
+        SetConfigProperty(malformed, nameof(ConfigurationDto.Configuration), "{");
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            malformed
+        ]);
+
+        var server = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default));
+
+        Assert.False(server.Broadcasts.Enabled);
+        Assert.Empty(server.Broadcasts.Messages);
+    }
+
+    [Fact]
     public async Task GetAgentEnabledServersAsync_ServerCod4xPluginOverride_ControlsPluginSourceFlag()
     {
         var serverId = Guid.NewGuid();

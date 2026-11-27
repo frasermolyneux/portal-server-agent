@@ -74,6 +74,9 @@ public sealed record PlayerDisconnectedEvent : GameEvent
 /// </summary>
 public sealed record ChatMessageEvent : GameEvent
 {
+    // Identifies this capture; rereading the log creates a different occurrence.
+    public Guid OccurrenceId { get; init; } = Guid.NewGuid();
+
     /// <summary>
     /// Game-specific unique identifier for the player who sent the message.
     /// </summary>

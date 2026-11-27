@@ -19,6 +19,22 @@ This document describes the settings architecture used by `portal-server-agent` 
 - Compatibility shims can remain during rollout, but new settings behavior must be implemented against `XtremeIdiots.Portal.Settings.Contracts.V1`.
 - Runtime ownership for CoD4x plugin-enabled servers is defined in [CoD4x Plugin Source Behaviour Matrix](./cod4x-plugin-source-behaviour-matrix.md).
 
+## Broadcast settings
+
+An absent server `broadcasts` namespace inherits the global settings. For a
+legacy server document, null or missing `enabled` and `intervalSeconds` inherit
+their global values, while its playlist remains server-owned, including an
+empty or missing list. Explicit `enabled: false` disables broadcasts.
+An explicit `messagesMode: "Inherit"` selects the global playlist;
+`"Replace"` selects the server playlist, including an empty one. Omit
+`messagesMode` for legacy behavior. Invalid explicit modes or message arrays
+disable that configuration rather than inheriting.
+
+An unavailable global configuration prevents a refresh that needs inherited
+values, leaving running agents on their previous settings. Effective changes
+restart affected agents through the existing orchestrator; the scheduled
+broadcast loop and startup announcement remain separate.
+
 ## CoD4x plugin Agent Name
 
 `agent.agentName` is the complete rendered, color-coded bot prefix, not a bare
