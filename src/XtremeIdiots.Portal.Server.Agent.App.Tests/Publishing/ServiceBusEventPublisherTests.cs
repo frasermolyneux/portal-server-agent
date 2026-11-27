@@ -181,6 +181,8 @@ public class ServiceBusEventPublisherTests : IAsyncLifetime
         Assert.Equal(ServerId, root.GetProperty("serverId").GetGuid());
         Assert.Equal(GameType, root.GetProperty("gameType").GetString());
         Assert.Equal(SequenceId, root.GetProperty("sequenceId").GetInt64());
+        Assert.Equal(gameEvent.OccurrenceId, root.GetProperty("occurrenceId").GetGuid());
+        Assert.Equal($"{ServerId}-{gameEvent.OccurrenceId}", captured.MessageId);
     }
 
     [Fact]
@@ -209,6 +211,67 @@ public class ServiceBusEventPublisherTests : IAsyncLifetime
         using var doc = JsonDocument.Parse(json);
         Assert.Equal("All", doc.RootElement.GetProperty("type").GetString());
         Assert.Equal(4, doc.RootElement.GetProperty("slotId").GetInt32());
+    }
+
+    [Fact]
+    public async Task PublishAsync_ChatRetryPreservesCaptureIdWhileRecaptureUsesDifferentId()
+    {
+        var messages = new List<ServiceBusMessage>();
+        _senderMock.Setup(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<ServiceBusMessage, CancellationToken>((message, _) => messages.Add(message))
+            .Returns(() => messages.Count == 1
+                ? Task.FromException(new TimeoutException("Send outcome unknown"))
+                : Task.CompletedTask);
+        var first = new ChatMessageEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "one",
+            Username = "Alice",
+            SlotId = 2,
+            Message = "hello",
+            IsTeamChat = false
+        };
+        var recaptured = new ChatMessageEvent
+        {
+            Timestamp = first.Timestamp,
+            PlayerGuid = first.PlayerGuid,
+            Username = first.Username,
+            SlotId = first.SlotId,
+            Message = first.Message,
+            IsTeamChat = first.IsTeamChat
+        };
+
+        await Assert.ThrowsAsync<TimeoutException>(() => _publisher.PublishAsync(first, ServerId, GameType, 1));
+        await _publisher.PublishAsync(first with { ProducerInstanceId = Guid.NewGuid() }, ServerId, GameType, 2);
+        await _publisher.PublishAsync(recaptured, ServerId, GameType, 3);
+
+        Assert.Equal($"{ServerId}-{first.OccurrenceId}", messages[0].MessageId);
+        Assert.Equal(messages[0].MessageId, messages[1].MessageId);
+        Assert.NotEqual(messages[1].MessageId, messages[2].MessageId);
+        using var originalBody = JsonDocument.Parse(messages[0].Body.ToString());
+        using var retryBody = JsonDocument.Parse(messages[1].Body.ToString());
+        using var recapturedBody = JsonDocument.Parse(messages[2].Body.ToString());
+        Assert.Equal(first.OccurrenceId, originalBody.RootElement.GetProperty("occurrenceId").GetGuid());
+        Assert.Equal(first.OccurrenceId, retryBody.RootElement.GetProperty("occurrenceId").GetGuid());
+        Assert.Equal(recaptured.OccurrenceId, recapturedBody.RootElement.GetProperty("occurrenceId").GetGuid());
+    }
+
+    [Fact]
+    public async Task PublishAsync_ChatMessageRejectsEmptyCaptureId()
+    {
+        var gameEvent = new ChatMessageEvent
+        {
+            Timestamp = DateTime.UtcNow,
+            PlayerGuid = "one",
+            Username = "Alice",
+            SlotId = 2,
+            Message = "hello",
+            IsTeamChat = false,
+            OccurrenceId = Guid.Empty
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _publisher.PublishAsync(gameEvent, ServerId, GameType, SequenceId));
+        _senderMock.Verify(s => s.SendMessageAsync(It.IsAny<ServiceBusMessage>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

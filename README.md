@@ -23,6 +23,12 @@ Portal Server Agent is a .NET 10 worker that tails game-server logs over FTP or 
 Detected truncation or rotation is logged as a possible data gap; replacement
 files that grow past the previous offset may not be detectable.
 
+Each parsed chat event receives a capture GUID in `occurrenceId`. Publishing
+retries of that capture retain its server-prefixed broker message ID. The identity
+does not deduplicate a log line reread after restart: a crash before the next
+successful offset checkpoint can produce a new capture of an already published line.
+Checkpoint failures can extend that window; this is not exactly-once delivery.
+
 The dedicated playtime producer uses the existing RCON poll for bounded
 CoD2, CoD4 and CoD5 roster observations. CoD4x playtime is reserved for the
 plugin; the agent does not emit CoD4x observations. For CoD2, CoD4 and CoD5,

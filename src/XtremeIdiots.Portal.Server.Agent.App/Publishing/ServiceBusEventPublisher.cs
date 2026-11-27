@@ -58,18 +58,19 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
             return;
         }
 
-        var observationId = gameEvent switch
+        var eventId = gameEvent switch
         {
             Parsing.PlayerConnectedEvent connected => connected.ObservationId,
             Parsing.PlayerIpResolvedEvent resolved => resolved.ObservationId,
+            Parsing.ChatMessageEvent chat => chat.OccurrenceId,
             _ => (Guid?)null
         };
-        if (observationId == Guid.Empty)
+        if (eventId == Guid.Empty)
         {
-            throw new InvalidOperationException("Connection and IP observations require a non-empty observation ID.");
+            throw new InvalidOperationException("Captured chat and connection observations require a non-empty event ID.");
         }
 
-        await SendAsync(queueName, body, serverId, sequenceId, gameEvent.GetType().Name, ct, observationId);
+        await SendAsync(queueName, body, serverId, sequenceId, gameEvent.GetType().Name, ct, eventId);
     }
 
     /// <inheritdoc />
@@ -327,6 +328,7 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
                 ServerId = serverId,
                 GameType = gameType,
                 SequenceId = sequenceId,
+                OccurrenceId = e.OccurrenceId,
                 PlayerGuid = e.PlayerGuid,
                 Username = e.Username,
                 SlotId = e.SlotId,
@@ -365,14 +367,14 @@ public sealed class ServiceBusEventPublisher : IEventPublisher
         };
     }
 
-    private async Task SendAsync(string queueName, string body, Guid serverId, long sequenceId, string eventTypeName, CancellationToken ct, Guid? observationId = null)
+    private async Task SendAsync(string queueName, string body, Guid serverId, long sequenceId, string eventTypeName, CancellationToken ct, Guid? eventId = null)
     {
         var sender = _senders.GetOrAdd(queueName, name => _client.CreateSender(name));
 
         var message = new ServiceBusMessage(BinaryData.FromString(body))
         {
             ContentType = "application/json",
-            MessageId = $"{serverId}-{observationId ?? Guid.NewGuid()}"
+            MessageId = $"{serverId}-{eventId ?? Guid.NewGuid()}"
         };
 
         await sender.SendMessageAsync(message, ct);
