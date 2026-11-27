@@ -735,6 +735,72 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Theory]
+    [InlineData(/*lang=json,strict*/ "[null]")]
+    [InlineData(/*lang=json,strict*/ "[{}]")]
+    [InlineData(/*lang=json,strict*/ "[{\"message\":\" \"}]")]
+    public async Task GetAgentEnabledServersAsync_InvalidExplicitInheritMessageEntriesDisableBroadcasts(string messages)
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Invalid entries", RepositoryGameType.CallOfDuty4)]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, intervalSeconds = 120, messages = new[] { new { message = "Global" } }
+        })]);
+        using var messagesDocument = JsonDocument.Parse(messages);
+        var config = CreateConfigDto("broadcasts", new { });
+        SetConfigProperty(config, nameof(ConfigurationDto.Configuration),
+            JsonSerializer.Serialize(new { messagesMode = "Inherit", messages = messagesDocument.RootElement }));
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" }),
+            config
+        ]);
+
+        var broadcasts = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default)).Broadcasts;
+
+        Assert.False(broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, broadcasts.IntervalSeconds);
+        Assert.Empty(broadcasts.Messages);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetAgentEnabledServersAsync_CaseCollidingBroadcastKeysDefaultSafely(bool global)
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Colliding keys", RepositoryGameType.CallOfDuty4)]);
+        var malformed = CreateConfigDto("broadcasts", new { });
+        SetConfigProperty(malformed, nameof(ConfigurationDto.Configuration),
+            /*lang=json,strict*/ "{\"enabled\":true,\"Enabled\":false}");
+        if (global)
+        {
+            SetupGlobalConfigApi([malformed]);
+        }
+        else
+        {
+            SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+            {
+                enabled = true, intervalSeconds = 120, messages = new[] { new { message = "Global" } }
+            })]);
+        }
+        var required = new[]
+        {
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        };
+        SetupConfigApi(serverId, global ? required : [.. required, malformed]);
+
+        var broadcasts = Assert.Single(await CreateProvider().GetAgentEnabledServersAsync(default)).Broadcasts;
+
+        Assert.False(broadcasts.Enabled);
+        Assert.Equal(ServerContext.DefaultBroadcastIntervalSeconds, broadcasts.IntervalSeconds);
+        Assert.Empty(broadcasts.Messages);
+    }
+
+    [Theory]
     [InlineData(/*lang=json,strict*/ "[{\"id\":\"same\",\"message\":\"A\"},{\"id\":\"same\",\"message\":\"B\"}]")]
     [InlineData(/*lang=json,strict*/ "[{\"id\":null,\"message\":\"A\"}]")]
     [InlineData(/*lang=json,strict*/ "[{\"id\":\" \",\"message\":\"A\"}]")]

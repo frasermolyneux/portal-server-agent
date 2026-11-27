@@ -446,7 +446,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
         foreach (var config in configs)
         {
-            if (string.IsNullOrWhiteSpace(config.Namespace) || string.IsNullOrWhiteSpace(config.Configuration))
+            if (string.IsNullOrWhiteSpace(config.Namespace) || string.IsNullOrWhiteSpace(config.Configuration)
+                || string.Equals(config.Namespace, BroadcastSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -765,9 +766,22 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
     };
 
     private static Dictionary<string, JsonElement>? ParseBroadcastProperties(ConfigurationSnapshotValue document)
-        => ParseNamespaceProperties(document.Configuration) is { } properties
-            ? new(properties, StringComparer.OrdinalIgnoreCase)
-            : null;
+    {
+        if (ParseNamespaceProperties(document.Configuration) is not { } properties)
+        {
+            return null;
+        }
+
+        var result = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in properties)
+        {
+            if (!result.TryAdd(key, value))
+            {
+                return null;
+            }
+        }
+        return result;
+    }
 
     private static bool IsMissingOrNull(Dictionary<string, JsonElement> config, string key) =>
         !config.TryGetValue(key, out var value) || value.ValueKind == JsonValueKind.Null;
@@ -816,7 +830,13 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         foreach (var item in messages.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object
-                || !item.TryGetProperty("id", out var idElement))
+                || !item.TryGetProperty("message", out var textElement)
+                || textElement.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(textElement.GetString()))
+            {
+                return false;
+            }
+            if (!item.TryGetProperty("id", out var idElement))
             {
                 continue;
             }
