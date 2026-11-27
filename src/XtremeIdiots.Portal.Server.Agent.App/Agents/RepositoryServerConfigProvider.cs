@@ -19,7 +19,7 @@ namespace XtremeIdiots.Portal.Server.Agent.App.Agents;
 
 /// <summary>
 /// Fetches agent-enabled game servers from the Portal Repository API.
-/// Reads configuration exclusively from the per-server config namespace API.
+/// Resolves server configuration from per-server namespaces and supported global defaults.
 /// </summary>
 public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 {
@@ -75,6 +75,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             var globalConfigurations = await FetchGlobalConfigurationsAsync(ct);
             var globalAgentNamePrefix = ResolveGlobalAgentNamePrefix(globalConfigurations ?? []);
             var globalCod4xPluginSourceEnabled = ResolveGlobalCod4xPluginEnabled(globalConfigurations ?? []);
+            var globalBroadcasts = globalConfigurations is null ? null : ParseGlobalBroadcastSettings(globalConfigurations);
             var commandSnapshots = new Dictionary<Guid, ConfigurationSnapshotValue>();
 
             var inventory = new List<GameServerDto>();
@@ -104,7 +105,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
             foreach (var dto in inventory.Where(server => server.AgentEnabled))
             {
-                var (configs, commandSettings) = await FetchConfigurationsAsync(dto.GameServerId, dto.Title, ct);
+                var (configs, commandSettings, serverBroadcasts) = await FetchConfigurationsAsync(dto.GameServerId, dto.Title, ct);
                 commandSnapshots.Add(dto.GameServerId, commandSettings);
 
                 var transportMetadata = ResolveTransportType(dto);
@@ -196,7 +197,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     continue;
                 }
 
-                var broadcasts = ParseBroadcastSettings(configs);
+                var broadcasts = ResolveBroadcastSettings(serverBroadcasts, globalBroadcasts, dto.GameServerId);
                 var banFileSettings = ParseBanFileSettings(configs);
                 var isCod4xServer = string.Equals(dto.GameType.ToString(), "CallOfDuty4x", StringComparison.OrdinalIgnoreCase);
                 var cod4xPluginSourceEnabled = isCod4xServer && ResolveCod4xPluginSourceEnabled(configs, globalCod4xPluginSourceEnabled);
@@ -293,7 +294,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             if (globalConfigurations is not null)
             {
                 Volatile.Write(ref _commandSnapshots, new CommandSnapshotBatch(
-                    startedAt, GetCommandSettings(globalConfigurations), commandSnapshots));
+                    startedAt, GetNamespace(globalConfigurations, Cod4xCommandSettingsConstants.Namespace), commandSnapshots));
             }
             return servers;
         }
@@ -401,7 +402,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
     /// <summary>
     /// Fetches all configuration namespaces for a server, returning a case-insensitive lookup.
     /// </summary>
-    private async Task<(Dictionary<string, Dictionary<string, JsonElement>>, ConfigurationSnapshotValue)> FetchConfigurationsAsync(
+    private async Task<(Dictionary<string, Dictionary<string, JsonElement>> Configs,
+        ConfigurationSnapshotValue Commands, ConfigurationSnapshotValue Broadcasts)> FetchConfigurationsAsync(
         Guid serverId, string title, CancellationToken ct)
     {
         try
@@ -415,7 +417,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             }
 
             var items = configResult.Result.Data.Items.ToArray();
-            return (ParseConfigurations(items), GetCommandSettings(items));
+            return (ParseConfigurations(items), GetNamespace(items, Cod4xCommandSettingsConstants.Namespace),
+                GetNamespace(items, BroadcastSettingsConstants.Namespace));
         }
 
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -426,10 +429,10 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         }
     }
 
-    private static ConfigurationSnapshotValue GetCommandSettings(IEnumerable<ConfigurationDto> configurations)
+    private static ConfigurationSnapshotValue GetNamespace(IEnumerable<ConfigurationDto> configurations, string namespaceName)
     {
         var config = configurations.FirstOrDefault(x =>
-            string.Equals(x.Namespace, Cod4xCommandSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase));
+            string.Equals(x.Namespace, namespaceName, StringComparison.OrdinalIgnoreCase));
         return config is null ? new(false, null) : new(true, config.Configuration);
     }
 
@@ -443,7 +446,8 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
 
         foreach (var config in configs)
         {
-            if (string.IsNullOrWhiteSpace(config.Namespace) || string.IsNullOrWhiteSpace(config.Configuration))
+            if (string.IsNullOrWhiteSpace(config.Namespace) || string.IsNullOrWhiteSpace(config.Configuration)
+                || string.Equals(config.Namespace, BroadcastSettingsConstants.Namespace, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -695,50 +699,181 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
         return globalCod4xPluginSourceEnabled;
     }
 
-    private static BroadcastSettings ParseBroadcastSettings(
-        Dictionary<string, Dictionary<string, JsonElement>> configs)
+    private BroadcastSettingsDocument ParseGlobalBroadcastSettings(IReadOnlyList<ConfigurationDto> configurations)
     {
-        if (!configs.TryGetValue(BroadcastSettingsConstants.Namespace, out var namespaceConfig))
+        var document = GetNamespace(configurations, BroadcastSettingsConstants.Namespace);
+        if (document.Exists && ParseBroadcastProperties(document) is { } config
+            && HasSupportedBroadcastSchema(config)
+            && TryGetBroadcastMessagesMode(config, out var mode)
+            && HasValidExplicitBroadcastMessages(config))
         {
-            return new BroadcastSettings();
+            return ParseBroadcastSettings(config, mode);
         }
 
-        // Prefer typed-contract parsing/validation for migrated namespaces, then keep
-        // legacy-tolerant field parsing for compatibility with historical payloads.
-        var typedDocument = DeserializeDocument<BroadcastSettingsDocument>(namespaceConfig);
-        if (typedDocument is not null)
+        if (document.Exists)
         {
-            if (!SchemaVersionSupport.IsSupported(typedDocument.SchemaVersion))
-            {
-                return new BroadcastSettings();
-            }
+            _logger.LogWarning("Global broadcast configuration is malformed or has an unsupported schema; broadcasts default to off");
+        }
+        return DisabledBroadcastDocument();
+    }
 
-            _ = new BroadcastSettingsValidator().Validate(typedDocument);
+    private BroadcastSettings ResolveBroadcastSettings(
+        ConfigurationSnapshotValue document, BroadcastSettingsDocument? global, Guid serverId)
+    {
+        BroadcastSettingsDocument? server = null;
+        if (document.Exists)
+        {
+            var config = ParseBroadcastProperties(document);
+            if (config is null || !HasSupportedBroadcastSchema(config))
+            {
+                _logger.LogWarning("Broadcast configuration for server {ServerId} is malformed or has an unsupported schema; broadcasts are disabled", serverId);
+                server = DisabledBroadcastDocument();
+            }
+            else if (!TryGetBroadcastMessagesMode(config, out var mode)
+                || !HasValidExplicitBroadcastMessages(config))
+            {
+                _logger.LogWarning("Broadcast configuration for server {ServerId} has an invalid messagesMode or messages list; broadcasts are disabled", serverId);
+                server = DisabledBroadcastDocument();
+            }
+            else
+            {
+                server = ParseBroadcastSettings(config, mode);
+            }
         }
 
-        var enabled = false;
-        _ = TryGetBoolValue(namespaceConfig, "enabled", out enabled);
-
-        if (namespaceConfig.ContainsKey("schemaVersion"))
+        if (global is null && (server is null || server.Enabled is null || server.IntervalSeconds is null
+            || server.MessagesMode == BroadcastMessagesMode.Inherit))
         {
-            if (!TryGetIntValue(namespaceConfig, "schemaVersion", out var schemaVersion))
+            throw new InvalidOperationException("Global broadcast configuration is unavailable for an inheriting server.");
+        }
+        var effective = BroadcastSettingsResolver.Resolve(global, server, BroadcastSettingsResolutionMode.GlobalInheritance);
+        return new BroadcastSettings
+        {
+            Enabled = effective.Enabled,
+            IntervalSeconds = effective.IntervalSeconds,
+            Messages = effective.Messages.Select(message => new BroadcastMessage
             {
-                return new BroadcastSettings();
+                Message = message.Message!,
+                Enabled = message.Enabled
+            }).ToArray()
+        };
+    }
+
+    private static BroadcastSettingsDocument DisabledBroadcastDocument() => new()
+    {
+        Enabled = false,
+        IntervalSeconds = BroadcastSettingsConstants.DefaultIntervalSeconds
+    };
+
+    private static Dictionary<string, JsonElement>? ParseBroadcastProperties(ConfigurationSnapshotValue document)
+    {
+        if (ParseNamespaceProperties(document.Configuration) is not { } properties)
+        {
+            return null;
+        }
+
+        var result = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in properties)
+        {
+            if (!result.TryAdd(key, value))
+            {
+                return null;
+            }
+        }
+        return result;
+    }
+
+    private static bool IsMissingOrNull(Dictionary<string, JsonElement> config, string key) =>
+        !config.TryGetValue(key, out var value) || value.ValueKind == JsonValueKind.Null;
+
+    private static bool TryGetBroadcastMessagesMode(Dictionary<string, JsonElement> config, out BroadcastMessagesMode? mode)
+    {
+        mode = null;
+        if (!config.TryGetValue("messagesMode", out var value))
+        {
+            return true;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        mode = value.GetString() switch
+        {
+            "Inherit" => BroadcastMessagesMode.Inherit,
+            "Replace" => BroadcastMessagesMode.Replace,
+            _ => null
+        };
+        return mode is not null;
+    }
+
+    private static bool HasValidExplicitBroadcastMessages(Dictionary<string, JsonElement> config)
+    {
+        if (!config.ContainsKey("messagesMode"))
+        {
+            return true;
+        }
+
+        if (config.TryGetValue("messages", out var messages)
+            && messages.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        if (messages.ValueKind != JsonValueKind.Array)
+        {
+            return true;
+        }
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in messages.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("message", out var textElement)
+                || textElement.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(textElement.GetString()))
+            {
+                return false;
+            }
+            if (!item.TryGetProperty("id", out var idElement))
+            {
+                continue;
             }
 
-            if (!SchemaVersionSupport.IsSupported(schemaVersion))
+            var id = idElement.ValueKind == JsonValueKind.String ? idElement.GetString() : null;
+            if (string.IsNullOrWhiteSpace(id)
+                || id.Length > BroadcastSettingsConstants.MaximumMessageIdLength
+                || !string.Equals(id, id.Trim(), StringComparison.Ordinal)
+                || !ids.Add(id))
             {
-                return new BroadcastSettings();
+                return false;
             }
         }
 
-        var intervalSeconds = ServerContext.DefaultBroadcastIntervalSeconds;
+        return true;
+    }
+
+    private static bool HasSupportedBroadcastSchema(Dictionary<string, JsonElement> config) =>
+        !config.ContainsKey("schemaVersion")
+        || TryGetIntValue(config, "schemaVersion", out var version) && SchemaVersionSupport.IsSupported(version);
+
+    private static BroadcastSettingsDocument ParseBroadcastSettings(
+        Dictionary<string, JsonElement> namespaceConfig, BroadcastMessagesMode? messagesMode)
+    {
+        bool? enabled = IsMissingOrNull(namespaceConfig, "enabled")
+            ? null
+            : TryGetBoolValue(namespaceConfig, "enabled", out var configuredEnabled) && configuredEnabled;
+
+        int? intervalSeconds = IsMissingOrNull(namespaceConfig, "intervalSeconds")
+            ? null
+            : BroadcastSettingsConstants.DefaultIntervalSeconds;
         if (TryGetIntValue(namespaceConfig, "intervalSeconds", out var configuredInterval) && configuredInterval > 0)
         {
             intervalSeconds = configuredInterval;
         }
 
-        var messages = new List<BroadcastMessage>();
+        var messages = new List<BroadcastSettingsMessage?>();
         if (namespaceConfig.TryGetValue("messages", out var messagesElement) &&
             messagesElement.ValueKind == JsonValueKind.Array)
         {
@@ -779,19 +914,23 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
                     }
                 }
 
-                messages.Add(new BroadcastMessage
+                messages.Add(new BroadcastSettingsMessage
                 {
+                    Id = messagesMode is not null && messageElement.TryGetProperty("id", out var id)
+                        ? id.GetString()
+                        : null,
                     Message = messageText,
                     Enabled = messageEnabled
                 });
             }
         }
 
-        return new BroadcastSettings
+        return new BroadcastSettingsDocument
         {
             Enabled = enabled,
             IntervalSeconds = intervalSeconds,
-            Messages = messages.ToArray()
+            MessagesMode = messagesMode,
+            Messages = messages
         };
     }
 
@@ -886,7 +1025,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             }
         }
 
-        var combined = string.Join("|", parts.Select(kv => $"{kv.Key}={kv.Value}"));
+        var combined = JsonSerializer.Serialize(parts);
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(combined));
         return Convert.ToHexString(bytes);
     }

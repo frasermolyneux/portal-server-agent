@@ -55,6 +55,19 @@ public sealed class Cod4LogParserTests
     }
 
     [Fact]
+    public void ParseLine_RepeatedChatLineCreatesDistinctCapturesButCopyRetainsIdentity()
+    {
+        const string line = "  3:42 say;e42b78c9b7b00bffe42b78c9b7b00bff;2;PlayerName;hello everyone";
+        var first = Assert.IsType<ChatMessageEvent>(_parser.ParseLine(line));
+        var second = Assert.IsType<ChatMessageEvent>(_parser.ParseLine(line));
+        var correlated = first with { ProducerInstanceId = Guid.NewGuid() };
+
+        Assert.NotEqual(Guid.Empty, first.OccurrenceId);
+        Assert.NotEqual(first.OccurrenceId, second.OccurrenceId);
+        Assert.Equal(first.OccurrenceId, correlated.OccurrenceId);
+    }
+
+    [Fact]
     public void ParseLine_InitGame_ReturnsMapChange()
     {
         var result = _parser.ParseLine(@"  0:00 InitGame: \mapname\mp_crash\g_gametype\tdm\sv_hostname\TestServer");
