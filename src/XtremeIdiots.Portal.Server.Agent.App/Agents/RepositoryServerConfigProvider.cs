@@ -1025,7 +1025,7 @@ public sealed class RepositoryServerConfigProvider : IServerConfigProvider
             }
         }
 
-        var combined = string.Join("|", parts.Select(kv => $"{kv.Key}={kv.Value}"));
+        var combined = JsonSerializer.Serialize(parts);
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(combined));
         return Convert.ToHexString(bytes);
     }

@@ -579,6 +579,32 @@ public class RepositoryServerConfigProviderTests
     }
 
     [Fact]
+    public async Task GetAgentEnabledServersAsync_BroadcastMessagesCannotCollideWithHashFieldDelimiters()
+    {
+        var serverId = Guid.NewGuid();
+        SetupApiSuccess([CreateGameServerDto(serverId, "Hash collision", RepositoryGameType.CallOfDuty4)]);
+        SetupConfigApi(serverId, [
+            CreateConfigDto("ftp", new { hostname = "ftp.example.com", port = 21, username = "user", password = "pass" }),
+            CreateConfigDto("rcon", new { password = "secret" }),
+            CreateConfigDto("agent", new { logFilePath = "/logs/game.log" })
+        ]);
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, messages = new[] { new { message = "A|broadcasts.messages[1].enabled=True|broadcasts.messages[1].message=B" } }
+        })]);
+        var provider = CreateProvider();
+        var before = Assert.Single(await provider.GetAgentEnabledServersAsync(default));
+
+        SetupGlobalConfigApi([CreateConfigDto("broadcasts", new
+        {
+            enabled = true, messages = new[] { new { message = "A" }, new { message = "B" } }
+        })]);
+        var after = Assert.Single(await provider.GetAgentEnabledServersAsync(default));
+
+        Assert.NotEqual(before.ConfigHash, after.ConfigHash);
+    }
+
+    [Fact]
     public async Task GetAgentEnabledServersAsync_LegacyBroadcastDocumentInheritsNullScalarsButNotPlaylist()
     {
         var serverId = Guid.NewGuid();
